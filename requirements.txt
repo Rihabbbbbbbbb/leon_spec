@@ -1,0 +1,11 @@
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+openai>=1.55.0
+python-docx>=1.1.2
+python-multipart>=0.0.18
+python-dotenv>=1.0.1
+numpy>=2.1.0
+pytest>=8.3.0
+pytest-asyncio>=0.24.0
+httpx>=0.28.0
+streamlit>=1.58.0

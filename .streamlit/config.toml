@@ -1,0 +1,12 @@
+[server]
+port = 8501
+maxUploadSize = 25
+
+[theme]
+primaryColor = "#1A569A"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F0F4F8"
+textColor = "#0A1F3F"
+
+[browser]
+gatherUsageStats = false

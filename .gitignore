@@ -1,0 +1,36 @@
+# Environnement Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Variables d'environnement (contient des secrets)
+.env
+azure_function/local.settings.json
+
+# Publish profile (contient des credentials Azure)
+publish_profile.xml
+*.PublishSettings
+
+# Deployment package
+LEON_Deploy.zip
+
+# Index de référence (généré, volumineux)
+data/reference_index.json
+
+# Fichiers uploadés
+data/uploads/*
+!data/uploads/.gitkeep
+
+# IDE
+.vscode/
+.idea/
+
+# Test
+.pytest_cache/
+test_results.txt
+test_output.txt
+
+# OS
+.DS_Store
+Thumbs.db
