@@ -150,7 +150,7 @@ def discover_accessible_files(root: Optional[Path] = None) -> List[Path]:
 
     Includes:
     - built-in spec extracts under data/
-    - user-uploaded files under data/uploads/
+    - user-uploaded files under data/uploads/ AND UPLOADS_DIR (Azure /tmp)
     BeStandard / standards repositories are intentionally excluded.
     """
     root = root or DATA_DIR
@@ -159,12 +159,20 @@ def discover_accessible_files(root: Optional[Path] = None) -> List[Path]:
         p = root / name
         if p.exists():
             files.append(p)
-    # Also include any *.txt under data/refs/ if present
+    # Also include any *.txt and *.docx under data/refs/ if present
     refs = root / "refs"
     if refs.exists():
         files.extend(sorted(refs.glob("*.txt")))
-    # Include user-uploaded spec files
-    files.extend(list_uploaded_files())
+        files.extend(sorted(refs.glob("*.docx")))
+    # Include user-uploaded spec files from UPLOADS_DIR
+    # (In Azure Functions, UPLOADS_DIR may differ from root/"uploads")
+    uploaded = list_uploaded_files()
+    # Avoid duplicates if UPLOADS_DIR == root/"uploads"
+    existing_names = {p.name for p in files}
+    for p in uploaded:
+        if p.name not in existing_names:
+            files.append(p)
+            existing_names.add(p.name)
     return files
 
 

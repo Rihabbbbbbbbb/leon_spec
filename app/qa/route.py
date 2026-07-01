@@ -16,8 +16,25 @@ from __future__ import annotations
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException, UploadFile, File
-from pydantic import BaseModel, Field
+# FastAPI imports — optional (not needed in Azure Functions context)
+try:
+    from fastapi import APIRouter, HTTPException, UploadFile, File
+    from pydantic import BaseModel, Field
+except ImportError:
+    # Stubs for Azure Functions environment (FastAPI not installed)
+    class _DummyRouter:
+        def __init__(self, *a, **kw): pass
+        def get(self, *a, **kw): return lambda f: f
+        def post(self, *a, **kw): return lambda f: f
+        def put(self, *a, **kw): return lambda f: f
+        def delete(self, *a, **kw): return lambda f: f
+    APIRouter = _DummyRouter
+    HTTPException = Exception
+    UploadFile = None
+    File = lambda *a, **kw: (lambda f: f)
+    BaseModel = object
+    def Field(*args, **kwargs):
+        return args[0] if args else None
 
 from app.qa.prompt import (
     SYSTEM_PROMPT,

@@ -125,6 +125,7 @@ def get_index_definition(index_name: Optional[str] = None) -> SearchIndex:
 
 # ── Client factories (lazy singletons) ──────────────────────────────
 _search_client: Optional[SearchClient] = None
+_search_client_index: Optional[str] = None
 _admin_client: Optional[SearchIndexClient] = None
 
 
@@ -140,14 +141,15 @@ def _get_credential() -> AzureKeyCredential:
 
 def get_search_client(index_name: Optional[str] = None) -> SearchClient:
     """Return a SearchClient for querying the LEON index."""
-    global _search_client
+    global _search_client, _search_client_index
     idx = index_name or AZURE_SEARCH_INDEX_NAME
-    if _search_client is None or _search_client._index_name != idx:
+    if _search_client is None or _search_client_index != idx:
         _search_client = SearchClient(
             endpoint=AZURE_SEARCH_ENDPOINT,
             index_name=idx,
             credential=_get_credential(),
         )
+        _search_client_index = idx
     return _search_client
 
 

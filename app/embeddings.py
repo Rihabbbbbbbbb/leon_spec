@@ -3,7 +3,7 @@ Client Azure OpenAI pour la génération d'embeddings et l'appel au LLM.
 Utilise l'API OpenAI standard pointant vers Azure.
 """
 from typing import List, Optional
-import numpy as np
+import math
 from openai import OpenAI
 
 from app.config import (
@@ -105,13 +105,12 @@ def cosine_similarity(vec_a: List[float], vec_b: List[float]) -> float:
     Returns:
         Score de similarité entre 0 et 1
     """
-    a = np.array(vec_a)
-    b = np.array(vec_b)
-    norm_a = np.linalg.norm(a)
-    norm_b = np.linalg.norm(b)
+    dot = sum(a * b for a, b in zip(vec_a, vec_b))
+    norm_a = math.sqrt(sum(a * a for a in vec_a))
+    norm_b = math.sqrt(sum(b * b for b in vec_b))
     if norm_a == 0 or norm_b == 0:
         return 0.0
-    return float(np.dot(a, b) / (norm_a * norm_b))
+    return float(dot / (norm_a * norm_b))
 
 
 def find_similar_chunks(

@@ -1,7 +1,11 @@
 """
 Modèles de données Pydantic pour l'API de validation de spécifications.
 """
-from pydantic import BaseModel, Field
+try:
+    from pydantic import BaseModel, Field
+except ImportError:
+    BaseModel = object
+    Field = None
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timezone
 

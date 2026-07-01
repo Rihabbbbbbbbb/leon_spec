@@ -4,10 +4,13 @@ Charge les variables d'environnement depuis .env et expose les constantes.
 """
 import os
 from pathlib import Path
-from dotenv import load_dotenv
 
-# Charger .env depuis la racine du projet
-load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+# Charger .env depuis la racine du projet (optionnel — in Azure, env vars come from Portal)
+try:
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+except ImportError:
+    pass  # python-dotenv not installed — fine in Azure Functions (env vars from Portal)
 
 # --- Azure OpenAI ---
 AZURE_OPENAI_ENDPOINT: str = os.getenv("AZURE_OPENAI_ENDPOINT", "")
@@ -61,3 +64,19 @@ BESTANDARD_AUTO_RESOLVE: bool = os.getenv("BESTANDARD_AUTO_RESOLVE", "true").low
 # If True, download and ingest standard content into a dynamic RAG index
 # (enables deep content verification against actual standard text)
 BESTANDARD_DEEP_VERIFY: bool = os.getenv("BESTANDARD_DEEP_VERIFY", "false").lower() == "true"
+
+# --- Azure Blob Storage (durable file uploads) ---
+AZURE_STORAGE_CONNECTION_STRING: str = os.getenv("AZURE_STORAGE_CONNECTION_STRING", "")
+AZURE_STORAGE_CONTAINER: str = os.getenv("AZURE_STORAGE_CONTAINER", "leon-uploads")
+
+# --- Azure Key Vault (optional — for managed identity secret access) ---
+AZURE_KEY_VAULT_URL: str = os.getenv("AZURE_KEY_VAULT_URL", "")
+
+# --- Application Insights (custom telemetry) ---
+APPINSIGHTS_CONNECTION_STRING: str = os.getenv(
+    "APPINSIGHTS_CONNECTION_STRING",
+    os.getenv("APPLICATIONINSIGHTS_CONNECTION_STRING", "")
+)
+
+# --- API Key for Copilot Studio auth ---
+API_KEY: str = os.getenv("API_KEY", "")

@@ -1,16 +1,13 @@
 # Azure Function Python dependencies
-# These are the packages needed for the Azure Function to run.
-# They overlap with the main project's requirements.txt but are
-# optimized for serverless deployment.
+# Pinned versions for Flex Consumption remote build compatibility
 
 azure-functions>=1.20.0
 python-docx>=0.8.11
 PyPDF2>=3.0.0
 openai>=1.0.0
-numpy>=1.24.0
-azure-search-documents>=11.6.0b8
 azure-core>=1.30.0
+azure-search-documents>=11.6.0b8
 azure-identity>=1.17.0
 python-dotenv>=1.0.0
-pydantic>=2.0.0
-fastapi>=0.100.0
+# Explicit azure-core namespace packages for Flex remote build
+azure-ai-search-documents>=11.6.0b8

@@ -56,13 +56,22 @@ def _response(
     evidence: list = None,
     status_code: int = 200,
 ) -> func.HttpResponse:
+    sources = sources or []
+    evidence = evidence or []
     body = {
         "answer": answer,
         "status": status,
         "confidence": confidence,
-        "sources": sources or [],
-        "evidence": evidence or [],
+        "sources": sources,
+        "evidence": evidence,
     }
+    # Add top-level fileName and excerpt for Copilot Studio compatibility
+    if sources:
+        body["fileName"] = sources[0].get("fileName", "") if isinstance(sources[0], dict) else str(sources[0])
+        body["excerpt"] = sources[0].get("excerpt", "") if isinstance(sources[0], dict) else ""
+    else:
+        body["fileName"] = ""
+        body["excerpt"] = ""
     if validation_report:
         body["validationReport"] = validation_report
     return func.HttpResponse(
@@ -148,38 +157,44 @@ def handle_ask(question: str, body: dict) -> func.HttpResponse:
     from app.qa.route import _try_acronym_retrieval
 
     chunks = _get_index()
-    if not chunks:
-        return _response(
-            "No accessible specification files are currently indexed.",
-            status="not_found"
-        )
 
     result = None
-    if _is_overview_question(question):
-        ref_file = _detect_referenced_file(question, chunks)
-        if ref_file:
-            overview_chunks = _retrieve_file_overview(chunks, ref_file)
-            if overview_chunks:
-                result = RetrievalResult(
-                    chunks=overview_chunks,
-                    scores=[1.0] * len(overview_chunks),
-                    used_fallback=False,
-                )
+    # Only use local index for overview/acronym if it has content
+    if chunks:
+        if _is_overview_question(question):
+            ref_file = _detect_referenced_file(question, chunks)
+            if ref_file:
+                overview_chunks = _retrieve_file_overview(chunks, ref_file)
+                if overview_chunks:
+                    result = RetrievalResult(
+                        chunks=overview_chunks,
+                        scores=[1.0] * len(overview_chunks),
+                        used_fallback=False,
+                    )
 
-    # ── 6. Standard retrieval ──────────────────────────────────────
+    # ── 6. Standard retrieval — TRY AZURE AI SEARCH FIRST ─────────
     if result is None:
-        acronym_result = _try_acronym_retrieval(question, chunks)
-        if acronym_result:
-            result = acronym_result
-        else:
-            # TRY AZURE AI SEARCH FIRST (hybrid vector+text).
-            # Falls back silently to local keyword retrieval if Azure
-            # Search is not configured or unreachable.
-            try:
-                from app.qa.retrieval import azure_search_retrieve
-                result = azure_search_retrieve(question)
-            except Exception:
+        if chunks:
+            acronym_result = _try_acronym_retrieval(question, chunks)
+            if acronym_result:
+                result = acronym_result
+
+    # Always try Azure Search (even if local index is empty — the 255
+    # chunks are in Azure Search, not necessarily in the local filesystem)
+    if result is None:
+        try:
+            from app.qa.retrieval import azure_search_retrieve
+            result = azure_search_retrieve(question)
+        except Exception as exc:
+            logging.warning(f"Azure Search failed: {exc}")
+            if chunks:
                 result = retrieve(question, chunks=chunks, use_semantic=False)
+            else:
+                return _response(
+                    "No accessible specification files are currently indexed. "
+                    f"Azure Search error: {str(exc)[:200]}",
+                    status="not_found"
+                )
 
     # ── 7. No support found ────────────────────────────────────────
     from app.qa.prompt import NOT_FOUND_MESSAGE
@@ -264,19 +279,29 @@ def handle_validate(file_name: str) -> func.HttpResponse:
         f"writing-guide rules (100% extracted from source documents)."
     )
 
-    return _response(
-        summary,
-        status="answered",
-        confidence="",
-        validation_report=report,
+    # Build response with both nested validationReport AND top-level fields
+    # for Copilot Studio compatibility
+    val_body = {
+        "answer": summary,
+        "status": "answered",
+        "verdict": report.get("verdict", "UNKNOWN"),
+        "overallScore": report.get("overallScore", 0),
+        "summary": report.get("summary", ""),
+        "validationReport": report,
+    }
+    return func.HttpResponse(
+        body=json.dumps(val_body, ensure_ascii=False, default=str),
+        status_code=200,
+        mimetype="application/json",
+        headers={"Content-Type": "application/json; charset=utf-8"},
     )
 
 
 # ═══════════════════════════════════════════════════════════════════
-# HANDLER 3: /api/upload — File Upload
+# HANDLER 2b: /api/upload-and-validate — Upload + Validate in one call
 # ═══════════════════════════════════════════════════════════════════
-def handle_upload(file_name: str, file_bytes: bytes) -> func.HttpResponse:
-    """Save an uploaded spec file and rebuild the index."""
+def handle_upload_and_validate(file_name: str, file_bytes: bytes) -> func.HttpResponse:
+    """Upload a file, index it, then validate it — all in one call."""
 
     # Validate extension
     allowed_ext = {".txt", ".docx", ".pdf"}
@@ -294,27 +319,139 @@ def handle_upload(file_name: str, file_bytes: bytes) -> func.HttpResponse:
             status="error", status_code=413
         )
 
-    from app.qa.retrieval import save_uploaded_file, build_index
+    from app.qa.retrieval import save_uploaded_file, extract_text_from_file
+
+    # 1. Save the file
+    try:
+        saved_path = save_uploaded_file(file_name, file_bytes)
+    except Exception as e:
+        logging.error(f"Upload save error: {e}")
+        return _response(f"Failed to save file: {e}", status="error", status_code=500)
+
+    # 2. Index to Azure Search
+    try:
+        _index_file_to_search(saved_path)
+    except Exception as exc:
+        logging.warning(f"Search indexing failed (non-fatal): {exc}")
+
+    # 3. Rebuild local index
+    try:
+        _reset_index()
+        _get_index()
+    except Exception as e:
+        logging.warning(f"Local index rebuild: {e}")
+
+    # 4. Validate the file
+    text = extract_text_from_file(saved_path)
+    if not text or not text.strip():
+        return _response(
+            f"Could not extract text from '{saved_path.name}'. The file may be corrupted or contain only images.",
+            status="error", status_code=422
+        )
+
+    from app.qa.evidence_comparator import validate_with_evidence
+    report = validate_with_evidence(saved_path.name, text)
+
+    summary = (
+        f"Here is the evidence-based validation for **{saved_path.name}** — "
+        f"Verdict: **{report.get('verdict', 'UNKNOWN')}** "
+        f"({report.get('overallScore', 0):.0%}):\n\n"
+        f"{report.get('summary', '')}"
+    )
+
+    val_body = {
+        "answer": summary,
+        "status": "answered",
+        "verdict": report.get("verdict", "UNKNOWN"),
+        "overallScore": report.get("overallScore", 0),
+        "summary": report.get("summary", ""),
+        "validationReport": report,
+        "fileName": saved_path.name,
+        "confidence": "",
+        "sources": [],
+        "evidence": [],
+    }
+    return func.HttpResponse(
+        body=json.dumps(val_body, ensure_ascii=False, default=str),
+        status_code=200,
+        mimetype="application/json",
+        headers={"Content-Type": "application/json; charset=utf-8"},
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════
+# HANDLER 3: /api/upload — File Upload
+# ═══════════════════════════════════════════════════════════════════
+def handle_upload(file_name: str, file_bytes: bytes) -> func.HttpResponse:
+    """Save an uploaded spec file, index it to Azure AI Search, and rebuild local index."""
+
+    # Validate extension
+    allowed_ext = {".txt", ".docx", ".pdf"}
+    suffix = Path(file_name).suffix.lower()
+    if suffix not in allowed_ext:
+        return _response(
+            f"File type '{suffix}' not accepted. Use .txt, .docx, or .pdf.",
+            status="error", status_code=400
+        )
+
+    # Max 25 MB
+    if len(file_bytes) > 25 * 1024 * 1024:
+        return _response(
+            "File too large. Maximum size is 25 MB.",
+            status="error", status_code=413
+        )
+
+    from app.qa.retrieval import save_uploaded_file, build_index, extract_text_from_file, _split_into_chunks
+    import re as _re
+
+    # ── 1. Save to local disk (for validation endpoint) ───────────
     try:
         saved_path = save_uploaded_file(file_name, file_bytes)
     except Exception as e:
         logging.error(f"Upload save error: {e}")
         return _response(f"Failed to save uploaded file: {e}", status="error", status_code=500)
 
-    # Rebuild index
+    # ── 2. Upload to Azure Blob Storage (durable persistence) ─────
+    blob_uploaded = False
+    try:
+        blob_uploaded = _upload_to_blob(saved_path.name, file_bytes)
+    except Exception as exc:
+        logging.warning(f"Blob upload failed (non-fatal): {exc}")
+
+    # ── 3. Index to Azure AI Search (vector + full-text) ──────────
+    search_indexed = 0
+    try:
+        search_indexed = _index_file_to_search(saved_path)
+    except Exception as exc:
+        logging.error(f"Azure Search indexing failed: {exc}")
+
+    # ── 4. Rebuild local in-memory index (fallback path) ──────────
     try:
         _reset_index()
         chunks = _get_index()
         chunk_count = sum(1 for c in chunks if c.file_name == saved_path.name)
     except Exception as e:
-        logging.error(f"Index rebuild error: {e}")
+        logging.error(f"Local index rebuild error: {e}")
         chunk_count = 0
 
-    return _response(
-        f"Uploaded and indexed '{saved_path.name}' ({chunk_count} passages). "
-        f"You can now ask questions about this specification.",
-        status="answered",
-        confidence="HIGH",
+    # Use the higher of search-indexed and local chunk counts
+    total_indexed = max(search_indexed, chunk_count)
+
+    # Build response with explicit fields for Copilot Studio
+    upload_body = {
+        "fileName": saved_path.name,
+        "chunks": total_indexed,
+        "message": f"Uploaded and indexed '{saved_path.name}' ({total_indexed} passages). You can now ask questions about this specification.",
+        "status": "answered",
+        "answer": f"Uploaded and indexed '{saved_path.name}' ({total_indexed} passages). You can now ask questions about this specification.",
+        "blobUploaded": blob_uploaded,
+        "searchIndexed": search_indexed,
+    }
+    return func.HttpResponse(
+        body=json.dumps(upload_body, ensure_ascii=False),
+        status_code=200,
+        mimetype="application/json",
+        headers={"Content-Type": "application/json; charset=utf-8"},
     )
 
 
@@ -322,13 +459,40 @@ def handle_upload(file_name: str, file_bytes: bytes) -> func.HttpResponse:
 # HANDLER 4: /api/files — List Files
 # ═══════════════════════════════════════════════════════════════════
 def handle_list_files() -> func.HttpResponse:
-    """List all accessible specification files."""
-    from app.qa.retrieval import discover_accessible_files
-    files = [p.name for p in discover_accessible_files()]
+    """List all accessible specification files with metadata."""
+    from app.qa.retrieval import discover_accessible_files, DATA_DIR
+    from pathlib import Path
+
+    uploads_dir = DATA_DIR / "uploads"
+    ref_dir = DATA_DIR / "refs"
+
+    file_list = []
+    for p in discover_accessible_files():
+        # Determine type
+        if uploads_dir.exists() and p.parent == uploads_dir:
+            ftype = "uploaded"
+        elif ref_dir.exists() and p.parent == ref_dir:
+            ftype = "reference"
+        else:
+            ftype = "reference"
+
+        # Get file size
+        try:
+            size_kb = round(p.stat().st_size / 1024, 1)
+        except OSError:
+            size_kb = 0
+
+        file_list.append({
+            "fileName": p.name,
+            "type": ftype,
+            "sizeKB": size_kb,
+        })
+
     return func.HttpResponse(
-        body=json.dumps({"files": files, "count": len(files)}),
+        body=json.dumps({"files": file_list, "count": len(file_list)}, ensure_ascii=False),
         status_code=200,
         mimetype="application/json",
+        headers={"Content-Type": "application/json; charset=utf-8"},
     )
 
 
@@ -343,3 +507,136 @@ def _call_llm(system_prompt: str, user_message: str, temperature: float = 0.2, m
     except Exception as e:
         logging.warning(f"LLM call failed: {e}")
         return ""
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Azure Blob Storage — durable file persistence
+# ═══════════════════════════════════════════════════════════════════
+def _upload_to_blob(file_name: str, file_bytes: bytes) -> bool:
+    """
+    Upload file to Azure Blob Storage for durable persistence.
+
+    Uses connection string from AZURE_STORAGE_CONNECTION_STRING env var.
+    Returns True if uploaded, False if not configured or failed.
+    """
+    import os
+    conn_str = os.getenv("AZURE_STORAGE_CONNECTION_STRING", "")
+    if not conn_str:
+        logging.info("AZURE_STORAGE_CONNECTION_STRING not set — skipping blob upload")
+        return False
+
+    try:
+        from azure.storage.blob import BlobServiceClient
+        container_name = os.getenv("AZURE_STORAGE_CONTAINER", "leon-uploads")
+
+        blob_service = BlobServiceClient.from_connection_string(conn_str)
+        container_client = blob_service.get_container_client(container_name)
+
+        # Create container if it doesn't exist
+        try:
+            container_client.get_container_properties()
+        except Exception:
+            container_client.create_container(public_access="blob")
+
+        # Upload with sanitized name
+        import re
+        safe_name = re.sub(r"[^A-Za-z0-9._\- ]", "_", file_name).strip()
+        blob_client = container_client.upload_blob(
+            name=safe_name,
+            data=file_bytes,
+            overwrite=True,
+        )
+        logging.info(f"Uploaded '{safe_name}' to blob container '{container_name}'")
+        return True
+    except Exception as exc:
+        logging.warning(f"Blob upload failed: {exc}")
+        return False
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Azure AI Search — index uploaded file chunks
+# ═══════════════════════════════════════════════════════════════════
+def _index_file_to_search(file_path) -> int:
+    """
+    Extract text, chunk, embed, and push to Azure AI Search.
+
+    Returns the number of chunks successfully indexed.
+    Returns 0 if Azure Search is not configured or indexing fails.
+    """
+    import re
+    import time
+
+    try:
+        from app.qa.azure_search import is_configured, upload_documents
+        from app.qa.retrieval import extract_text_from_file, _split_into_chunks
+        from app.embeddings import get_embedding
+    except ImportError as exc:
+        logging.warning(f"Search indexing imports failed: {exc}")
+        return 0
+
+    if not is_configured():
+        logging.info("Azure Search not configured — skipping search indexing")
+        return 0
+
+    # Extract text from the uploaded file
+    text = extract_text_from_file(file_path)
+    if not text or not text.strip():
+        logging.warning(f"No text extracted from '{file_path.name}'")
+        return 0
+
+    # Chunk the text
+    chunks = _split_into_chunks(text, file_path.name)
+    if not chunks:
+        logging.warning(f"No chunks generated from '{file_path.name}'")
+        return 0
+
+    logging.info(f"Indexing {len(chunks)} chunks from '{file_path.name}' to Azure Search...")
+
+    # Build search documents with embeddings
+    _EMBED_MAX_CHARS = 8000
+    documents = []
+    errors = 0
+
+    for ch in chunks:
+        text_for_embed = ch.text[:_EMBED_MAX_CHARS]
+        try:
+            embedding = get_embedding(text_for_embed)
+        except Exception as exc:
+            logging.error(f"Embedding failed for {ch.file_name}#{ch.chunk_id}: {exc}")
+            errors += 1
+            continue
+
+        # Sanitize doc ID for Azure Search
+        doc_id = re.sub(r"[^A-Za-z0-9_\-=]", "_", f"{ch.file_name}__{ch.chunk_id}")
+
+        # Determine source type
+        source = "uploaded"
+
+        documents.append({
+            "id": doc_id,
+            "file_name": ch.file_name,
+            "text": ch.text,
+            "section": ch.section,
+            "chunk_id": ch.chunk_id,
+            "source_type": source,
+            "embedding": embedding,
+        })
+
+    if not documents:
+        logging.error(f"No documents to index after embedding (errors={errors})")
+        return 0
+
+    # Upload in batches of 50
+    batch_size = 50
+    indexed = 0
+    for batch_start in range(0, len(documents), batch_size):
+        batch = documents[batch_start:batch_start + batch_size]
+        try:
+            count = upload_documents(batch)
+            indexed += count
+        except Exception as exc:
+            logging.error(f"Search upload batch failed: {exc}")
+            errors += len(batch)
+
+    logging.info(f"Search indexing complete: {indexed}/{len(documents)} chunks indexed (errors={errors})")
+    return indexed
