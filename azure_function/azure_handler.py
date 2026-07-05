@@ -120,30 +120,52 @@ def handle_ask(question: str, body: dict) -> func.HttpResponse:
             )
         return handle_validate(val_file)
 
-    # ── 4. Section-guidance detection ───────────────────────────────
+    # ── 3b. Section guidance detection (BEFORE retrieval) ──────────
+    # If the user is asking "how do I write the PURPOSE section?" etc.,
+    # answer with template + writing-guide guidance — don't search the spec.
     from app.qa.section_guidance import is_section_guidance_question, get_section_guidance
     if is_section_guidance_question(question):
         guidance = get_section_guidance(question)
         if guidance:
-            # Try LLM synthesis
             guidance_text = guidance.get("answer", "")
             guidance_prompt = (
-                "You are a CTS specification writing assistant for Stellantis. "
+                "You are a CTS specification writing assistant for Stellantis.\n"
                 "A user is writing a Component Technical Specification and needs "
-                "guidance on a specific section. Below is the EXACT guidance "
-                "extracted from the Stellantis CTS template and writing guide. "
-                "Synthesize a clear, structured, helpful answer that tells the "
-                "user exactly what to put in this section.\n\n"
-                "IMPORTANT: Only use the guidance provided below. Do NOT invent. "
-                "Structure: 1) Section purpose, 2) What to include, "
-                "3) Key rules to follow, 4) Common mistakes to avoid.\n\n"
+                "guidance on a specific section.\n\n"
+                "Below is the EXACT guidance extracted from the Stellantis CTS "
+                "template and writing guide. Your job is to PRESENT this guidance "
+                "to the user in a clear, readable format.\n\n"
+                "CRITICAL RULES:\n"
+                "1. Use ONLY the information in the GUIDANCE below. Do NOT add, "
+                "invent, or hallucinate any content that is not explicitly stated.\n"
+                "2. Do NOT remove or alter template placeholders like <<...>>. "
+                "Present them exactly as they appear — they show the writer what "
+                "to fill in.\n"
+                "3. Keep the section headings from the GUIDANCE (Purpose, Template "
+                "instruction, Applicable rules, etc.).\n"
+                "4. Cite each rule by its ID (e.g. R20, P07) exactly as shown.\n"
+                "5. Do NOT mix content from other CTS sections. Only discuss the "
+                "section the user asked about.\n"
+                "6. If the guidance says 'To be completed by the writer', say "
+                "exactly that — do NOT invent example content.\n"
+                "7. End your answer with this exact line:\n"
+                "   *Guidance extracted 100% from the Stellantis CTS template "
+                "and writing guide.*\n\n"
                 "GUIDANCE:\n" + guidance_text
             )
             llm_answer = _call_llm(
-                "You are a Stellantis engineering specification expert.",
+                "You are a Stellantis engineering specification expert. "
+                "You present extracted guidance faithfully without adding "
+                "or inventing content.",
                 guidance_prompt
             )
-            final_answer = llm_answer if llm_answer else guidance_text
+            # If LLM failed or didn't include the footer, use raw guidance text
+            if llm_answer and "Guidance extracted 100%" in llm_answer:
+                final_answer = llm_answer
+            elif llm_answer:
+                final_answer = llm_answer + "\n\n---\n*Guidance extracted 100% from the Stellantis CTS template and writing guide.*"
+            else:
+                final_answer = guidance_text
             return _response(
                 final_answer,
                 status="answered",
@@ -151,7 +173,7 @@ def handle_ask(question: str, body: dict) -> func.HttpResponse:
                 evidence=[guidance.get("detected_section", "")],
             )
 
-    # ── 5. Overview question handling ──────────────────────────────
+    # ── 4. Overview question handling ──────────────────────────────
     from app.qa.route import _is_overview_question, _detect_referenced_file, _retrieve_file_overview
     from app.qa.retrieval import retrieve, RetrievalResult
     from app.qa.route import _try_acronym_retrieval
@@ -172,7 +194,7 @@ def handle_ask(question: str, body: dict) -> func.HttpResponse:
                         used_fallback=False,
                     )
 
-    # ── 6. Standard retrieval — TRY AZURE AI SEARCH FIRST ─────────
+    # ── 5. Standard retrieval — TRY AZURE AI SEARCH FIRST ─────────
     if result is None:
         if chunks:
             acronym_result = _try_acronym_retrieval(question, chunks)
@@ -196,7 +218,7 @@ def handle_ask(question: str, body: dict) -> func.HttpResponse:
                     status="not_found"
                 )
 
-    # ── 7. No support found ────────────────────────────────────────
+    # ── 6. No support found → return not-found message ────────────
     from app.qa.prompt import NOT_FOUND_MESSAGE
     if not result.chunks:
         return _response(NOT_FOUND_MESSAGE, status="not_found")
@@ -242,7 +264,11 @@ def handle_ask(question: str, body: dict) -> func.HttpResponse:
 # HANDLER 2: /api/validate — Evidence-Based Validation
 # ═══════════════════════════════════════════════════════════════════
 def handle_validate(file_name: str) -> func.HttpResponse:
-    """Validate a specification file against the CTS template."""
+    """Validate a specification file against the CTS template.
+    
+    Returns JSON with the full validation report, plus a base64-encoded
+    PDF report for direct download (field: pdfBase64).
+    """
 
     # Find the file
     from app.qa.retrieval import discover_accessible_files, extract_text_from_file
@@ -279,8 +305,18 @@ def handle_validate(file_name: str) -> func.HttpResponse:
         f"writing-guide rules (100% extracted from source documents)."
     )
 
+    # ── Generate PDF report ──────────────────────────────────
+    pdf_base64 = ""
+    try:
+        from app.qa.pdf_report import generate_validation_pdf
+        import base64 as _b64
+        pdf_bytes = generate_validation_pdf(report)
+        pdf_base64 = _b64.b64encode(pdf_bytes).decode("ascii")
+    except Exception as exc:
+        logging.warning(f"PDF generation failed (non-fatal): {exc}")
+
     # Build response with both nested validationReport AND top-level fields
-    # for Copilot Studio compatibility
+    # for Copilot Studio compatibility, plus base64 PDF
     val_body = {
         "answer": summary,
         "status": "answered",
@@ -288,6 +324,8 @@ def handle_validate(file_name: str) -> func.HttpResponse:
         "overallScore": report.get("overallScore", 0),
         "summary": report.get("summary", ""),
         "validationReport": report,
+        "pdfBase64": pdf_base64,
+        "pdfAvailable": bool(pdf_base64),
     }
     return func.HttpResponse(
         body=json.dumps(val_body, ensure_ascii=False, default=str),
@@ -359,6 +397,16 @@ def handle_upload_and_validate(file_name: str, file_bytes: bytes) -> func.HttpRe
         f"{report.get('summary', '')}"
     )
 
+    # ── Generate PDF ─────────────────────────────────────────
+    pdf_base64 = ""
+    try:
+        from app.qa.pdf_report import generate_validation_pdf
+        import base64 as _b64
+        pdf_bytes = generate_validation_pdf(report)
+        pdf_base64 = _b64.b64encode(pdf_bytes).decode("ascii")
+    except Exception as exc:
+        logging.warning(f"PDF generation failed (non-fatal): {exc}")
+
     val_body = {
         "answer": summary,
         "status": "answered",
@@ -370,6 +418,8 @@ def handle_upload_and_validate(file_name: str, file_bytes: bytes) -> func.HttpRe
         "confidence": "",
         "sources": [],
         "evidence": [],
+        "pdfBase64": pdf_base64,
+        "pdfAvailable": bool(pdf_base64),
     }
     return func.HttpResponse(
         body=json.dumps(val_body, ensure_ascii=False, default=str),
@@ -377,6 +427,76 @@ def handle_upload_and_validate(file_name: str, file_bytes: bytes) -> func.HttpRe
         mimetype="application/json",
         headers={"Content-Type": "application/json; charset=utf-8"},
     )
+
+
+# ═══════════════════════════════════════════════════════════════════
+# HANDLER 2c: /api/upload-and-validate-pdf — Upload + Validate + PDF
+# ═══════════════════════════════════════════════════════════════════
+def handle_upload_and_validate_pdf(file_name: str, file_bytes: bytes) -> func.HttpResponse:
+    """Upload a file, validate it, and return a PDF report."""
+
+    allowed_ext = {".txt", ".docx", ".pdf"}
+    suffix = Path(file_name).suffix.lower()
+    if suffix not in allowed_ext:
+        return _response(
+            f"File type '{suffix}' not accepted. Use .txt, .docx, or .pdf.",
+            status="error", status_code=400
+        )
+
+    if len(file_bytes) > 25 * 1024 * 1024:
+        return _response("File too large. Maximum size is 25 MB.", status="error", status_code=413)
+
+    from app.qa.retrieval import save_uploaded_file, extract_text_from_file
+
+    try:
+        saved_path = save_uploaded_file(file_name, file_bytes)
+    except Exception as e:
+        return _response(f"Failed to save file: {e}", status="error", status_code=500)
+
+    text = extract_text_from_file(saved_path)
+    if not text or not text.strip():
+        return _response(
+            f"Could not extract text from '{saved_path.name}'.",
+            status="error", status_code=422
+        )
+
+    from app.qa.evidence_comparator import validate_with_evidence
+    report = validate_with_evidence(saved_path.name, text)
+
+    # Generate PDF
+    try:
+        from app.qa.pdf_report import generate_validation_pdf
+        pdf_bytes = generate_validation_pdf(report)
+        safe_name = saved_path.name.replace(" ", "_").replace(".docx", "").replace(".txt", "").replace(".pdf", "")
+        return func.HttpResponse(
+            body=pdf_bytes,
+            status_code=200,
+            mimetype="application/pdf",
+            headers={
+                "Content-Type": "application/pdf",
+                "Content-Disposition": f'attachment; filename="LEON_Validation_{safe_name}.pdf"',
+            },
+        )
+    except ImportError:
+        # fpdf2 not available — fall back to JSON with report
+        summary = (
+            f"Validation for **{saved_path.name}** — "
+            f"Verdict: **{report.get('verdict', 'UNKNOWN')}** "
+            f"({report.get('overallScore', 0):.0%}):\n\n"
+            f"{report.get('summary', '')}"
+        )
+        return func.HttpResponse(
+            body=json.dumps({
+                "answer": summary, "status": "answered",
+                "verdict": report.get("verdict", "UNKNOWN"),
+                "overallScore": report.get("overallScore", 0),
+                "validationReport": report,
+                "pdfAvailable": False,
+            }, ensure_ascii=False, default=str),
+            status_code=200,
+            mimetype="application/json",
+            headers={"Content-Type": "application/json; charset=utf-8"},
+        )
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -453,6 +573,124 @@ def handle_upload(file_name: str, file_bytes: bytes) -> func.HttpResponse:
         mimetype="application/json",
         headers={"Content-Type": "application/json; charset=utf-8"},
     )
+
+
+# ═══════════════════════════════════════════════════════════════════
+# HANDLER 3b: /api/md-to-pdf — Markdown to PDF conversion
+# ═══════════════════════════════════════════════════════════════════
+def handle_md_to_pdf(markdown_text: str, title: str, subtitle: str) -> func.HttpResponse:
+    """Convert markdown text to a PDF document."""
+    try:
+        from app.qa.pdf_report import generate_markdown_pdf
+        pdf_bytes = generate_markdown_pdf(markdown_text, title=title, subtitle=subtitle)
+        return func.HttpResponse(
+            body=pdf_bytes,
+            status_code=200,
+            mimetype="application/pdf",
+            headers={
+                "Content-Type": "application/pdf",
+                "Content-Disposition": f'attachment; filename="LEON_Report.pdf"',
+            },
+        )
+    except ImportError:
+        return func.HttpResponse(
+            body=json.dumps({
+                "answer": "PDF generation is not available (fpdf2 not installed).",
+                "status": "error",
+            }, ensure_ascii=False),
+            status_code=501,
+            mimetype="application/json",
+            headers={"Content-Type": "application/json; charset=utf-8"},
+        )
+    except Exception as exc:
+        import traceback
+        logging.error(f"MD-to-PDF failed: {exc}\n{traceback.format_exc()}")
+        return func.HttpResponse(
+            body=json.dumps({
+                "answer": f"PDF generation error: {str(exc)[:300]}",
+                "status": "error",
+            }, ensure_ascii=False),
+            status_code=500,
+            mimetype="application/json",
+            headers={"Content-Type": "application/json; charset=utf-8"},
+        )
+
+
+# ═══════════════════════════════════════════════════════════════════
+# HANDLER 3c: /api/validation-pdf — Validate + return PDF directly
+# ═══════════════════════════════════════════════════════════════════
+def handle_validation_pdf(file_name: str) -> func.HttpResponse:
+    """Validate a spec file and return the PDF report directly."""
+    from app.qa.retrieval import discover_accessible_files, extract_text_from_file
+    file_path = None
+    for p in discover_accessible_files():
+        if p.name == file_name:
+            file_path = p
+            break
+
+    if file_path is None:
+        return func.HttpResponse(
+            body=json.dumps({
+                "answer": f"File '{file_name}' not found. Upload it first via /api/upload.",
+                "status": "not_found",
+            }, ensure_ascii=False),
+            status_code=404,
+            mimetype="application/json",
+            headers={"Content-Type": "application/json; charset=utf-8"},
+        )
+
+    text = extract_text_from_file(file_path)
+    if not text or not text.strip():
+        return func.HttpResponse(
+            body=json.dumps({
+                "answer": f"Could not extract text from '{file_name}'.",
+                "status": "error",
+            }, ensure_ascii=False),
+            status_code=422,
+            mimetype="application/json",
+            headers={"Content-Type": "application/json; charset=utf-8"},
+        )
+
+    from app.qa.evidence_comparator import validate_with_evidence
+    report = validate_with_evidence(file_name, text)
+
+    try:
+        from app.qa.pdf_report import generate_validation_pdf
+        pdf_bytes = generate_validation_pdf(report)
+        safe_name = file_name.replace(" ", "_").replace(".docx", "").replace(".txt", "").replace(".pdf", "")
+        return func.HttpResponse(
+            body=pdf_bytes,
+            status_code=200,
+            mimetype="application/pdf",
+            headers={
+                "Content-Type": "application/pdf",
+                "Content-Disposition": f'attachment; filename="LEON_Validation_{safe_name}.pdf"',
+            },
+        )
+    except ImportError:
+        return func.HttpResponse(
+            body=json.dumps({
+                "answer": "PDF generation unavailable (fpdf2 not installed).",
+                "status": "error",
+                "validationReport": report,
+            }, ensure_ascii=False, default=str),
+            status_code=501,
+            mimetype="application/json",
+            headers={"Content-Type": "application/json; charset=utf-8"},
+        )
+    except Exception as exc:
+        import traceback
+        logging.error(f"Validation PDF failed: {exc}\n{traceback.format_exc()}")
+        return func.HttpResponse(
+            body=json.dumps({
+                "answer": f"PDF error: {str(exc)[:300]}",
+                "status": "error",
+                "validationReport": report,
+            }, ensure_ascii=False, default=str),
+            status_code=500,
+            mimetype="application/json",
+            headers={"Content-Type": "application/json; charset=utf-8"},
+        )
 
 
 # ═══════════════════════════════════════════════════════════════════

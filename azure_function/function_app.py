@@ -692,3 +692,138 @@ def diag(req: func.HttpRequest) -> func.HttpResponse:
         mimetype="application/json",
         headers={"Content-Type": "application/json; charset=utf-8"},
     )
+
+
+# ═══════════════════════════════════════════════════════════════════
+# ENDPOINT 8: /api/upload-and-validate-pdf — Upload + Validate + PDF
+# ═══════════════════════════════════════════════════════════════════
+@app.route(route="upload-and-validate-pdf", methods=["POST"])
+def upload_and_validate_pdf(req: func.HttpRequest) -> func.HttpResponse:
+    """
+    Upload a file, validate it, and return a PDF report.
+    Accepts same formats as upload-and-validate (JSON, multipart, octet-stream).
+    Returns: application/pdf binary file.
+    """
+    logging.info("=== /api/upload-and-validate-pdf called ===")
+
+    content_type = req.headers.get("Content-Type", "")
+    body_bytes = req.get_body()
+    body_len = len(body_bytes) if body_bytes else 0
+    file_name = None
+    file_bytes = None
+
+    # Reuse the same parsing logic as upload-and-validate
+    _is_json_ct = "application/json" in content_type or "text/json" in content_type
+
+    if "multipart/form-data" in content_type or "multipart/mixed" in content_type:
+        try:
+            file_name, file_bytes = _parse_multipart(body_bytes, content_type)
+        except Exception:
+            pass
+
+    if not file_bytes and body_len > 0 and not _is_json_ct:
+        if body_bytes[:2] == b"PK" or body_bytes[:4] == b"%PDF" or body_len > 10:
+            file_bytes = body_bytes
+            file_name = req.headers.get("X-File-Name", "")
+            if not file_name:
+                if body_bytes[:2] == b"PK":
+                    file_name = "uploaded_spec.docx"
+                elif body_bytes[:4] == b"%PDF":
+                    file_name = "uploaded_spec.pdf"
+                else:
+                    file_name = "uploaded_spec.txt"
+
+    if not file_bytes and req.headers.get("X-File-Name"):
+        file_bytes = body_bytes
+        file_name = req.headers.get("X-File-Name", "uploaded_spec.docx")
+
+    if not file_bytes:
+        try:
+            body = _get_body(req)
+            if body and "fileContent" in body:
+                file_bytes = _decode_file_content(body["fileContent"])
+                file_name = body.get("fileName", "uploaded_spec.docx")
+            elif body and "file" in body:
+                if isinstance(body["file"], str):
+                    file_bytes = _decode_file_content(body["file"])
+                    file_name = body.get("fileName", "uploaded_spec.docx")
+                elif isinstance(body["file"], dict):
+                    file_name = body["file"].get("name", "uploaded_spec.docx")
+                    b64 = body["file"].get("contentBytes", "") or body["file"].get("content", "")
+                    if b64:
+                        file_bytes = _decode_file_content(b64)
+        except Exception:
+            pass
+
+    if not file_bytes and body_len > 0 and not _is_json_ct:
+        file_bytes = body_bytes
+        file_name = "uploaded_spec.txt"
+
+    if not file_bytes:
+        return _error_response(f"No file content found (CT={content_type}, len={body_len}).", 400)
+
+    if not file_name:
+        file_name = "uploaded_spec.docx"
+
+    from azure_handler import handle_upload_and_validate_pdf
+    return _safe_handler(handle_upload_and_validate_pdf, file_name, file_bytes)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# ENDPOINT 9: /api/md-to-pdf — Convert markdown text to PDF
+# ═══════════════════════════════════════════════════════════════════
+@app.route(route="md-to-pdf", methods=["POST"])
+def md_to_pdf(req: func.HttpRequest) -> func.HttpResponse:
+    """
+    Convert a markdown text (or validation report markdown) to a PDF file.
+
+    Request body:
+      { "markdown": "# Report\\n\\n...", "title": "Validation Report", "subtitle": "ASU Spec" }
+    OR:
+      { "fileName": "ASU_Spec.docx" }  — validates the file and returns PDF of the report
+
+    Returns: application/pdf binary file.
+    """
+    logging.info("=== /api/md-to-pdf called ===")
+    body = _get_body(req)
+
+    # If fileName is provided, validate and return PDF directly
+    file_name = (body.get("fileName") or "").strip()
+    if file_name:
+        from azure_handler import handle_validation_pdf
+        return _safe_handler(handle_validation_pdf, file_name)
+
+    # Otherwise, convert the provided markdown text
+    markdown_text = (body.get("markdown") or "").strip()
+    if not markdown_text:
+        return _error_response("Missing 'markdown' field or 'fileName' in request body.", 422)
+
+    title = body.get("title", "LEON Report")
+    subtitle = body.get("subtitle", "")
+
+    from azure_handler import handle_md_to_pdf
+    return _safe_handler(handle_md_to_pdf, markdown_text, title, subtitle)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# ENDPOINT 10: /api/validation-pdf — Validate + return PDF directly
+# ═══════════════════════════════════════════════════════════════════
+@app.route(route="validation-pdf", methods=["POST"])
+def validation_pdf(req: func.HttpRequest) -> func.HttpResponse:
+    """
+    Validate a specification file and return the report as a PDF file.
+
+    Request body:
+      { "fileName": "ASU_Spec.docx" }
+
+    Returns: application/pdf binary file directly.
+    """
+    logging.info("=== /api/validation-pdf called ===")
+    body = _get_body(req)
+    file_name = (body.get("fileName") or "").strip()
+
+    if not file_name:
+        return _error_response("Missing 'fileName' in request body.", 422)
+
+    from azure_handler import handle_validation_pdf
+    return _safe_handler(handle_validation_pdf, file_name)

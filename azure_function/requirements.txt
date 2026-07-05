@@ -11,3 +11,5 @@ azure-identity>=1.17.0
 python-dotenv>=1.0.0
 # Explicit azure-core namespace packages for Flex remote build
 azure-ai-search-documents>=11.6.0b8
+# PDF report generation
+fpdf2>=2.7.8

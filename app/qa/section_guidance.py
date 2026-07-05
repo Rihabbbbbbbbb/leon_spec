@@ -333,8 +333,9 @@ def _build_guidance_kb(force: bool = False) -> Dict[str, SectionGuidance]:
         # Find matching template section
         for tmpl_name, instr_text in tmpl_instructions.items():
             if canonical_name.lower() in tmpl_name.lower() or tmpl_name.lower() in canonical_name.lower():
-                guidance.template_instruction = instr_text
-                guidance.source_template = True
+                if instr_text and instr_text.strip():
+                    guidance.template_instruction = instr_text
+                    guidance.source_template = True
                 break
 
         # 2. Writing guide content
@@ -430,6 +431,111 @@ def _build_guidance_kb(force: bool = False) -> Dict[str, SectionGuidance]:
                             if rule and rid not in [r[0] for r in guidance.guide_rules]:
                                 guidance.guide_rules.append((rid, rule.text[:200]))
 
+        # 4. Smart fallback: match rules to sections by keyword
+        # When the guide parsing didn't find rules for this section,
+        # search all known rules for keyword matches.
+        if not guidance.guide_rules and canonical_name not in ("PREAMBLE",):
+            _SECTION_RULE_KEYWORDS = {
+                "PURPOSE": ["purpose", "object", "goal"],
+                "SCOPE": ["scope", "domain", "apply", "applicable"],
+                "FUNCTIONAL REQUIREMENTS": ["functional", "service", "behaviour", "behavior", "black box", "use case", "state machine"],
+                "PERFORMANCE REQUIREMENTS": ["performance", "timing", "response time", "latency", "efficiency"],
+                "MISSION PROFILE": ["mission profile", "life situation", "operating condition", "usage", "duration"],
+                "LIFETIME": ["lifetime", "durability", "life duration", "service life"],
+                "NETWORK INTERFACES": ["network", "communication", "lin", "can", "multiplex", "protocol", "frame", "signal"],
+                "ELECTRICAL INTERFACES": ["electrical", "power supply", "voltage", "current", "wiring", "connector"],
+                "MECHANICAL INTERFACES": ["mechanical", "mounting", "fastening"],
+                "HUMAN-MACHINE INTERFACES": ["hmi", "mmi", "human machine", "display", "button", "warning"],
+                "RAMS REQUIREMENTS": ["safety", "reliability", "dependability", "asil", "dreaded event", "failure"],
+                "ENVIRONMENT CONDITIONS": ["environment", "temperature", "humidity", "vibration", "sealing", "ip"],
+                "SYSTEM DIVERSITY": ["diversity", "variant", "characteristic"],
+                "REFERENCE DOCUMENTS": ["reference document", "design file", "dc", "input specification"],
+                "APPLICABLE DOCUMENTS": ["applicable document", "standard", "regulation"],
+                "QUOTED DOCUMENTS": ["quoted", "cited", "mark"],
+                "TRACEABILITY AND CONFIGURATION": ["traceability", "configuration", "marking"],
+                "DESIGN AND MANUFACTURING": ["design", "manufacturing", "material", "process"],
+                "INTEGRATION AND VALIDATION REQUIREMENTS": ["integration", "validation", "test", "verification", "compliance"],
+                "CONSTRAINT REQUIREMENTS": ["constraint", "regulation", "legal", "restriction"],
+                "OPERATIONAL REQUIREMENTS": ["operational", "operation", "ergonomic", "noise"],
+                "DOCUMENT IDENTIFICATION": ["title", "identification", "rsp", "document id", "reference"],
+                "CHECKING AND APPROVAL": ["writer", "auditor", "approver", "checking", "approval"],
+                "TABLE OF UPDATES": ["history", "update", "revision", "modification track"],
+                "ACRONYMS": ["acronym", "abbreviation"],
+                "GLOSSARY": ["glossary", "definition", "terminology"],
+                "WRITING CONVENTIONS": ["writing convention", "numbering", "pciee", "requirement id", "requirement numbering"],
+                "PHYSICAL SYSTEM ARCHITECTURE": ["architecture", "physical", "block diagram", "connection"],
+                "GENERAL DESCRIPTION OF THE SYSTEM": ["general description", "system description", "overview"],
+                "SYSTEM DEVELOPMENT CONTEXT": ["development context", "over-system", "context"],
+                "SYSTEM ROLES": ["role", "use case", "service", "actor"],
+                "EXTERNAL INTERFACES": ["external interface", "interface", "protocol", "transfer", "communication"],
+                "ERGONOMICS AND HUMAN FACTORS": ["ergonomic", "human factor", "random noise", "noise", "non-cutting", "edge", "sharp edge"],
+                "PRODUCT QUALITY": ["product quality", "quality", "fault rate", "reliability target", "quality requirement"],
+                "INTEGRATION AND VALIDATION": ["integration", "validation", "test", "verification", "test plan", "mandatory test", "recommended test"],
+                "DEMONSTRATION OF COMPLIANCE": ["demonstration", "compliance", "proof", "evidence", "compliance demonstration"],
+                "TERMINOLOGY": ["terminology", "term", "vocabulary", "system engineering term"],
+                "GLOSSARY": ["glossary", "definition", "term definition"],
+                "LIFETIME": ["lifetime", "durability", "life duration", "service life", "reliability"],
+                "IMPOSED ELEMENTS OF VALIDATION PLAN": ["validation plan", "imposed test", "test program", "validation program", "test order"],
+            }
+            keywords = _SECTION_RULE_KEYWORDS.get(canonical_name, [])
+            if keywords:
+                # Search all extracted rules for keyword matches
+                # SectionRule: name + description; WritingGuideRule: rule_id + text
+                for rule in rules.mandatory_sections:
+                    rname = getattr(rule, "name", "")
+                    rdesc = getattr(rule, "description", "")
+                    rtext = (rname + " " + rdesc).lower()
+                    if not rtext.strip():
+                        continue
+                    for kw in keywords:
+                        if kw in rtext:
+                            rid = f"SECTION:{rname[:30]}"
+                            if rid not in [r[0] for r in guidance.guide_rules]:
+                                guidance.guide_rules.append((rid, rdesc[:200] or rname[:200]))
+                                guidance.source_guide = True
+                            break
+                for rule in rules.writing_guide_rules:
+                    rid = getattr(rule, "rule_id", "")
+                    rtext = getattr(rule, "text", "")
+                    if not rtext:
+                        continue
+                    rtext_lower = rtext.lower()
+                    for kw in keywords:
+                        if kw in rtext_lower:
+                            if rid not in [r[0] for r in guidance.guide_rules]:
+                                guidance.guide_rules.append((rid, rtext[:200]))
+                                guidance.source_guide = True
+                            break
+
+        # 5. For any REQUIREMENT* section, always include core drafting rules
+        _CORE_REQ_RULES = {"R20", "R21", "R22", "R23", "R25"}
+        if "REQUIREMENT" in canonical_name and canonical_name != "CONSTRAINT REQUIREMENTS":
+            for rule in rules.writing_guide_rules:
+                rid = getattr(rule, "rule_id", "")
+                if rid in _CORE_REQ_RULES and rid not in [r[0] for r in guidance.guide_rules]:
+                    guidance.guide_rules.append((rid, getattr(rule, "text", "")[:200]))
+                    guidance.source_guide = True
+
+        # 6. Static fallback for sections where guide extraction missed content
+        if not guidance.source_template and not guidance.source_guide and not guidance.guide_rules:
+            _STATIC_FALLBACKS: Dict[str, Tuple[str, List[Tuple[str, str]]]] = {
+                "WRITING CONVENTIONS": (
+                    "Writing conventions define how requirements are numbered and formatted "
+                    "in the CTS. Requirements use a PCIEE coding system (Point de vue, "
+                    "Composant, Interface, Exigence, Exigence Enfant). Each requirement "
+                    "must have a unique identifier following this coding scheme. "
+                    "Requirements shall be written in a structured format with: "
+                    "requirement ID, requirement text, and traceability links.",
+                    [("R05", "Acronyms and abbreviations must be defined in the Acronyms section"),
+                     ("R09", "The history of modifications must be tracked in the Table of Updates")],
+                ),
+            }
+            if canonical_name in _STATIC_FALLBACKS:
+                purpose, static_rules = _STATIC_FALLBACKS[canonical_name]
+                guidance.guide_purpose = purpose
+                guidance.guide_rules = static_rules
+                guidance.source_guide = True
+
         kb[canonical_name] = guidance
 
     _guidance_cache = kb
@@ -474,7 +580,7 @@ def detect_section_from_question(question: str) -> Optional[str]:
 # ── Exclusion patterns: questions that contain section keywords but are NOT guidance ──
 _FACTUAL_EXCLUSION_RE = re.compile(
     r"\b(?:"
-    r"what\s+is\s+the\s+(?:voltage|current|power|temperature|frequency|speed|weight|size|price|cost|color|range|value|level|rate)\b"
+    r"what\s+is\s+the\s+[\w\s]{0,30}?(?:voltage|current|power|temperature|frequency|speed|weight|size|price|cost|color|range|value|level|rate)\b"
     r"|how\s+(?:much|many|long|far|fast|heavy|big|often)\b"
     r"|is\s+the\s+\w+\s+(?:located|positioned|situated|placed|found|mounted)\b"
     r"|where\s+is\b"
@@ -517,7 +623,8 @@ _SIMPLE_GUIDANCE_RE = re.compile(
     r"|how\s+(?:about|for)\s+(?:the\s+)?"
     r"|what\s+is\s+(?:the\s+)?"
     r"|comment\s+(?:rédiger|écrire|remplir|faire)\s+(?:la\s+)?(?:section|partie|chapitre)\s+"
-    r"|que\s+(?:mettre|écrire|faire)\s+(?:dans|pour)\s+(?:la\s+)?(?:section|partie|chapitre)\s+"
+    r"|que\s+(?:mettre|écrire|faire|doit\s+contenir)\s+(?:dans|pour|la\s+section|le\s+)?(?:section|partie|chapitre)?\s*"
+    r"|que\s+doit\s+contenir\s+(?:la\s+)?(?:section\s+)?"
     r")",
     re.IGNORECASE,
 )
@@ -556,7 +663,8 @@ def is_section_guidance_question(question: str) -> bool:
         r"\bhow\s+(?:should|must|can|do)\s+(?:I|we|you)\s+(?:write|fill|complete|draft|structure|approach|handle|do|prepare)\s+(?:the\s+)?",
         r"\bwhat\s+(?:must|should|shall|does)\s+(?:the\s+)?[\w\s]{2,40}?\s+(?:section|paragraph|chapter)\s+(?:contain|include|have|cover|specify|describe)\b",
         r"\bwhat\s+(?:must|should)\s+(?:the\s+)?[\w\s]{2,40}?\s+(?:contain|include)\b",
-        r"\bque\s+(?:mettre|écrire|faire|rédiger|remplir)\s+(?:dans|pour|la|le|les)\s+",
+        r"\bque\s+(?:mettre|écrire|faire|rédiger|remplir|doit\s+contenir)\s+(?:dans|pour|la|le|les)\s+",
+        r"\bque\s+doit\s+contenir\s+(?:la\s+)?(?:section\s+)?",
         r"\bcomment\s+(?:rédiger|écrire|remplir|faire|structurer)\s+(?:la|le|les|une|un)\s+",
     ]
     for pattern in how_to_patterns:
@@ -601,6 +709,22 @@ def get_section_guidance(question: str) -> Optional[Dict]:
         "guide_donts": guidance.guide_donts[:5],
     }
 
+    # What NOT to put in this section (anti-mixing guidance)
+    _SECTION_EXCLUSIONS: Dict[str, str] = {
+        "PURPOSE": "Do NOT include use case diagrams, system architecture, or detailed functional descriptions — those belong in SYSTEM ROLES and PHYSICAL SYSTEM ARCHITECTURE respectively.",
+        "SCOPE": "Do NOT include detailed requirements or interface descriptions — those belong in the REQUIREMENTS sections.",
+        "SYSTEM ROLES": "Do NOT include the general purpose or objective of the spec — that belongs in PURPOSE. Do NOT include physical architecture diagrams — that belongs in PHYSICAL SYSTEM ARCHITECTURE.",
+        "MISSION PROFILE": "Do NOT invent specific distribution models (e.g. log-normal, Weibull) unless the Mission Profile department has provided them. The template says 'To be completed by the writer based on the Mission profile department Inputs'.",
+        "FUNCTIONAL REQUIREMENTS": "Do NOT include performance metrics (timing, latency) — those belong in PERFORMANCE REQUIREMENTS. Do NOT include interface protocol details — those belong in NETWORK/ELECTRICAL/MECHANICAL INTERFACES.",
+        "PERFORMANCE REQUIREMENTS": "Do NOT include functional behavior descriptions — those belong in FUNCTIONAL REQUIREMENTS.",
+        "NETWORK INTERFACES": "Do NOT include electrical power supply details — those belong in ELECTRICAL INTERFACES.",
+        "ELECTRICAL INTERFACES": "Do NOT include communication protocol details (CAN, LIN) — those belong in NETWORK INTERFACES.",
+        "RAMS REQUIREMENTS": "Do NOT include general quality metrics — those belong in PRODUCT QUALITY.",
+        "ENVIRONMENT CONDITIONS": "Do NOT include mission profile usage scenarios — those belong in MISSION PROFILE.",
+        "INTEGRATION AND VALIDATION": "Do NOT include requirement specifications — those belong in INTEGRATION AND VALIDATION REQUIREMENTS.",
+        "DEMONSTRATION OF COMPLIANCE": "Do NOT specify new requirements — this section is for showing how compliance with existing requirements is demonstrated.",
+    }
+
     # Build a natural-language answer that the LLM can present
     parts = []
 
@@ -612,9 +736,14 @@ def get_section_guidance(question: str) -> Optional[Dict]:
     if guidance.template_instruction:
         parts.append(f"**Template instruction** (from the Stellantis CTS template):\n> {guidance.template_instruction}\n")
 
+    # What NOT to put here
+    exclusion = _SECTION_EXCLUSIONS.get(section)
+    if exclusion:
+        parts.append(f"**What NOT to put here**: {exclusion}\n")
+
     if guidance.guide_rules:
         parts.append(f"**Applicable writing-guide rules** ({len(guidance.guide_rules)} rules):")
-        for rid, text in guidance.guide_rules[:8]:
+        for rid, text in guidance.guide_rules[:10]:
             parts.append(f"- **{rid}**: {text}")
         parts.append("")
 
