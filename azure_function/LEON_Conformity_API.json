@@ -1,0 +1,640 @@
+{
+  "openapi": "3.0.1",
+  "info": {
+    "title": "LEON - Conformity Matrix Analyzer API",
+    "description": "API d'analyse de matrices de conformité FNR pour LEON Copilot Studio.\n\nFonctionnalités :\n- Analyser une matrice de conformité (ODS/XLSX) → rapport PDF avec camembert\n- Générer un rapport Excel coloré (lignes vertes/rouges/jaunes)\n- Comparer plusieurs matrices entre elles\n- Générer un dataset Power BI\n\nTous les endpoints nécessitent une clé API (paramètre 'code' dans l'URL ou header 'x-api-key').",
+    "version": "2.0.0"
+  },
+  "servers": [
+    {
+      "url": "https://leon-spec-gbexcnefdmakfpdg.francecentral-01.azurewebsites.net",
+      "description": "Production Azure Function"
+    }
+  ],
+  "paths": {
+    "/api/conformity-excel": {
+      "post": {
+        "summary": "Générer un rapport Excel coloré depuis une matrice de conformité",
+        "description": "Uploader une matrice de conformité (ODS ou XLSX) et recevoir un rapport Excel avec lignes colorées par statut (vert=OK, rouge=NOK, jaune=STANDBY, gris=NA). Le rapport contient 2 feuilles : 'Summary' (statistiques) et 'All Items' (toutes les exigences avec leurs statuts et commentaires exacts).",
+        "operationId": "conformityExcel",
+        "parameters": [
+          {
+            "name": "code",
+            "in": "query",
+            "description": "Clé API de la Function (Azure Function host key)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConformityExcelRequest"
+              },
+              "example": {
+                "fileName": "Conformity_Matrix.ods",
+                "fileContent": "UEsDBBQAAAAIA..."
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Analyse réussie — rapport Excel généré",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConformityExcelResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Requête invalide — fichier manquant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Format de fichier non supporté (ODS ou XLSX uniquement)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Erreur interne lors de l'analyse",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/conformity": {
+      "post": {
+        "summary": "Analyser une matrice de conformité → rapport PDF avec camembert",
+        "description": "Uploader une matrice de conformité et recevoir un rapport PDF complet incluant : diagramme camembert de répartition des statuts, liste de toutes les exigences OK/NOK/NA avec commentaires exacts, détection des incohérences IA entre le statut et le commentaire.",
+        "operationId": "conformityPdf",
+        "parameters": [
+          {
+            "name": "code",
+            "in": "query",
+            "description": "Clé API de la Function",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConformityRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Analyse réussie — rapport PDF généré",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConformityResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Fichier non trouvé (si fileName seul est fourni)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/conformity-compare": {
+      "post": {
+        "summary": "Comparer plusieurs matrices de conformité",
+        "description": "Comparer 2 matrices ou plus entre elles. Retourne les changements de statut (ex: NOK→OK), les exigences manquantes dans certaines matrices, un graphique à barres comparatif, et un rapport texte détaillé.",
+        "operationId": "conformityCompare",
+        "parameters": [
+          {
+            "name": "code",
+            "in": "query",
+            "description": "Clé API de la Function",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompareRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Comparaison réussie",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompareResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Un ou plusieurs fichiers introuvables",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/conformity-powerbi": {
+      "post": {
+        "summary": "Générer un dataset Power BI depuis une matrice",
+        "description": "Génère un fichier JSON compatible Power BI avec 3 tables (StatusSummary, Items, Inconsistencies) et 7 graphiques suggérés. Utilisable directement avec Power BI via l'API Push.",
+        "operationId": "conformityPowerBi",
+        "parameters": [
+          {
+            "name": "code",
+            "in": "query",
+            "description": "Clé API de la Function",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PowerBIRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Dataset Power BI généré",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PowerBIResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Fichier non trouvé",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/health": {
+      "get": {
+        "summary": "Vérifier l'état de santé de l'API",
+        "description": "Endpoint de health check. Retourne le statut de l'API, les endpoints configurés et les services connectés.",
+        "operationId": "health",
+        "parameters": [
+          {
+            "name": "code",
+            "in": "query",
+            "description": "Clé API de la Function",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "API fonctionnelle",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "example": "healthy"
+                    },
+                    "version": {
+                      "type": "string",
+                      "example": "2.0.0-enterprise"
+                    },
+                    "uploaded_files": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ConformityExcelRequest": {
+        "type": "object",
+        "required": ["fileName", "fileContent"],
+        "properties": {
+          "fileName": {
+            "type": "string",
+            "description": "Nom du fichier avec extension (.ods ou .xlsx)",
+            "example": "Conformity_Matrix.ods"
+          },
+          "fileContent": {
+            "type": "string",
+            "description": "Contenu du fichier encodé en base64. Obtenu depuis le fichier attaché par l'utilisateur."
+          }
+        }
+      },
+      "ConformityRequest": {
+        "type": "object",
+        "required": ["fileName", "fileContent"],
+        "properties": {
+          "fileName": {
+            "type": "string",
+            "description": "Nom du fichier avec extension (.ods ou .xlsx)",
+            "example": "Conformity_Matrix.ods"
+          },
+          "fileContent": {
+            "type": "string",
+            "description": "Contenu du fichier encodé en base64. Obtenu depuis le fichier attaché par l'utilisateur."
+          }
+        }
+      },
+      "CompareRequest": {
+        "type": "object",
+        "required": ["fileNames"],
+        "properties": {
+          "fileNames": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Liste des noms de fichiers à comparer (minimum 2)",
+            "minItems": 2,
+            "example": ["DM12F_v1.ods", "DM12F_v2.ods"]
+          }
+        }
+      },
+      "PowerBIRequest": {
+        "type": "object",
+        "required": ["fileName"],
+        "properties": {
+          "fileName": {
+            "type": "string",
+            "description": "Nom du fichier matrice (déjà uploadé ou nouveau)"
+          },
+          "fileContent": {
+            "type": "string",
+            "description": "Contenu du fichier encodé en base64 (optionnel — si fourni, le fichier est sauvegardé puis analysé)"
+          }
+        }
+      },
+      "ConformityExcelResponse": {
+        "type": "object",
+        "properties": {
+          "answer": {
+            "type": "string",
+            "description": "Message de résumé en français destiné à l'utilisateur"
+          },
+          "status": {
+            "type": "string",
+            "description": "Statut de la réponse: 'answered' ou 'error'",
+            "example": "answered"
+          },
+          "confidence": {
+            "type": "string",
+            "description": "Niveau de confiance: 'HIGH'",
+            "example": "HIGH"
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            },
+            "description": "Sources utilisées (vide pour l'analyse de conformité)"
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            },
+            "description": "Preuves (vide pour l'analyse de conformité)"
+          },
+          "fileName": {
+            "type": "string",
+            "description": "Nom du fichier analysé"
+          },
+          "analysis": {
+            "$ref": "#/components/schemas/AnalysisSummary"
+          },
+          "reportExcel": {
+            "type": "string",
+            "description": "Fichier Excel (base64) — à décoder et sauvegarder au format .xlsx"
+          }
+        }
+      },
+      "ConformityResponse": {
+        "type": "object",
+        "properties": {
+          "answer": {
+            "type": "string",
+            "description": "Message de résumé en français"
+          },
+          "status": {
+            "type": "string",
+            "example": "answered"
+          },
+          "confidence": {
+            "type": "string",
+            "example": "HIGH"
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            },
+            "description": "Sources utilisées (vide pour l'analyse de conformité)"
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            },
+            "description": "Preuves (vide pour l'analyse de conformité)"
+          },
+          "fileName": {
+            "type": "string"
+          },
+          "analysis": {
+            "$ref": "#/components/schemas/AnalysisSummary"
+          },
+          "reportPdf": {
+            "type": "string",
+            "description": "Rapport PDF (base64)"
+          }
+        }
+      },
+      "CompareResponse": {
+        "type": "object",
+        "properties": {
+          "answer": {
+            "type": "string",
+            "description": "Message de résumé en français"
+          },
+          "status": {
+            "type": "string",
+            "example": "answered"
+          },
+          "confidence": {
+            "type": "string",
+            "example": "HIGH"
+          },
+          "comparison": {
+            "type": "object",
+            "properties": {
+              "matrices": {
+                "type": "array",
+                "description": "Résumé par matrice",
+                "items": {
+                  "type": "object"
+                }
+              },
+              "requirementComparison": {
+                "type": "object",
+                "description": "Comparaison par exigence: reqId → {matrixName → category}"
+              },
+              "statusChanges": {
+                "type": "array",
+                "description": "Exigences ayant changé de statut entre matrices"
+              },
+              "missingIn": {
+                "type": "object",
+                "description": "Exigences présentes dans une matrice mais absentes d'une autre"
+              },
+              "chartBase64": {
+                "type": "string",
+                "description": "Graphique à barres comparatif (base64 PNG)"
+              },
+              "reportText": {
+                "type": "string",
+                "description": "Rapport texte détaillé de la comparaison"
+              }
+            }
+          }
+        }
+      },
+      "PowerBIResponse": {
+        "type": "object",
+        "properties": {
+          "answer": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "confidence": {
+            "type": "string"
+          },
+          "powerbi": {
+            "type": "object",
+            "properties": {
+              "dataset": {
+                "type": "object",
+                "description": "Définition du dataset Power BI (tables, colonnes)"
+              },
+              "data": {
+                "type": "object",
+                "description": "Données pour chaque table: StatusSummary, Items, Inconsistencies"
+              },
+              "dashboardConfig": {
+                "type": "object",
+                "description": "Configuration suggérée pour le dashboard Power BI (7 graphiques)"
+              }
+            }
+          }
+        }
+      },
+      "AnalysisSummary": {
+        "type": "object",
+        "properties": {
+          "fileName": {
+            "type": "string"
+          },
+          "sheetName": {
+            "type": "string",
+            "description": "Nom de la feuille détectée automatiquement"
+          },
+          "headerRow": {
+            "type": "integer",
+            "description": "Index de la ligne d'en-tête détectée"
+          },
+          "dataStartRow": {
+            "type": "integer",
+            "description": "Index de la première ligne de données"
+          },
+          "totalRows": {
+            "type": "integer",
+            "description": "Nombre total d'exigences extraites"
+          },
+          "stats": {
+            "type": "object",
+            "properties": {
+              "OK": { "type": "integer" },
+              "NOK": { "type": "integer" },
+              "NA": { "type": "integer" },
+              "STANDBY": { "type": "integer" },
+              "DEVIATION": { "type": "integer" },
+              "BLOCK": { "type": "integer" },
+              "UNKNOWN": { "type": "integer" },
+              "EMPTY": { "type": "integer" }
+            }
+          },
+          "columnMapping": {
+            "type": "object",
+            "description": "Mapping des colonnes détectées (conformity, comment, req_id)",
+            "properties": {
+              "conformity": { "type": "array", "items": { "type": "integer" } },
+              "comment": { "type": "array", "items": { "type": "integer" } },
+              "req_id": { "type": "array", "items": { "type": "integer" } }
+            }
+          },
+          "items": {
+            "type": "array",
+            "description": "Liste de toutes les exigences avec leur statut et commentaire",
+            "items": {
+              "type": "object",
+              "properties": {
+                "rowIndex": { "type": "integer" },
+                "reqId": { "type": "string" },
+                "reference": { "type": "string" },
+                "description": { "type": "string" },
+                "conformityRaw": { "type": "string" },
+                "conformityCategory": { "type": "string" },
+                "comment": { "type": "string" },
+                "columnSet": { "type": "integer" }
+              }
+            }
+          },
+          "inconsistencies": {
+            "type": "array",
+            "description": "Incohérences détectées par l'IA entre statut et commentaire",
+            "items": {
+              "type": "object",
+              "properties": {
+                "type": { "type": "string" },
+                "severity": { "type": "string" },
+                "req_id": { "type": "string" },
+                "conformity": { "type": "string" },
+                "comment": { "type": "string" },
+                "explanation": { "type": "string" }
+              }
+            }
+          },
+          "summary": {
+            "type": "object",
+            "properties": {
+              "total": { "type": "integer" },
+              "ok": { "type": "integer" },
+              "nok": { "type": "integer" },
+              "na": { "type": "integer" },
+              "standby": { "type": "integer" },
+              "unknown": { "type": "integer" },
+              "empty": { "type": "integer" },
+              "inconsistencies": { "type": "integer" }
+            }
+          },
+          "chartBase64": {
+            "type": "string",
+            "description": "Camembert de répartition (base64 PNG)"
+          },
+          "reportText": {
+            "type": "string",
+            "description": "Rapport texte complet"
+          }
+        }
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "answer": {
+            "type": "string",
+            "description": "Message d'erreur en français"
+          },
+          "status": {
+            "type": "string",
+            "example": "error"
+          },
+          "confidence": {
+            "type": "string",
+            "description": "Vide en cas d'erreur"
+          },
+          "sources": {
+            "type": "array",
+            "items": { "type": "object" },
+            "description": "Vide en cas d'erreur"
+          },
+          "evidence": {
+            "type": "array",
+            "items": { "type": "object" },
+            "description": "Vide en cas d'erreur"
+          }
+        }
+      }
+    }
+  }
+}

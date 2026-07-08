@@ -1,0 +1,475 @@
+{
+  "openapi": "3.0.1",
+  "info": {
+    "title": "LEON - Conformity Matrix Analyzer API",
+    "description": "API d'analyse de matrices de conformite FNR pour LEON Copilot Studio.\n\nFonctionnalites :\n- Analyser une matrice de conformite (ODS/XLSX) -> rapport PDF avec camembert\n- Generer un rapport Excel colore (lignes vertes/rouges/jaunes)\n- Comparer plusieurs matrices entre elles\n- Generer un dataset Power BI\n\nTous les endpoints necessitent une cle API (parametre 'code' dans l'URL).",
+    "version": "2.0.0"
+  },
+  "servers": [
+    {
+      "url": "https://leon-spec-gbexcnefdmakfpdg.francecentral-01.azurewebsites.net",
+      "description": "Production Azure Function"
+    }
+  ],
+  "paths": {
+    "/api/conformity": {
+      "post": {
+        "summary": "Analyser une matrice de conformite -> rapport PDF avec camembert",
+        "description": "Uploader une matrice de conformite (ODS ou XLSX) et recevoir un rapport PDF complet avec diagramme camembert, liste des exigences OK/NOK/NA, et detection des incoherences IA.",
+        "operationId": "conformityPdf",
+        "parameters": [
+          {
+            "name": "code",
+            "in": "query",
+            "description": "Cle API de la Function Azure",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ConformityRequest" },
+              "example": {
+                "fileName": "DM12F_Conformity.ods",
+                "fileContent": "UEsDBBQAAAAIA..."
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Analyse reussie - rapport PDF genere",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ConformityResponse" }
+              }
+            }
+          },
+          "400": {
+            "description": "Requete invalide",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "500": {
+            "description": "Erreur interne",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/conformity-excel": {
+      "post": {
+        "summary": "Generer un rapport Excel colore depuis une matrice de conformite",
+        "description": "Uploader une matrice de conformite (ODS ou XLSX) et recevoir un rapport Excel avec lignes colorees par statut (vert=OK, rouge=NOK, jaune=STANDBY, gris=NA).",
+        "operationId": "conformityExcel",
+        "parameters": [
+          {
+            "name": "code",
+            "in": "query",
+            "description": "Cle API de la Function Azure",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ConformityRequest" },
+              "example": {
+                "fileName": "DM12F_Conformity.ods",
+                "fileContent": "UEsDBBQAAAAIA..."
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Rapport Excel genere",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ConformityExcelResponse" }
+              }
+            }
+          },
+          "400": {
+            "description": "Requete invalide",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "500": {
+            "description": "Erreur interne",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/conformity-compare": {
+      "post": {
+        "summary": "Comparer plusieurs matrices de conformite",
+        "description": "Comparer 2 matrices ou plus. Retourne les changements de statut, les exigences manquantes, un graphique comparatif et un rapport texte.",
+        "operationId": "conformityCompare",
+        "parameters": [
+          {
+            "name": "code",
+            "in": "query",
+            "description": "Cle API de la Function Azure",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/CompareRequest" },
+              "example": {
+                "fileNames": ["DM12F_v1.ods", "DM12F_v2.ods"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Comparaison reussie",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/CompareResponse" }
+              }
+            }
+          },
+          "400": {
+            "description": "Requete invalide",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "500": {
+            "description": "Erreur interne",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/conformity-powerbi": {
+      "post": {
+        "summary": "Generer un dataset Power BI depuis une matrice",
+        "description": "Genere un JSON compatible Power BI avec tables et graphiques suggérés.",
+        "operationId": "conformityPowerBi",
+        "parameters": [
+          {
+            "name": "code",
+            "in": "query",
+            "description": "Cle API de la Function Azure",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/PowerBIRequest" },
+              "example": {
+                "fileName": "DM12F_Conformity.ods",
+                "fileContent": "UEsDBBQAAAAIA..."
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Dataset Power BI genere",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/PowerBIResponse" }
+              }
+            }
+          },
+          "400": {
+            "description": "Requete invalide",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "500": {
+            "description": "Erreur interne",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/health": {
+      "get": {
+        "summary": "Verifier l'etat de sante de l'API",
+        "description": "Endpoint de health check. Retourne le statut de l'API et les services connectes.",
+        "operationId": "health",
+        "parameters": [
+          {
+            "name": "code",
+            "in": "query",
+            "description": "Cle API de la Function Azure",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "API fonctionnelle",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HealthResponse" }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ConformityRequest": {
+        "type": "object",
+        "required": ["fileName"],
+        "properties": {
+          "fileName": {
+            "type": "string",
+            "description": "Nom du fichier avec extension (.ods ou .xlsx). Exemple: DM12F_Conformity_Matrix.ods"
+          },
+          "fileContent": {
+            "type": "string",
+            "description": "Contenu du fichier encode en base64. Optionnel si fileUrl est fourni."
+          },
+          "fileUrl": {
+            "type": "string",
+            "description": "URL du fichier a telecharger (alternative a fileContent). Exemple: https://sharepoint.com/.../matrix.ods"
+          }
+        }
+      },
+      "CompareRequest": {
+        "type": "object",
+        "required": ["fileNames"],
+        "properties": {
+          "fileNames": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Liste des noms de fichiers a comparer (minimum 2). Les fichiers doivent etre deja uploades.",
+            "minItems": 2,
+            "example": ["DM12F_v1.ods", "DM12F_v2.ods"]
+          }
+        }
+      },
+      "PowerBIRequest": {
+        "type": "object",
+        "required": ["fileName"],
+        "properties": {
+          "fileName": {
+            "type": "string",
+            "description": "Nom du fichier matrice (.ods ou .xlsx)"
+          },
+          "fileContent": {
+            "type": "string",
+            "description": "Contenu du fichier encode en base64 (optionnel - si fourni, le fichier est sauvegarde puis analyse)"
+          },
+          "fileUrl": {
+            "type": "string",
+            "description": "URL du fichier a telecharger (alternative a fileContent)"
+          }
+        }
+      },
+      "ConformityResponse": {
+        "type": "object",
+        "properties": {
+          "answer": {
+            "type": "string",
+            "description": "Resume en francais destine a l'utilisateur. Contient le nombre total d'exigences, les comptes OK/NOK/NA/STANDBY et les incoherences detectees."
+          },
+          "status": {
+            "type": "string",
+            "description": "Statut de la reponse: 'answered' si succes, 'error' si echec.",
+            "example": "answered"
+          },
+          "total": {
+            "type": "integer",
+            "description": "Nombre total d'exigences analysees dans la matrice."
+          },
+          "ok": {
+            "type": "integer",
+            "description": "Nombre d'exigences conformes (OK)."
+          },
+          "nok": {
+            "type": "integer",
+            "description": "Nombre d'exigences non conformes (NOK)."
+          },
+          "na": {
+            "type": "integer",
+            "description": "Nombre d'exigences non applicables (NA)."
+          },
+          "standby": {
+            "type": "integer",
+            "description": "Nombre d'exigences en attente (STANDBY)."
+          },
+          "inconsistencies": {
+            "type": "integer",
+            "description": "Nombre d'incoherences detectees par l'IA entre le statut et le commentaire."
+          },
+          "chartBase64": {
+            "type": "string",
+            "description": "Diagramme camembert de repartition des statuts au format base64 (image SVG ou PNG). A afficher a l'utilisateur."
+          },
+          "reportPdf": {
+            "type": "string",
+            "description": "Rapport PDF complet encode en base64. Contient le camembert, la liste des exigences et l'analyse IA. A decoder et fournir en telechargement a l'utilisateur."
+          }
+        }
+      },
+      "ConformityExcelResponse": {
+        "type": "object",
+        "properties": {
+          "answer": {
+            "type": "string",
+            "description": "Resume en francais destine a l'utilisateur. Contient les statistiques et le nombre d'incoherences."
+          },
+          "status": {
+            "type": "string",
+            "description": "Statut de la reponse: 'answered' si succes, 'error' si echec.",
+            "example": "answered"
+          },
+          "total": {
+            "type": "integer",
+            "description": "Nombre total d'exigences analysees."
+          },
+          "ok": {
+            "type": "integer",
+            "description": "Nombre d'exigences conformes (OK)."
+          },
+          "nok": {
+            "type": "integer",
+            "description": "Nombre d'exigences non conformes (NOK)."
+          },
+          "na": {
+            "type": "integer",
+            "description": "Nombre d'exigences non applicables (NA)."
+          },
+          "inconsistencies": {
+            "type": "integer",
+            "description": "Nombre d'incoherences detectees par l'IA."
+          },
+          "reportExcel": {
+            "type": "string",
+            "description": "Fichier Excel encode en base64. Contient 2 feuilles: 'Summary' (statistiques) et 'All Items' (toutes les exigences avec lignes colorees). A decoder et fournir en telechargement."
+          }
+        }
+      },
+      "CompareResponse": {
+        "type": "object",
+        "properties": {
+          "answer": {
+            "type": "string",
+            "description": "Resume en francais destine a l'utilisateur. Contient le nombre de matrices comparees, le nombre d'exigences comparees, les changements de statut et les exigences manquantes."
+          },
+          "status": {
+            "type": "string",
+            "description": "Statut de la reponse: 'answered' si succes, 'error' si echec.",
+            "example": "answered"
+          },
+          "totalCompared": {
+            "type": "integer",
+            "description": "Nombre total d'exigences comparees entre les matrices."
+          },
+          "totalChanges": {
+            "type": "integer",
+            "description": "Nombre d'exigences ayant change de statut entre les matrices (ex: NOK vers OK)."
+          },
+          "totalMissing": {
+            "type": "integer",
+            "description": "Nombre d'exigences presentes dans certaines matrices mais absentes d'autres."
+          },
+          "chartBase64": {
+            "type": "string",
+            "description": "Graphique a barres comparatif des statuts entre matrices au format base64. A afficher a l'utilisateur."
+          },
+          "reportText": {
+            "type": "string",
+            "description": "Rapport texte detaille de la comparaison. Contient le detail des changements de statut et des exigences manquantes par matrice."
+          }
+        }
+      },
+      "PowerBIResponse": {
+        "type": "object",
+        "properties": {
+          "answer": {
+            "type": "string",
+            "description": "Message de confirmation en francais. Exemple: 'Dataset Power BI genere pour DM12F_Conformity.ods.'"
+          },
+          "status": {
+            "type": "string",
+            "description": "Statut de la reponse: 'answered' si succes, 'error' si echec.",
+            "example": "answered"
+          },
+          "powerbi": {
+            "type": "object",
+            "description": "Dataset Power BI complet avec 3 tables (StatusSummary, Items, Inconsistencies) et 7 graphiques suggérés. Objet JSON complexe a transmettre tel quel a Power BI."
+          }
+        }
+      },
+      "HealthResponse": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "description": "Statut de l'API: 'healthy' si tout fonctionne.",
+            "example": "healthy"
+          },
+          "version": {
+            "type": "string",
+            "description": "Version de l'API deployee.",
+            "example": "2.0.0-enterprise"
+          }
+        }
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "answer": {
+            "type": "string",
+            "description": "Message d'erreur en francais destine a l'utilisateur. Explique la cause de l'erreur."
+          },
+          "status": {
+            "type": "string",
+            "description": "Toujours 'error' en cas d'erreur.",
+            "example": "error"
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,611 @@
+{
+  "openapi": "3.0.1",
+  "info": {
+    "title": "LEON Spec Q&A Assistant",
+    "description": "Enterprise-grade AI assistant for answering questions about Stellantis component technical specifications (CTS). Uses Azure AI Search (hybrid vector+text) and Azure OpenAI GPT-4o. Indexed against the Stellantis CTS template, writing guide, and uploaded specification documents.",
+    "version": "2.0.0",
+    "contact": {
+      "name": "LEON Support",
+      "url": "https://leon-spec-gbexcnefdmakfpdg.francecentral-01.azurewebsites.net"
+    }
+  },
+  "servers": [
+    {
+      "url": "https://leon-spec-gbexcnefdmakfpdg.francecentral-01.azurewebsites.net",
+      "description": "Production — France Central"
+    }
+  ],
+  "security": [
+    {
+      "api_key_header": []
+    },
+    {
+      "api_key_query": []
+    }
+  ],
+  "paths": {
+    "/api/ask": {
+      "post": {
+        "summary": "Ask a question about uploaded specifications",
+        "description": "Main Q&A endpoint. Asks a natural-language question and receives an AI-generated answer synthesized from specification documents. Supports validation questions, section guidance, acronym expansion, and ambiguity detection.",
+        "operationId": "AskQuestion",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AskRequest"
+              },
+              "example": {
+                "question": "Where is the ASU located in the vehicle?"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Answer returned successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AskResponse"
+                },
+                "example": {
+                  "answer": "The ASU is located under the hood, in the plenum, or at the rear left arch of the vehicle.",
+                  "status": "answered",
+                  "confidence": "HIGH",
+                  "sources": [
+                    {
+                      "fileName": "ASU_Technical_Specification.docx",
+                      "excerpt": "The ASU is located under the hood..."
+                    }
+                  ],
+                  "evidence": [
+                    "ASU_Technical_Specification.docx",
+                    "Component_or_Part_Specification_Template.docx"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request — missing question or invalid input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/validate": {
+      "post": {
+        "summary": "Validate a specification file against the CTS template",
+        "description": "Runs evidence-based validation of an uploaded specification file against the Stellantis CTS template. Returns a verdict (ACCEPTABLE / ACCEPTABLE_WITH_FIXES / NEEDS_REWRITE) with a percentage score and detailed evidence.",
+        "operationId": "ValidateSpec",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ValidateRequest"
+              },
+              "example": {
+                "fileName": "ASU_Technical_Specification.docx"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Validation report generated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidateResponse"
+                },
+                "example": {
+                  "answer": "Verdict: ACCEPTABLE_WITH_FIXES (83%)",
+                  "status": "answered",
+                  "validationReport": {
+                    "verdict": "ACCEPTABLE_WITH_FIXES",
+                    "overallScore": 0.83,
+                    "summary": "The specification covers 18 of 22 mandatory sections..."
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Specified file not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/files": {
+      "get": {
+        "summary": "List accessible specification files",
+        "description": "Returns a list of all specification files currently accessible to the validator (template, writing guide, and uploaded specs).",
+        "operationId": "ListFiles",
+        "responses": {
+          "200": {
+            "description": "File list returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FilesResponse"
+                },
+                "example": {
+                  "files": [
+                    {
+                      "fileName": "ASU_Technical_Specification.docx",
+                      "type": "uploaded",
+                      "sizeKB": 462
+                    },
+                    {
+                      "fileName": "Component_or_Part_Specification_Template.docx",
+                      "type": "reference",
+                      "sizeKB": 2481
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/upload-and-validate": {
+      "post": {
+        "summary": "Upload a specification file and validate it against the CTS template",
+        "description": "Uploads a .docx, .txt, or .pdf specification file, indexes it, and immediately validates it against the Stellantis CTS template. Returns the validation verdict, score, and detailed report. Map the file input to Topic.Var1.Content (File type).",
+        "operationId": "UploadAndValidate",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": ["file"],
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary",
+                    "description": "The specification file to upload and validate. Map this to Topic.Var1.Content."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "File uploaded and validated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "answer": {"type": "string"},
+                    "status": {"type": "string"},
+                    "verdict": {"type": "string", "enum": ["ACCEPTABLE", "ACCEPTABLE_WITH_FIXES", "NEEDS_REWRITE", "UNKNOWN", "NOT_RELIABLE"]},
+                    "overallScore": {"type": "number", "format": "float"},
+                    "summary": {"type": "string"},
+                    "fileName": {"type": "string"},
+                    "validationReport": {"type": "object"}
+                  }
+                },
+                "example": {
+                  "answer": "Verdict: ACCEPTABLE_WITH_FIXES (83%)",
+                  "status": "answered",
+                  "verdict": "ACCEPTABLE_WITH_FIXES",
+                  "overallScore": 0.83,
+                  "fileName": "ASU_Spec.docx"
+                }
+              }
+            }
+          },
+          "400": {"description": "Invalid file or no content"},
+          "413": {"description": "File too large (>25 MB)"}
+        }
+      }
+    },
+    "/api/health": {
+      "get": {
+        "summary": "Health check",
+        "description": "Returns the operational status of the function. Use this for monitoring and availability checks. No authentication required to see the host is running (returns 200), or authenticated for full status.",
+        "operationId": "HealthCheck",
+        "responses": {
+          "200": {
+            "description": "Function is operational",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                },
+                "example": {
+                  "status": "healthy",
+                  "version": "2.0.0-enterprise"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/upload": {
+      "post": {
+        "summary": "Upload a specification file for indexing",
+        "description": "Receives a .docx, .txt, or .pdf specification file and indexes it for Q&A and validation. Maximum file size: 25 MB. Send the file as a JSON object with name and contentBytes (base64-encoded content).",
+        "operationId": "UploadFile",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["fileName", "fileContent"],
+                "properties": {
+                  "fileName": {
+                    "type": "string",
+                    "description": "The name of the file (e.g., 'ASU_Spec.docx')."
+                  },
+                  "fileContent": {
+                    "type": "string",
+                    "format": "byte",
+                    "description": "The file content as base64-encoded binary data. Map this to the attachment's Content property."
+                  },
+                  "fileUrl": {
+                    "type": "string",
+                    "format": "uri",
+                    "description": "Alternative: URL to download the file from if you have a direct link."
+                  }
+                }
+              },
+              "example": {
+                "fileName": "ASU_Technical_Spec.docx",
+                "fileContent": "UEsDBBQAAAAIAJJpiV..."
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "File uploaded and indexed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadResponse"
+                },
+                "example": {
+                  "fileName": "New_Spec.docx",
+                  "chunks": 42,
+                  "message": "Uploaded and indexed 42 chunks."
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid file type or no file provided"
+          },
+          "413": {
+            "description": "File too large (>25 MB)"
+          }
+        }
+      }
+    },
+    "/api/debug-request": {
+      "post": {
+        "summary": "Debug: echo back the request to see what Copilot Studio sends",
+        "description": "Diagnostic endpoint. Send any JSON payload and it echoes back the full request details. Use this to verify what Copilot Studio is actually sending to the upload endpoint.",
+        "operationId": "DebugRequest",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Full request diagnostics",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "method": {"type": "string"},
+                    "headers": {"type": "object"},
+                    "body_json": {"type": "object"},
+                    "body_json_keys": {"type": "array", "items": {"type": "string"}},
+                    "has_fileUrl": {"type": "boolean"},
+                    "has_fileContent": {"type": "boolean"},
+                    "has_file": {"type": "boolean"},
+                    "file_field_type": {"type": "string"},
+                    "file_field_keys": {"type": "array", "items": {"type": "string"}}
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "api_key_header": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "x-functions-key",
+        "description": "Azure Functions key. Use this in Copilot Studio — it handles header-based auth more reliably. Get the key from Portal → Function App → Functions → Function Keys."
+      },
+      "api_key_query": {
+        "type": "apiKey",
+        "in": "query",
+        "name": "code",
+        "description": "Alternative: pass as ?code=KEY query parameter."
+      }
+    },
+    "schemas": {
+      "AskRequest": {
+        "type": "object",
+        "required": [
+          "question"
+        ],
+        "properties": {
+          "question": {
+            "type": "string",
+            "description": "A natural-language question about the specification files.",
+            "minLength": 1,
+            "maxLength": 2000,
+            "example": "What is the heartbeat signal for the ASU?"
+          }
+        }
+      },
+      "AskResponse": {
+        "type": "object",
+        "properties": {
+          "answer": {
+            "type": "string",
+            "description": "The AI-generated answer synthesized from specification documents."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "answered",
+              "clarify",
+              "not_found",
+              "refusal",
+              "partial"
+            ],
+            "description": "Status of the answer: answered (success), clarify (question too vague), not_found (no relevant content), refusal (out-of-scope question), partial (LLM unavailable, raw excerpts returned)."
+          },
+          "confidence": {
+            "type": "string",
+            "enum": [
+              "HIGH",
+              "MEDIUM",
+              "LOW",
+              ""
+            ],
+            "description": "Confidence level of the answer."
+          },
+          "fileName": {
+            "type": "string",
+            "description": "Primary source file name (first source)."
+          },
+          "excerpt": {
+            "type": "string",
+            "description": "Primary source excerpt (first source)."
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            },
+            "description": "Source documents and excerpts used to generate the answer."
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Filenames of source documents used."
+          }
+        }
+      },
+      "ValidateRequest": {
+        "type": "object",
+        "required": [
+          "fileName"
+        ],
+        "properties": {
+          "fileName": {
+            "type": "string",
+            "description": "The name of the specification file to validate (must have been previously uploaded or be a reference file).",
+            "example": "ASU_Technical_Specification.docx"
+          }
+        }
+      },
+      "ValidateResponse": {
+        "type": "object",
+        "properties": {
+          "answer": {
+            "type": "string",
+            "description": "Human-readable validation summary with verdict and score."
+          },
+          "status": {
+            "type": "string",
+            "description": "Always 'answered' for successful validations."
+          },
+          "verdict": {
+            "type": "string",
+            "enum": [
+              "ACCEPTABLE",
+              "ACCEPTABLE_WITH_FIXES",
+              "NEEDS_REWRITE",
+              "UNKNOWN"
+            ],
+            "description": "Validation verdict."
+          },
+          "overallScore": {
+            "type": "number",
+            "format": "float",
+            "description": "Score from 0.0 to 1.0"
+          },
+          "summary": {
+            "type": "string",
+            "description": "Evidence-backed validation summary."
+          },
+          "validationReport": {
+            "type": "object",
+            "description": "Full evidence-backed validation report object containing verdict, overallScore, summary, scores, findings, detailed analysis, sectionsFound, sectionsMissing, rulesUsed, and textLength."
+          }
+        }
+      },
+      "FilesResponse": {
+        "type": "object",
+        "properties": {
+          "count": {
+            "type": "integer",
+            "description": "Total number of accessible files."
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "fileName": {
+                  "type": "string",
+                  "description": "File name."
+                },
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "reference",
+                    "uploaded"
+                  ],
+                  "description": "File type: reference (template/guide) or uploaded (user spec)."
+                },
+                "sizeKB": {
+                  "type": "number",
+                  "description": "File size in kilobytes."
+                }
+              }
+            }
+          }
+        }
+      },
+      "HealthResponse": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "example": "healthy"
+          },
+          "version": {
+            "type": "string",
+            "example": "2.0.0-enterprise"
+          }
+        }
+      },
+      "UploadResponse": {
+        "type": "object",
+        "properties": {
+          "fileName": {
+            "type": "string",
+            "description": "Name of the uploaded file."
+          },
+          "chunks": {
+            "type": "integer",
+            "description": "Number of text chunks indexed."
+          },
+          "message": {
+            "type": "string",
+            "description": "Human-readable upload confirmation."
+          },
+          "status": {
+            "type": "string",
+            "description": "Always 'answered' for successful uploads."
+          },
+          "answer": {
+            "type": "string",
+            "description": "Same as message — human-readable upload confirmation."
+          },
+          "blobUploaded": {
+            "type": "boolean",
+            "description": "True if file was persisted to Azure Blob Storage."
+          },
+          "searchIndexed": {
+            "type": "integer",
+            "description": "Number of chunks indexed in Azure AI Search."
+          }
+        }
+      },
+      "UploadAndValidateRequest": {
+        "type": "object",
+        "required": [
+          "fileName",
+          "fileContent"
+        ],
+        "properties": {
+          "fileName": {
+            "type": "string",
+            "description": "The name of the file including extension (e.g., 'ASU_Spec.docx'). In Copilot Studio, map this to Topic.Var1.Name."
+          },
+          "fileContent": {
+            "type": "string",
+            "description": "The file content as a data URI string (e.g., 'data:application/vnd.openxmlformats-officedocument.wordprocessingml.document;base64,...') or plain base64 string. In Copilot Studio, map this to Topic.Var1.Content."
+          }
+        }
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "answer": {
+            "type": "string",
+            "description": "Error message."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "error",
+              "not_found"
+            ]
+          },
+          "confidence": {
+            "type": "string",
+            "description": "Confidence level (empty for errors)."
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            },
+            "description": "Source documents (empty for errors)."
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Evidence file names (empty for errors)."
+          }
+        }
+      }
+    }
+  }
+}
