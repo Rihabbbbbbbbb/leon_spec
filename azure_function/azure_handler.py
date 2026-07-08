@@ -878,3 +878,377 @@ def _index_file_to_search(file_path) -> int:
 
     logging.info(f"Search indexing complete: {indexed}/{len(documents)} chunks indexed (errors={errors})")
     return indexed
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Conformity Matrix Analysis Handler
+# ═══════════════════════════════════════════════════════════════════
+def handle_conformity(file_name: str, file_bytes: Optional[bytes]) -> func.HttpResponse:
+    """
+    Analyze a conformity matrix spreadsheet (ODS or XLSX).
+
+    If file_bytes is provided, saves the file first.
+    If file_bytes is None, looks for the file in uploads directory.
+
+    Returns JSON with:
+    - analysis: full conformity analysis (items, stats, inconsistencies, chart)
+    - reportPdf: base64-encoded PDF report with embedded pie chart
+    - answer: human-readable summary for Copilot Studio
+    """
+    import os
+    import base64
+
+    logging.info(f"handle_conformity: file_name={file_name}, has_bytes={file_bytes is not None}")
+
+    # Determine file path
+    if file_bytes:
+        # Save the file
+        from app.config import UPLOADS_DIR
+        UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+        safe_name = os.path.basename(file_name)
+        file_path = UPLOADS_DIR / safe_name
+        file_path.write_bytes(file_bytes)
+        logging.info(f"Saved conformity matrix to {file_path}")
+    else:
+        # Look for the file in uploads
+        from app.config import UPLOADS_DIR
+        file_path = UPLOADS_DIR / os.path.basename(file_name)
+        if not file_path.exists():
+            return func.HttpResponse(
+                body=json.dumps({
+                    "answer": f"File '{file_name}' not found. Please upload the conformity matrix first.",
+                    "status": "error",
+                    "confidence": "",
+                    "sources": [],
+                    "evidence": [],
+                }, ensure_ascii=False),
+                status_code=404,
+                mimetype="application/json",
+                headers={"Content-Type": "application/json; charset=utf-8"},
+            )
+
+    # Check file extension
+    ext = file_path.suffix.lower()
+    if ext not in (".ods", ".xlsx", ".xlsm", ".xls"):
+        return func.HttpResponse(
+            body=json.dumps({
+                "answer": f"Unsupported file type '{ext}'. Please upload an ODS or XLSX file.",
+                "status": "error",
+                "confidence": "",
+                "sources": [],
+                "evidence": [],
+            }, ensure_ascii=False),
+            status_code=422,
+            mimetype="application/json",
+            headers={"Content-Type": "application/json; charset=utf-8"},
+        )
+
+    try:
+        from app.qa.conformity_analyzer import analyze_conformity_matrix, analysis_to_dict
+        from app.qa.conformity_report import generate_conformity_pdf
+    except ImportError as exc:
+        logging.error(f"Import conformity modules failed: {exc}")
+        return func.HttpResponse(
+            body=json.dumps({
+                "answer": f"LEON import error: {str(exc)[:300]}",
+                "status": "error",
+                "confidence": "",
+                "sources": [],
+                "evidence": [],
+            }, ensure_ascii=False),
+            status_code=500,
+            mimetype="application/json",
+            headers={"Content-Type": "application/json; charset=utf-8"},
+        )
+
+    try:
+        analysis = analyze_conformity_matrix(str(file_path), file_name)
+        analysis_dict = analysis_to_dict(analysis)
+
+        # Generate PDF report
+        pdf_bytes = generate_conformity_pdf(analysis_dict)
+        pdf_b64 = base64.b64encode(pdf_bytes).decode("utf-8")
+
+        # Build human-readable answer for Copilot Studio
+        summary = analysis_dict.get("summary", {})
+        ok = summary.get("ok", 0)
+        nok = summary.get("nok", 0)
+        na = summary.get("na", 0)
+        total = summary.get("total", 0)
+        inc_count = summary.get("inconsistencies", 0)
+
+        answer_parts = [
+            f"Analyse de la matrice de conformite FNR terminee.",
+            f"\nFeuille: {analysis.sheet_name}",
+            f"\nResume des statuts:",
+            f"  - OK (conforme): {ok}",
+            f"  - NOK (non conforme): {nok}",
+            f"  - NA (non applicable): {na}",
+            f"  - Total: {total} exigences",
+        ]
+
+        if inc_count > 0:
+            answer_parts.append(f"\n  - Incoherences detectees par l'IA: {inc_count}")
+            answer_parts.append("\nLe rapport PDF detaille contient:")
+            answer_parts.append("  - La liste complete des exigences OK et NOK avec commentaires exacts")
+            answer_parts.append("  - Le diagramme camembert de repartition")
+            answer_parts.append("  - L'analyse IA des incoherences entre statut et commentaire")
+        else:
+            answer_parts.append("\nAucune incoherence detectee entre les statuts et les commentaires.")
+
+        answer = "\n".join(answer_parts)
+
+        body = {
+            "answer": answer,
+            "status": "answered",
+            "confidence": "HIGH",
+            "sources": [],
+            "evidence": [],
+            "fileName": file_name,
+            "analysis": analysis_dict,
+            "reportPdf": pdf_b64,
+        }
+
+        return func.HttpResponse(
+            body=json.dumps(body, ensure_ascii=False, default=str),
+            status_code=200,
+            mimetype="application/json",
+            headers={"Content-Type": "application/json; charset=utf-8"},
+        )
+
+    except Exception as exc:
+        import traceback
+        tb = traceback.format_exc()
+        logging.error(f"Conformity analysis failed: {exc}\n{tb}")
+        return func.HttpResponse(
+            body=json.dumps({
+                "answer": f"Erreur lors de l'analyse: {str(exc)[:500]}",
+                "status": "error",
+                "confidence": "",
+                "sources": [],
+                "evidence": [],
+            }, ensure_ascii=False),
+            status_code=500,
+            mimetype="application/json",
+            headers={"Content-Type": "application/json; charset=utf-8"},
+        )
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Conformity Excel Report Handler
+# ═══════════════════════════════════════════════════════════════════
+def handle_conformity_excel(file_name: str, file_bytes: bytes) -> func.HttpResponse:
+    """
+    Generate a color-coded Excel report from a conformity matrix.
+    Returns JSON with reportExcel (base64 XLSX).
+    """
+    import os
+    import base64
+
+    logging.info(f"handle_conformity_excel: file_name={file_name}")
+
+    from app.config import UPLOADS_DIR
+    UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+    safe_name = os.path.basename(file_name)
+    file_path = UPLOADS_DIR / safe_name
+    file_path.write_bytes(file_bytes)
+
+    ext = file_path.suffix.lower()
+    if ext not in (".ods", ".xlsx", ".xlsm", ".xls"):
+        return func.HttpResponse(
+            body=json.dumps({
+                "answer": f"Unsupported file type '{ext}'. Please upload an ODS or XLSX file.",
+                "status": "error",
+            }, ensure_ascii=False),
+            status_code=422,
+            mimetype="application/json",
+            headers={"Content-Type": "application/json; charset=utf-8"},
+        )
+
+    try:
+        from app.qa.conformity_analyzer import analyze_conformity_matrix, analysis_to_dict
+        from app.qa.conformity_report import generate_conformity_excel
+
+        analysis = analyze_conformity_matrix(str(file_path), file_name)
+        analysis_dict = analysis_to_dict(analysis)
+
+        xlsx_bytes = generate_conformity_excel(analysis_dict)
+        xlsx_b64 = base64.b64encode(xlsx_bytes).decode("utf-8")
+
+        summary = analysis_dict.get("summary", {})
+        answer = (
+            f"Rapport Excel genere avec succes.\n"
+            f"Total: {summary.get('total', 0)} exigences | "
+            f"OK: {summary.get('ok', 0)} | NOK: {summary.get('nok', 0)} | "
+            f"NA: {summary.get('na', 0)}\n"
+            f"Incoherences: {summary.get('inconsistencies', 0)}\n"
+            f"Le fichier Excel contient des lignes codees par couleur (vert=OK, rouge=NOK)."
+        )
+
+        body = {
+            "answer": answer,
+            "status": "answered",
+            "confidence": "HIGH",
+            "fileName": file_name,
+            "analysis": analysis_dict,
+            "reportExcel": xlsx_b64,
+        }
+
+        return func.HttpResponse(
+            body=json.dumps(body, ensure_ascii=False, default=str),
+            status_code=200,
+            mimetype="application/json",
+            headers={"Content-Type": "application/json; charset=utf-8"},
+        )
+
+    except Exception as exc:
+        import traceback
+        logging.error(f"Excel report failed: {exc}\n{traceback.format_exc()}")
+        return func.HttpResponse(
+            body=json.dumps({
+                "answer": f"Erreur: {str(exc)[:500]}",
+                "status": "error",
+            }, ensure_ascii=False),
+            status_code=500,
+            mimetype="application/json",
+            headers={"Content-Type": "application/json; charset=utf-8"},
+        )
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Multi-Matrix Comparison Handler
+# ═══════════════════════════════════════════════════════════════════
+def handle_conformity_compare(file_names: list) -> func.HttpResponse:
+    """
+    Compare two or more conformity matrices.
+    Returns JSON with comparison data, status changes, and chart.
+    """
+    import os
+
+    logging.info(f"handle_conformity_compare: {len(file_names)} files")
+
+    from app.config import UPLOADS_DIR
+
+    file_paths = []
+    for fn in file_names:
+        fp = UPLOADS_DIR / os.path.basename(fn)
+        if not fp.exists():
+            return func.HttpResponse(
+                body=json.dumps({
+                    "answer": f"File '{fn}' not found. Please upload all matrices first.",
+                    "status": "error",
+                }, ensure_ascii=False),
+                status_code=404,
+                mimetype="application/json",
+                headers={"Content-Type": "application/json; charset=utf-8"},
+            )
+        file_paths.append(str(fp))
+
+    try:
+        from app.qa.conformity_analyzer import compare_matrices, comparison_to_dict
+
+        comparison = compare_matrices(file_paths, file_names)
+        comp_dict = comparison_to_dict(comparison)
+
+        answer = (
+            f"Comparaison de {len(file_names)} matrices terminee.\n"
+            f"Exigences comparees: {comparison.total_compared}\n"
+            f"Changements de statut: {comparison.total_changes}\n"
+            f"Exigences manquantes: {comparison.total_missing}"
+        )
+
+        body = {
+            "answer": answer,
+            "status": "answered",
+            "confidence": "HIGH",
+            "comparison": comp_dict,
+        }
+
+        return func.HttpResponse(
+            body=json.dumps(body, ensure_ascii=False, default=str),
+            status_code=200,
+            mimetype="application/json",
+            headers={"Content-Type": "application/json; charset=utf-8"},
+        )
+
+    except Exception as exc:
+        import traceback
+        logging.error(f"Comparison failed: {exc}\n{traceback.format_exc()}")
+        return func.HttpResponse(
+            body=json.dumps({
+                "answer": f"Erreur: {str(exc)[:500]}",
+                "status": "error",
+            }, ensure_ascii=False),
+            status_code=500,
+            mimetype="application/json",
+            headers={"Content-Type": "application/json; charset=utf-8"},
+        )
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Power BI Dataset Handler
+# ═══════════════════════════════════════════════════════════════════
+def handle_conformity_powerbi(file_name: str, file_bytes: Optional[bytes] = None) -> func.HttpResponse:
+    """
+    Generate a Power BI-compatible dataset JSON from a conformity matrix.
+    If file_bytes is provided, saves the file first.
+    """
+    import os
+
+    logging.info(f"handle_conformity_powerbi: {file_name}, has_bytes={file_bytes is not None}")
+
+    from app.config import UPLOADS_DIR
+    UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+    safe_name = os.path.basename(file_name)
+    file_path = UPLOADS_DIR / safe_name
+
+    # Save file if content provided
+    if file_bytes:
+        file_path.write_bytes(file_bytes)
+        logging.info(f"Saved conformity matrix to {file_path}")
+
+    if not file_path.exists():
+        return func.HttpResponse(
+            body=json.dumps({
+                "answer": f"File '{file_name}' not found. Please upload the matrix first.",
+                "status": "error",
+            }, ensure_ascii=False),
+            status_code=404,
+            mimetype="application/json",
+            headers={"Content-Type": "application/json; charset=utf-8"},
+        )
+
+    try:
+        from app.qa.conformity_analyzer import analyze_conformity_matrix, analysis_to_dict
+        from app.qa.conformity_report import generate_powerbi_dataset
+
+        analysis = analyze_conformity_matrix(str(file_path), file_name)
+        analysis_dict = analysis_to_dict(analysis)
+        powerbi_data = generate_powerbi_dataset(analysis_dict)
+
+        body = {
+            "answer": f"Dataset Power BI genere pour {file_name}.",
+            "status": "answered",
+            "confidence": "HIGH",
+            "powerbi": powerbi_data,
+        }
+
+        return func.HttpResponse(
+            body=json.dumps(body, ensure_ascii=False, default=str),
+            status_code=200,
+            mimetype="application/json",
+            headers={"Content-Type": "application/json; charset=utf-8"},
+        )
+
+    except Exception as exc:
+        import traceback
+        logging.error(f"Power BI dataset failed: {exc}\n{traceback.format_exc()}")
+        return func.HttpResponse(
+            body=json.dumps({
+                "answer": f"Erreur: {str(exc)[:500]}",
+                "status": "error",
+            }, ensure_ascii=False),
+            status_code=500,
+            mimetype="application/json",
+            headers={"Content-Type": "application/json; charset=utf-8"},
+        )

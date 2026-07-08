@@ -419,46 +419,6 @@ def ask(req: AskRequest) -> AskResponse:
             validationReport=val_dict,
         )
 
-    # 1c. Section-guidance detection — user asks about what to put in a CTS section
-    from app.qa.section_guidance import is_section_guidance_question, get_section_guidance
-    if is_section_guidance_question(question):
-        guidance = get_section_guidance(question)
-        if guidance:
-            # Try the LLM to synthesize a helpful answer from the guidance
-            guidance_prompt = (
-                "You are a CTS specification writing assistant for Stellantis. "
-                "A user is writing a Component Technical Specification and needs guidance "
-                "on a specific section. Below is the EXACT guidance extracted from the "
-                "Stellantis CTS template and writing guide. Synthesize a clear, structured, "
-                "helpful answer that tells the user exactly what to put in this section.\n\n"
-                "IMPORTANT RULES:\n"
-                "- Only use the guidance provided below. Do NOT invent anything.\n"
-                "- Structure your answer with: 1) Section purpose, 2) What to include, "
-                "3) Key rules to follow, 4) Common mistakes to avoid.\n"
-                "- Be concise and actionable. The user is actively writing their spec.\n"
-                "- If template instructions mention placeholders (<<...>>), explain what "
-                "real content should replace them.\n"
-                "- Answer in the same language as the guidance (English or French).\n\n"
-                "GUIDANCE:\n" + guidance.get("answer", "")
-            )
-            llm_answer = _call_llm_safe(
-                "You are a Stellantis engineering specification expert helping an engineer write a CTS.",
-                guidance_prompt,
-            )
-
-            if llm_answer and llm_answer.strip():
-                final_answer = llm_answer.strip()
-            else:
-                final_answer = guidance.get("answer", "")
-
-            return AskResponse(
-                answer=final_answer,
-                sources=[],
-                confidence="HIGH",
-                status="answered",
-                evidence=[guidance.get("detected_section", "")],
-            )
-
     # 2. Real retrieval from accessible spec files (default path)
     chunks = _get_index()
     if not chunks:
@@ -493,8 +453,49 @@ def ask(req: AskRequest) -> AskResponse:
         else:
             result = retrieve(question, chunks=chunks, use_semantic=False)
 
-    # 3. No support found → fixed message, no confidence
+    # 3. No support found → try section guidance as fallback, then not found
     if not result.chunks:
+        # 3a. Section-guidance fallback — only if no document chunks were found
+        # AND the question is about how to write a CTS section.
+        # This runs AFTER retrieval so factual questions (e.g. "What is the
+        # maximum noise target?") are answered from the document first.
+        from app.qa.section_guidance import is_section_guidance_question, get_section_guidance
+        if is_section_guidance_question(question):
+            guidance = get_section_guidance(question)
+            if guidance:
+                guidance_prompt = (
+                    "You are a CTS specification writing assistant for Stellantis. "
+                    "A user is writing a Component Technical Specification and needs guidance "
+                    "on a specific section. Below is the EXACT guidance extracted from the "
+                    "Stellantis CTS template and writing guide. Synthesize a clear, structured, "
+                    "helpful answer that tells the user exactly what to put in this section.\n\n"
+                    "IMPORTANT RULES:\n"
+                    "- Only use the guidance provided below. Do NOT invent anything.\n"
+                    "- Structure your answer with: 1) Section purpose, 2) What to include, "
+                    "3) Key rules to follow, 4) Common mistakes to avoid.\n"
+                    "- Be concise and actionable. The user is actively writing their spec.\n"
+                    "- If template instructions mention placeholders (<<...>>), explain what "
+                    "real content should replace them.\n"
+                    "- Answer in the same language as the guidance (English or French).\n\n"
+                    "GUIDANCE:\n" + guidance.get("answer", "")
+                )
+                llm_answer = _call_llm_safe(
+                    "You are a Stellantis engineering specification expert helping an engineer write a CTS.",
+                    guidance_prompt,
+                )
+                if llm_answer and llm_answer.strip():
+                    final_answer = llm_answer.strip()
+                else:
+                    final_answer = guidance.get("answer", "")
+                return AskResponse(
+                    answer=final_answer,
+                    sources=[],
+                    confidence="HIGH",
+                    status="answered",
+                    evidence=[guidance.get("detected_section", "")],
+                )
+
+        # 3b. No support and no guidance → fixed not found message
         rec = QaRecord(question=question, answer=NOT_FOUND_MESSAGE, confidence="",
                        source_count=0, was_not_found=True, was_refusal=False,
                        had_sources=False)
@@ -695,3 +696,345 @@ def reset_metrics() -> dict:
     """Clear the metrics store (useful for fresh evaluation runs)."""
     metrics_store.clear()
     return {"message": "Metrics store cleared."}
+
+
+# ── Conformity Matrix Analysis ─────────────────────────────────────
+class ConformityRequest(BaseModel):
+    fileName: str = Field(..., min_length=1)
+
+
+@router.post("/upload-conformity")
+async def upload_conformity_file(file: UploadFile = File(...)) -> dict:
+    """
+    Upload a conformity matrix file (ODS/XLSX) to data/uploads/.
+    The file can then be referenced by name in /api/conformity,
+    /api/conformity-powerbi, and /api/conformity-compare.
+    """
+    from pathlib import Path as _Path
+
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No file name provided")
+
+    suffix = _Path(file.filename).suffix.lower()
+    if suffix not in (".ods", ".xlsx", ".xlsm", ".xls"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file type '{suffix}'. Accepted: .ods, .xlsx, .xlsm",
+        )
+
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Empty file")
+
+    upload_dir = _Path("data/uploads")
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    saved_path = upload_dir / file.filename
+    saved_path.write_bytes(content)
+
+    return {
+        "fileName": file.filename,
+        "size": len(content),
+        "message": f"File '{file.filename}' uploaded. Use /api/conformity with fileName to analyze.",
+    }
+
+
+@router.get("/conformity-files")
+def list_conformity_files() -> dict:
+    """List all uploaded conformity matrix files available for analysis."""
+    from pathlib import Path as _Path
+
+    upload_dir = _Path("data/uploads")
+    files = []
+    if upload_dir.exists():
+        for f in upload_dir.iterdir():
+            if f.suffix.lower() in (".ods", ".xlsx", ".xlsm", ".xls") and f.is_file():
+                files.append({"name": f.name, "size": f.stat().st_size})
+    return {"files": files}
+
+
+@router.post("/conformity")
+def analyze_conformity(req: ConformityRequest) -> dict:
+    """
+    Analyze a conformity matrix spreadsheet (ODS or XLSX).
+
+    Auto-detects the sheet, header row, and 'Conformite FNR' / 'Commentaires FNR'
+    columns (even if names change). Returns:
+    - List of OK / NOK / NA items with exact comments
+    - AI-detected inconsistencies between status and comment
+    - Pie chart (base64 PNG)
+    - Summary statistics
+    """
+    from pathlib import Path as _Path
+    from app.qa.conformity_analyzer import analyze_conformity_matrix, analysis_to_dict
+
+    # Find the file in uploads or data directories
+    file_name = req.fileName
+    search_dirs = [
+        _Path("data/uploads"),
+        _Path("data"),
+        _Path("."),
+    ]
+
+    file_path = None
+    for d in search_dirs:
+        candidate = d / file_name
+        if candidate.exists():
+            file_path = candidate
+            break
+
+    if file_path is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"File '{file_name}' not found. Upload it first via /api/upload-conformity.",
+        )
+
+    try:
+        analysis = analyze_conformity_matrix(str(file_path), file_name)
+        return analysis_to_dict(analysis)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Analysis failed: {str(exc)}")
+
+
+@router.post("/conformity-report")
+async def conformity_report(file: UploadFile = File(...)) -> dict:
+    """
+    Upload a conformity matrix (ODS/XLSX) and get the full analysis + PDF report.
+
+    Returns JSON with:
+    - analysis: full conformity analysis (items, stats, inconsistencies, chart)
+    - reportPdf: base64-encoded PDF report with embedded pie chart
+    """
+    from pathlib import Path as _Path
+    from app.qa.conformity_analyzer import analyze_conformity_matrix, analysis_to_dict
+    from app.qa.conformity_report import generate_conformity_pdf
+
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No file name provided")
+
+    suffix = _Path(file.filename).suffix.lower()
+    if suffix not in (".ods", ".xlsx", ".xlsm", ".xls"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file type '{suffix}'. Accepted: .ods, .xlsx, .xlsm",
+        )
+
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Empty file")
+
+    # Save to temp location
+    upload_dir = _Path("data/uploads")
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    saved_path = upload_dir / file.filename
+    saved_path.write_bytes(content)
+
+    try:
+        analysis = analyze_conformity_matrix(str(saved_path), file.filename)
+        analysis_dict = analysis_to_dict(analysis)
+
+        # Generate PDF report
+        pdf_bytes = generate_conformity_pdf(analysis_dict)
+        import base64 as _b64
+        pdf_b64 = _b64.b64encode(pdf_bytes).decode("utf-8")
+
+        return {
+            "analysis": analysis_dict,
+            "reportPdf": pdf_b64,
+            "fileName": file.filename,
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Analysis failed: {str(exc)}")
+
+
+# ── Conformity Excel Report (color-coded) ──────────────────────────
+@router.post("/conformity-excel")
+async def conformity_excel(file: UploadFile = File(...)) -> dict:
+    """
+    Upload a conformity matrix (ODS/XLSX) and get a color-coded Excel report.
+
+    Returns JSON with:
+    - analysis: full conformity analysis
+    - reportExcel: base64-encoded XLSX report with color-coded rows
+    """
+    from pathlib import Path as _Path
+    from app.qa.conformity_analyzer import analyze_conformity_matrix, analysis_to_dict
+    from app.qa.conformity_report import generate_conformity_excel
+
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No file name provided")
+
+    suffix = _Path(file.filename).suffix.lower()
+    if suffix not in (".ods", ".xlsx", ".xlsm", ".xls"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file type '{suffix}'. Accepted: .ods, .xlsx, .xlsm",
+        )
+
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Empty file")
+
+    upload_dir = _Path("data/uploads")
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    saved_path = upload_dir / file.filename
+    saved_path.write_bytes(content)
+
+    try:
+        analysis = analyze_conformity_matrix(str(saved_path), file.filename)
+        analysis_dict = analysis_to_dict(analysis)
+
+        # Generate Excel report
+        xlsx_bytes = generate_conformity_excel(analysis_dict)
+        import base64 as _b64
+        xlsx_b64 = _b64.b64encode(xlsx_bytes).decode("utf-8")
+
+        return {
+            "analysis": analysis_dict,
+            "reportExcel": xlsx_b64,
+            "fileName": file.filename,
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Analysis failed: {str(exc)}")
+
+
+# ── Conformity PDF/Excel by filename (no re-upload needed) ─────────
+@router.post("/conformity-report-byname")
+def conformity_report_byname(req: ConformityRequest) -> dict:
+    """Generate PDF report from an already-uploaded file (by name)."""
+    from pathlib import Path as _Path
+    from app.qa.conformity_analyzer import analyze_conformity_matrix, analysis_to_dict
+    from app.qa.conformity_report import generate_conformity_pdf
+
+    file_name = req.fileName
+    search_dirs = [_Path("data/uploads"), _Path("data"), _Path(".")]
+    file_path = None
+    for d in search_dirs:
+        candidate = d / file_name
+        if candidate.exists():
+            file_path = candidate
+            break
+    if file_path is None:
+        raise HTTPException(status_code=404, detail=f"File '{file_name}' not found.")
+
+    try:
+        analysis = analyze_conformity_matrix(str(file_path), file_name)
+        analysis_dict = analysis_to_dict(analysis)
+        pdf_bytes = generate_conformity_pdf(analysis_dict)
+        import base64 as _b64
+        pdf_b64 = _b64.b64encode(pdf_bytes).decode("utf-8")
+        return {"reportPdf": pdf_b64, "fileName": file_name}
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Report generation failed: {str(exc)}")
+
+
+@router.post("/conformity-excel-byname")
+def conformity_excel_byname(req: ConformityRequest) -> dict:
+    """Generate Excel report from an already-uploaded file (by name)."""
+    from pathlib import Path as _Path
+    from app.qa.conformity_analyzer import analyze_conformity_matrix, analysis_to_dict
+    from app.qa.conformity_report import generate_conformity_excel
+
+    file_name = req.fileName
+    search_dirs = [_Path("data/uploads"), _Path("data"), _Path(".")]
+    file_path = None
+    for d in search_dirs:
+        candidate = d / file_name
+        if candidate.exists():
+            file_path = candidate
+            break
+    if file_path is None:
+        raise HTTPException(status_code=404, detail=f"File '{file_name}' not found.")
+
+    try:
+        analysis = analyze_conformity_matrix(str(file_path), file_name)
+        analysis_dict = analysis_to_dict(analysis)
+        xlsx_bytes = generate_conformity_excel(analysis_dict)
+        import base64 as _b64
+        xlsx_b64 = _b64.b64encode(xlsx_bytes).decode("utf-8")
+        return {"reportExcel": xlsx_b64, "fileName": file_name}
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Excel generation failed: {str(exc)}")
+
+
+# ── Conformity Power BI Dataset ────────────────────────────────────
+class PowerBIRequest(BaseModel):
+    fileName: str = Field(..., min_length=1)
+
+
+@router.post("/conformity-powerbi")
+def conformity_powerbi(req: PowerBIRequest) -> dict:
+    """
+    Generate a Power BI-compatible dataset JSON from a conformity matrix.
+
+    Returns JSON with:
+    - dataset: Power BI dataset definition (tables, columns)
+    - data: rows for each table (StatusSummary, Items, Inconsistencies)
+    - dashboardConfig: suggested Power BI visual configuration
+    """
+    from pathlib import Path as _Path
+    from app.qa.conformity_analyzer import analyze_conformity_matrix, analysis_to_dict
+    from app.qa.conformity_report import generate_powerbi_dataset
+
+    file_name = req.fileName
+    search_dirs = [_Path("data/uploads"), _Path("data"), _Path(".")]
+    file_path = None
+    for d in search_dirs:
+        candidate = d / file_name
+        if candidate.exists():
+            file_path = candidate
+            break
+
+    if file_path is None:
+        raise HTTPException(status_code=404, detail=f"File '{file_name}' not found.")
+
+    try:
+        analysis = analyze_conformity_matrix(str(file_path), file_name)
+        analysis_dict = analysis_to_dict(analysis)
+        powerbi_data = generate_powerbi_dataset(analysis_dict)
+        return powerbi_data
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Analysis failed: {str(exc)}")
+
+
+# ── Multi-Matrix Comparison ────────────────────────────────────────
+class CompareRequest(BaseModel):
+    fileNames: List[str] = Field(..., min_length=2)
+
+
+@router.post("/conformity-compare")
+def conformity_compare(req: CompareRequest) -> dict:
+    """
+    Compare two or more conformity matrices side by side.
+
+    Returns JSON with:
+    - matrices: per-matrix summaries
+    - requirementComparison: per-requirement status across all matrices
+    - statusChanges: requirements that changed status between matrices
+    - missingIn: requirements present in one matrix but not another
+    - chartBase64: grouped bar chart comparing status distribution
+    - reportText: human-readable comparison report
+    """
+    from pathlib import Path as _Path
+    from app.qa.conformity_analyzer import compare_matrices, comparison_to_dict
+
+    if len(req.fileNames) < 2:
+        raise HTTPException(status_code=400, detail="At least 2 files required for comparison.")
+
+    search_dirs = [_Path("data/uploads"), _Path("data"), _Path(".")]
+    file_paths = []
+    for fn in req.fileNames:
+        found = False
+        for d in search_dirs:
+            candidate = d / fn
+            if candidate.exists():
+                file_paths.append(str(candidate))
+                found = True
+                break
+        if not found:
+            raise HTTPException(status_code=404, detail=f"File '{fn}' not found.")
+
+    try:
+        comparison = compare_matrices(file_paths, req.fileNames)
+        return comparison_to_dict(comparison)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Comparison failed: {str(exc)}")

@@ -580,7 +580,7 @@ def detect_section_from_question(question: str) -> Optional[str]:
 # ── Exclusion patterns: questions that contain section keywords but are NOT guidance ──
 _FACTUAL_EXCLUSION_RE = re.compile(
     r"\b(?:"
-    r"what\s+is\s+the\s+[\w\s]{0,30}?(?:voltage|current|power|temperature|frequency|speed|weight|size|price|cost|color|range|value|level|rate)\b"
+    r"what\s+is\s+the\s+[\w\s]{0,30}?(?:voltage|current|power|temperature|frequency|speed|weight|size|price|cost|color|range|value|level|rate|target|limit|threshold|tolerance|gap|force|torque|noise|sound|pressure|load|cycle|cycles|duration|time|distance|height|width|depth|angle|material|finish|surface)\b"
     r"|how\s+(?:much|many|long|far|fast|heavy|big|often)\b"
     r"|is\s+the\s+\w+\s+(?:located|positioned|situated|placed|found|mounted)\b"
     r"|where\s+is\b"
@@ -591,10 +591,11 @@ _FACTUAL_EXCLUSION_RE = re.compile(
     r"|how\s+does\s+(?:the|it|this|a)\s+\w+\s+(?:work|function|operate|behave|respond)\b"
     r"|what\s+happens\s+(?:when|if|during|after|before)\b"
     r"|what\s+is\s+(?:the\s+)?(?:price|cost|color|weight|size|meaning|definition)\b"
-    r"|what\s+is\s+(?:the\s+)?\w+\s+(?:signal|protocol|voltage|current|frequency|speed|power)\b"
+    r"|what\s+is\s+(?:the\s+)?\w+\s+(?:signal|protocol|voltage|current|frequency|speed|power|target|limit|threshold)\b"
     r"|how\s+(?:does|is)\s+(?:the\s+)?\w+\s+(?:signal|protocol)\s+(?:work|function|operate)\b"
     r"|what\s+(?:triggers|activates|causes|drives|controls)\s+the\b"
     r"|what\s+is\s+the\s+\w+\s+(?:used\s+for|made\s+of|composed\s+of)\b"
+    r"|what\s+is\s+(?:the\s+)?(?:maximum|minimum|nominal|typical|average)\s+\w+\s+\w+\b"
     r")",
     re.IGNORECASE,
 )

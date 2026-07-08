@@ -1,0 +1,853 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LEON — Matrice de Conformité FNR</title>
+  <style>
+    :root {
+      --bg: #0f1115;
+      --panel: #161a22;
+      --panel-2: #1c2230;
+      --border: #2a3142;
+      --text: #e6e9ef;
+      --muted: #8a93a6;
+      --accent: #3b82f6;
+      --accent-hover: #2563eb;
+      --ok: #28a745;
+      --nok: #dc3545;
+      --na: #6c757d;
+      --empty: #e9ecef;
+      --warn: #f59e0b;
+      --error: #ef4444;
+      --mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+    .app {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 0;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 24px;
+    }
+    header h1 {
+      font-size: 22px;
+      font-weight: 700;
+      color: var(--text);
+    }
+    header h1 small {
+      display: block;
+      font-size: 12px;
+      font-weight: 400;
+      color: var(--muted);
+      margin-top: 2px;
+    }
+    .health-badge {
+      font-size: 11px;
+      padding: 4px 12px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      font-family: var(--mono);
+    }
+    .health-ok { color: var(--ok); border-color: var(--ok); }
+    .health-err { color: var(--error); border-color: var(--error); }
+
+    /* Tabs */
+    .tabs {
+      display: flex;
+      gap: 4px;
+      margin-bottom: 20px;
+      border-bottom: 1px solid var(--border);
+    }
+    .tab {
+      padding: 10px 20px;
+      cursor: pointer;
+      border: none;
+      background: none;
+      color: var(--muted);
+      font-size: 14px;
+      font-weight: 500;
+      border-bottom: 2px solid transparent;
+      transition: all 0.2s;
+    }
+    .tab:hover { color: var(--text); }
+    .tab.active {
+      color: var(--accent);
+      border-bottom-color: var(--accent);
+    }
+
+    /* Panels */
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 24px;
+      margin-bottom: 20px;
+    }
+    .panel h2 {
+      font-size: 16px;
+      font-weight: 600;
+      margin-bottom: 16px;
+      color: var(--text);
+    }
+
+    /* Upload */
+    .upload-zone {
+      border: 2px dashed var(--border);
+      border-radius: 10px;
+      padding: 40px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .upload-zone:hover {
+      border-color: var(--accent);
+      background: rgba(59, 130, 246, 0.05);
+    }
+    .upload-zone.dragover {
+      border-color: var(--accent);
+      background: rgba(59, 130, 246, 0.1);
+    }
+    .upload-zone p {
+      color: var(--muted);
+      margin-top: 8px;
+      font-size: 13px;
+    }
+    .upload-icon {
+      font-size: 36px;
+      color: var(--accent);
+    }
+    #file-input { display: none; }
+
+    .file-info {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 16px;
+      background: var(--panel-2);
+      border-radius: 8px;
+      margin-top: 12px;
+    }
+    .file-info .name { font-weight: 600; }
+    .file-info .size { color: var(--muted); font-size: 12px; }
+    .file-info .remove {
+      margin-left: auto;
+      cursor: pointer;
+      color: var(--error);
+      font-size: 18px;
+      border: none;
+      background: none;
+    }
+
+    /* Buttons */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 10px 24px;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .btn-primary {
+      background: var(--accent);
+      color: white;
+    }
+    .btn-primary:hover { background: var(--accent-hover); }
+    .btn-primary:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    .btn-secondary {
+      background: var(--panel-2);
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+    .btn-secondary:hover { border-color: var(--accent); }
+    .btn-row {
+      display: flex;
+      gap: 12px;
+      margin-top: 16px;
+      flex-wrap: wrap;
+    }
+
+    /* Loading */
+    .loading {
+      display: none;
+      text-align: center;
+      padding: 30px;
+      color: var(--muted);
+    }
+    .loading.show { display: block; }
+    .spinner {
+      display: inline-block;
+      width: 32px;
+      height: 32px;
+      border: 3px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Results */
+    .results { display: none; }
+    .results.show { display: block; }
+
+    /* Stats cards */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+    .stat-card {
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px;
+      text-align: center;
+    }
+    .stat-card .value {
+      font-size: 28px;
+      font-weight: 700;
+      font-family: var(--mono);
+    }
+    .stat-card .label {
+      font-size: 11px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-top: 4px;
+    }
+    .stat-ok .value { color: var(--ok); }
+    .stat-nok .value { color: var(--nok); }
+    .stat-na .value { color: var(--na); }
+    .stat-total .value { color: var(--accent); }
+    .stat-inc .value { color: var(--error); }
+    .stat-warn .value { color: var(--warn); }
+
+    /* Chart */
+    .chart-container {
+      text-align: center;
+      margin: 20px 0;
+    }
+    .chart-container img {
+      max-width: 100%;
+      border-radius: 8px;
+      background: white;
+      padding: 8px;
+    }
+
+    /* Table */
+    .table-container {
+      overflow-x: auto;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    th {
+      background: var(--panel-2);
+      padding: 10px 12px;
+      text-align: left;
+      font-weight: 600;
+      color: var(--muted);
+      border-bottom: 1px solid var(--border);
+      white-space: nowrap;
+    }
+    td {
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--border);
+    }
+    tr:hover { background: rgba(59, 130, 246, 0.05); }
+
+    /* Status badges */
+    .badge {
+      display: inline-block;
+      padding: 2px 10px;
+      border-radius: 10px;
+      font-size: 11px;
+      font-weight: 700;
+      font-family: var(--mono);
+    }
+    .badge-OK { background: rgba(40,167,69,0.2); color: var(--ok); }
+    .badge-NOK { background: rgba(220,53,69,0.2); color: var(--nok); }
+    .badge-NA { background: rgba(108,117,125,0.2); color: var(--na); }
+    .badge-EMPTY { background: rgba(233,236,239,0.1); color: var(--muted); }
+
+    /* Inconsistency cards */
+    .inc-card {
+      background: var(--panel-2);
+      border-left: 3px solid var(--error);
+      border-radius: 6px;
+      padding: 14px;
+      margin-bottom: 10px;
+    }
+    .inc-card.warning { border-left-color: var(--warn); }
+    .inc-card .header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 6px;
+    }
+    .inc-card .type {
+      font-size: 11px;
+      color: var(--muted);
+      font-family: var(--mono);
+    }
+    .inc-card .req-id {
+      font-weight: 700;
+      font-family: var(--mono);
+    }
+    .inc-card .explanation {
+      color: var(--text);
+      font-size: 13px;
+      margin-top: 4px;
+    }
+    .inc-card .meta {
+      color: var(--muted);
+      font-size: 12px;
+      margin-top: 6px;
+    }
+
+    /* Filter */
+    .filter-bar {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 16px;
+      flex-wrap: wrap;
+    }
+    .filter-btn {
+      padding: 6px 14px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--panel-2);
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 600;
+      transition: all 0.2s;
+    }
+    .filter-btn:hover { border-color: var(--accent); }
+    .filter-btn.active {
+      background: var(--accent);
+      color: white;
+      border-color: var(--accent);
+    }
+    .search-box {
+      flex: 1;
+      min-width: 200px;
+      padding: 6px 14px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--panel-2);
+      color: var(--text);
+      font-size: 13px;
+    }
+    .search-box:focus { outline: none; border-color: var(--accent); }
+
+    /* Download links */
+    .download-links {
+      display: flex;
+      gap: 12px;
+      margin-top: 16px;
+      flex-wrap: wrap;
+    }
+    .download-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 16px;
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--accent);
+      text-decoration: none;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .download-link:hover { border-color: var(--accent); }
+
+    /* Compare */
+    .compare-files {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    .compare-files select {
+      flex: 1;
+      padding: 8px 12px;
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      font-size: 13px;
+    }
+    .compare-files select:focus { outline: none; border-color: var(--accent); }
+
+    /* Power BI */
+    .powerbi-table {
+      margin-bottom: 16px;
+    }
+    .powerbi-table h3 {
+      font-size: 14px;
+      font-weight: 600;
+      margin-bottom: 8px;
+      color: var(--accent);
+    }
+
+    /* Toast */
+    .toast {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      padding: 12px 20px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      z-index: 9999;
+      opacity: 0;
+      transform: translateY(20px);
+      transition: all 0.3s;
+    }
+    .toast.show { opacity: 1; transform: translateY(0); }
+    .toast-success { background: var(--ok); color: white; }
+    .toast-error { background: var(--error); color: white; }
+
+    .hidden { display: none !important; }
+    .muted { color: var(--muted); }
+    .mt-16 { margin-top: 16px; }
+    .mb-16 { margin-bottom: 16px; }
+  </style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <h1>LEON — Matrice de Conformité FNR
+      <small>Analyse intelligente de conformité · Détection d'incohérences IA · Rapports PDF/Excel/Power BI</small>
+    </h1>
+    <span id="health-badge" class="health-badge health-err">Vérification…</span>
+  </header>
+
+  <!-- Tabs -->
+  <div class="tabs">
+    <button class="tab active" data-tab="analyze" onclick="switchTab('analyze')">📊 Analyse</button>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════════════ -->
+  <!-- TAB: Analyze -->
+  <!-- ═══════════════════════════════════════════════════════════════ -->
+  <div id="tab-analyze">
+    <div class="panel">
+      <h2>1. Téléverser une matrice de conformité (ODS / XLSX)</h2>
+      <div class="upload-zone" id="upload-zone" onclick="document.getElementById('file-input').click()">
+        <div class="upload-icon">📁</div>
+        <p><strong>Cliquez ou glissez un fichier ici</strong></p>
+        <p>Formats acceptés: .ods, .xlsx, .xlsm</p>
+        <input type="file" id="file-input" accept=".ods,.xlsx,.xlsm" />
+      </div>
+      <div id="file-info-container"></div>
+      <div class="btn-row">
+        <button class="btn btn-primary" id="analyze-btn" disabled onclick="doAnalyze()">
+          📊 Analyser la conformité
+        </button>
+        <button class="btn btn-secondary" id="excel-btn" disabled onclick="doReport()">
+          📗 Rapport Excel
+        </button>
+      </div>
+    </div>
+
+    <div class="loading" id="loading-analyze">
+      <div class="spinner"></div>
+      <p style="margin-top:12px">Analyse en cours…</p>
+    </div>
+
+    <div class="results" id="results-analyze">
+      <!-- Stats -->
+      <div class="panel">
+        <h2>1. Statistiques de conformité</h2>
+        <div class="stats-grid" id="stats-grid"></div>
+        <div class="chart-container" id="chart-container"></div>
+        <div id="meta-info" class="muted" style="font-size:12px"></div>
+      </div>
+
+      <!-- OK Deep Analysis (AI review of OK comments) -->
+      <div class="panel" id="okdeep-panel">
+        <h2>3. Analyse approfondie des réponses OK <span id="okdeep-count" class="muted"></span></h2>
+        <div id="okdeep-list"></div>
+      </div>
+
+      <!-- Inconsistencies -->
+      <div class="panel" id="inc-panel">
+        <h2>4. Incohérences détectées <span id="inc-count" class="muted"></span></h2>
+        <div id="inc-list"></div>
+      </div>
+
+      <!-- Items table -->
+      <div class="panel">
+        <h2>5. Exigences détaillées</h2>
+        <div class="filter-bar">
+          <input type="text" class="search-box" id="search-box" placeholder="Rechercher par REQ-ID, description, commentaire…" oninput="filterTable()" />
+          <button class="filter-btn active" data-filter="ALL" onclick="setFilter('ALL')">Tous</button>
+          <button class="filter-btn" data-filter="OK" onclick="setFilter('OK')">✅ OK</button>
+          <button class="filter-btn" data-filter="NOK" onclick="setFilter('NOK')">❌ NOK</button>
+          <button class="filter-btn" data-filter="NA" onclick="setFilter('NA')">⬜ NA</button>
+          <button class="filter-btn" data-filter="EMPTY" onclick="setFilter('EMPTY')">⬜ VIDE</button>
+        </div>
+        <div class="table-container">
+          <table id="items-table">
+            <thead>
+              <tr>
+                <th>REQ-ID</th>
+                <th>Référence</th>
+                <th>Version applicable</th>
+                <th>Conformité</th>
+                <th>Statut</th>
+                <th>Commentaire</th>
+              </tr>
+            </thead>
+            <tbody id="items-tbody"></tbody>
+          </table>
+        </div>
+        <div class="muted mt-16" id="items-count"></div>
+      </div>
+    </div>
+  </div>
+
+
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const API = ''; // same origin
+let currentFile = null;
+let uploadedFiles = []; // {name, size}
+let analysisData = null;
+let allItems = [];
+let currentFilter = 'ALL';
+
+// ── Health check ──────────────────────────────────────────────
+async function checkHealth() {
+  try {
+    const res = await fetch(API + '/health');
+    if (res.ok) {
+      const badge = document.getElementById('health-badge');
+      badge.textContent = '● Service en ligne';
+      badge.className = 'health-badge health-ok';
+    }
+  } catch(e) {
+    document.getElementById('health-badge').textContent = '● Hors ligne';
+  }
+}
+checkHealth();
+
+// ── Tab switching ─────────────────────────────────────────────
+function switchTab(tab) {
+  // Only one tab exists now — always show analyze
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelector(`[data-tab="${tab}"]`).classList.add('active');
+  document.getElementById('tab-analyze').classList.remove('hidden');
+}
+
+// ── Toast ─────────────────────────────────────────────────────
+function toast(msg, type='success') {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = 'toast toast-' + type + ' show';
+  setTimeout(() => el.classList.remove('show'), 3000);
+}
+
+// ── File upload (drag & drop) ─────────────────────────────────
+const uploadZone = document.getElementById('upload-zone');
+const fileInput = document.getElementById('file-input');
+
+fileInput.addEventListener('change', () => {
+  if (fileInput.files.length) handleFile(fileInput.files[0]);
+});
+
+uploadZone.addEventListener('dragover', e => { e.preventDefault(); uploadZone.classList.add('dragover'); });
+uploadZone.addEventListener('dragleave', () => uploadZone.classList.remove('dragover'));
+uploadZone.addEventListener('drop', e => {
+  e.preventDefault();
+  uploadZone.classList.remove('dragover');
+  if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+});
+
+function handleFile(file) {
+  const ext = file.name.split('.').pop().toLowerCase();
+  if (!['ods','xlsx','xlsm'].includes(ext)) {
+    toast('Format non supporté. Utilisez .ods, .xlsx ou .xlsm', 'error');
+    return;
+  }
+  currentFile = file;
+  const container = document.getElementById('file-info-container');
+  container.innerHTML = `
+    <div class="file-info">
+      <span>📄</span>
+      <span class="name">${file.name}</span>
+      <span class="size">${(file.size/1024).toFixed(0)} KB</span>
+      <button class="remove" onclick="clearFile()">×</button>
+    </div>`;
+  document.getElementById('analyze-btn').disabled = false;
+  document.getElementById('excel-btn').disabled = false;
+}
+
+function clearFile() {
+  currentFile = null;
+  fileInput.value = '';
+  document.getElementById('file-info-container').innerHTML = '';
+  document.getElementById('analyze-btn').disabled = true;
+  document.getElementById('excel-btn').disabled = true;
+  document.getElementById('results-analyze').classList.remove('show');
+}
+
+// ── Analyze ───────────────────────────────────────────────────
+async function doAnalyze() {
+  if (!currentFile) return;
+  showLoading('loading-analyze', true);
+  document.getElementById('results-analyze').classList.remove('show');
+
+  const formData = new FormData();
+  formData.append('file', currentFile);
+
+  try {
+    const res = await fetch(API + '/api/conformity-report', { method: 'POST', body: formData });
+    const data = await res.json();
+
+    if (!res.ok) {
+      toast('Erreur: ' + (data.detail || 'analyse échouée'), 'error');
+      return;
+    }
+
+    analysisData = data.analysis;
+    uploadedFiles = uploadedFiles.filter(f => f.name !== currentFile.name);
+    uploadedFiles.push({ name: currentFile.name, size: currentFile.size });
+
+    renderStats(data.analysis);
+    renderChart(data.analysis);
+    renderOKDeepFindings(data.analysis);
+    renderInconsistencies(data.analysis);
+    renderItems(data.analysis);
+    renderMeta(data.analysis);
+
+    document.getElementById('results-analyze').classList.add('show');
+    toast('Analyse terminée — ' + data.analysis.summary.total + ' exigences');
+  } catch(e) {
+    toast('Erreur réseau: ' + e.message, 'error');
+  } finally {
+    showLoading('loading-analyze', false);
+  }
+}
+
+// ── Excel report ────────────────────────────────────────────
+async function doReport() {
+  if (!currentFile) return;
+  toast('Génération du rapport Excel…');
+
+  try {
+    const res = await fetch(API + '/api/conformity-excel-byname', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fileName: currentFile.name })
+    });
+    const data = await res.json();
+    if (!res.ok) { toast('Erreur: ' + (data.detail||''), 'error'); return; }
+
+    const b64 = data.reportExcel;
+    const bytes = atob(b64);
+    const arr = new Uint8Array(bytes.length);
+    for (let i=0; i<bytes.length; i++) arr[i] = bytes.charCodeAt(i);
+    const blob = new Blob([arr], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = currentFile.name.replace(/\.(ods|xlsx|xlsm)$/i, '') + '_report.xlsx';
+    a.click();
+    URL.revokeObjectURL(url);
+    toast('Rapport Excel téléchargé');
+  } catch(e) {
+    toast('Erreur: ' + e.message, 'error');
+  }
+}
+
+// ── Render functions ──────────────────────────────────────────
+function renderStats(a) {
+  const s = a.summary;
+  const cards = [
+    {cls:'stat-total', val:s.total, label:'Total'},
+    {cls:'stat-ok', val:s.ok, label:'OK'},
+    {cls:'stat-nok', val:s.nok, label:'NOK'},
+    {cls:'stat-na', val:s.na, label:'NA'},
+    {cls:'stat-inc', val:s.inconsistencies, label:'Incohérences'},
+    {cls:'stat-warn', val:(s.okDeepFindings||0), label:'OK à vérifier'},
+  ];
+  document.getElementById('stats-grid').innerHTML = cards.map(c =>
+    `<div class="stat-card ${c.cls}"><div class="value">${c.val}</div><div class="label">${c.label}</div></div>`
+  ).join('');
+}
+
+function renderChart(a) {
+  const container = document.getElementById('chart-container');
+  if (a.chartBase64) {
+    // Check if it's SVG or PNG
+    try {
+      const decoded = atob(a.chartBase64);
+      if (decoded.startsWith('<svg')) {
+        container.innerHTML = decoded;
+      } else {
+        container.innerHTML = `<img src="data:image/png;base64,${a.chartBase64}" />`;
+      }
+    } catch(e) {
+      container.innerHTML = `<img src="data:image/png;base64,${a.chartBase64}" />`;
+    }
+  } else {
+    container.innerHTML = '<p class="muted">Pas de graphique disponible</p>';
+  }
+}
+
+function renderMeta(a) {
+  const meta = document.getElementById('meta-info');
+  meta.innerHTML = `Feuille: <strong>${a.sheetName}</strong> | Ligne en-tête: ${a.headerRow+1} | Ligne données: ${a.dataStartRow+1} | Colonnes conformité: [${a.columnMapping.conformity}] | Colonnes commentaires: [${a.columnMapping.comment}] | Colonnes version applicable: [${a.columnMapping.version_applicable || []}]`;
+}
+
+function renderInconsistencies(a) {
+  const incs = a.inconsistencies || [];
+  const panel = document.getElementById('inc-panel');
+  const h2 = panel.querySelector('h2');
+  const incCount = document.getElementById('inc-count');
+
+  if (incs.length === 0) {
+    if (incCount) incCount.textContent = '(0)';
+    h2.innerHTML = '3. Incohérences détectées <span id="inc-count" class="muted">(0)</span> ✅ Aucune incohérence';
+    document.getElementById('inc-list').innerHTML = '<p class="muted" style="padding:12px">✅ Aucune incohérence détectée entre les statuts et les commentaires.</p>';
+    return;
+  }
+
+  h2.innerHTML = `3. Incohérences détectées <span id="inc-count" class="muted">(${incs.length})</span>`;
+  document.getElementById('inc-list').innerHTML = incs.map(inc => `
+    <div class="inc-card ${inc.severity === 'warning' ? 'warning' : ''}">
+      <div class="header">
+        <span class="badge ${inc.severity === 'error' ? 'badge-NOK' : 'badge-STANDBY'}">${inc.severity.toUpperCase()}</span>
+        <span class="req-id">${inc.reqId || inc.req_id || ''}</span>
+        <span class="type">${inc.type}</span>
+        ${inc.score ? `<span class="muted" style="font-size:11px">Score: ${inc.score}</span>` : ''}
+        ${inc.signals ? `<span class="muted" style="font-size:11px">Signaux: ${inc.signals}</span>` : ''}
+      </div>
+      <div class="explanation">${inc.explanation}</div>
+      ${inc.conformity ? `<div class="meta">Conformité: "${inc.conformity}"</div>` : ''}
+      ${inc.comment ? `<div class="meta">Commentaire: "${inc.comment}"</div>` : ''}
+      ${inc.matched && inc.matched.length ? `<div class="meta">Mots-clés détectés: ${inc.matched.map(m => `"${m}"`).join(', ')}</div>` : ''}
+    </div>
+  `).join('');
+}
+
+function renderItems(a) {
+  allItems = a.items || [];
+  document.getElementById('items-count').textContent = `${allItems.length} exigences extraites`;
+  filterTable();
+}
+
+function setFilter(f) {
+  currentFilter = f;
+  document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+  document.querySelector(`[data-filter="${f}"]`).classList.add('active');
+  filterTable();
+}
+
+function filterTable() {
+  const search = document.getElementById('search-box').value.toLowerCase();
+  const filtered = allItems.filter(item => {
+    if (currentFilter !== 'ALL' && item.conformityCategory !== currentFilter) return false;
+    if (search) {
+      const text = (item.reqId + ' ' + item.reference + ' ' + item.description + ' ' + item.comment + ' ' + (item.version || '')).toLowerCase();
+      if (!text.includes(search)) return false;
+    }
+    return true;
+  });
+
+  const tbody = document.getElementById('items-tbody');
+  const maxRows = 500; // limit for performance
+  const display = filtered.slice(0, maxRows);
+  tbody.innerHTML = display.map(item => `
+    <tr>
+      <td><strong style="font-family:var(--mono)">${item.reqId}</strong></td>
+      <td>${item.reference || '<span class="muted">—</span>'}</td>
+      <td>${item.version ? '<strong style="font-family:var(--mono);color:var(--accent)">' + item.version + '</strong>' : '<span class="muted">—</span>'}</td>
+      <td>${item.conformityRaw || '<span class="muted">—</span>'}</td>
+      <td><span class="badge badge-${item.conformityCategory}">${item.conformityCategory}</span></td>
+      <td>${item.comment ? item.comment.substring(0,120) : '<span class="muted">—</span>'}</td>
+    </tr>
+  `).join('');
+
+  if (filtered.length > maxRows) {
+    document.getElementById('items-count').textContent = `${filtered.length} exigences (affichage: ${maxRows} premières)`;
+  } else {
+    document.getElementById('items-count').textContent = `${filtered.length} exigences`;
+  }
+}
+
+// ── OK Deep Findings (AI analysis of OK responses) ──────────
+function renderOKDeepFindings(a) {
+  const findings = a.okDeepFindings || [];
+  const panel = document.getElementById('okdeep-panel');
+  const h2 = panel.querySelector('h2');
+  const okCount = document.getElementById('okdeep-count');
+
+  if (findings.length === 0) {
+    if (okCount) okCount.textContent = '(0)';
+    h2.innerHTML = '3. Analyse approfondie des réponses OK <span id="okdeep-count" class="muted">(0)</span> ✅ Tous les OK sont cohérents';
+    document.getElementById('okdeep-list').innerHTML = '<p class="muted" style="padding:12px">✅ Tous les statuts OK sont cohérents avec leurs commentaires — aucun signal suspect détecté.</p>';
+    return;
+  }
+
+  h2.innerHTML = `3. Analyse approfondie des réponses OK <span id="okdeep-count" class="muted">(${findings.length})</span> ⚠️ Points d'attention`;
+  document.getElementById('okdeep-list').innerHTML = findings.slice(0, 40).map(f => {
+    const sevClass = f.severity === 'error' ? 'inc-card' : f.severity === 'warning' ? 'inc-card warning' : 'inc-card';
+    const sevBadge = f.severity === 'error' ? 'badge-NOK' : f.severity === 'warning' ? 'badge-STANDBY' : 'badge-NA';
+    return `
+    <div class="${sevClass}" style="border-left-color:var(--${f.severity === 'error' ? 'nok' : f.severity === 'warning' ? 'warn' : 'ok'})">
+      <div class="header">
+        <span class="badge ${sevBadge}">${f.severity.toUpperCase()}</span>
+        <span class="req-id">${f.reqId || ''}</span>
+        <span class="type">Score: ${f.score}/10</span>
+        <span class="muted" style="font-size:11px">Signaux: ${(f.signals||[]).join(', ')}</span>
+      </div>
+      <div class="explanation" style="color:var(--warn)">${f.aiComment || ''}</div>
+      ${f.conformity ? `<div class="meta">Conformité FNR: "${f.conformity}"</div>` : ''}
+      ${f.comment ? `<div class="meta">Commentaire FNR: "${f.comment}"</div>` : ''}
+    </div>
+  `}).join('');
+}
+
+// ── Utils ─────────────────────────────────────────────────────
+function showLoading(id, show) {
+  const el = document.getElementById(id);
+  if (show) el.classList.add('show'); else el.classList.remove('show');
+}
+</script>
+</body>
+</html>

@@ -58,20 +58,29 @@ def _get_body(req: func.HttpRequest) -> dict:
 
 
 # ── Helper: decode file content from Copilot Studio ────────────────
-def _decode_file_content(content_str: str) -> bytes:
+def _decode_file_content(content_str) -> bytes:
     """
     Decode file content that may come as:
     1. Data URI:  data:<mime>;base64,<base64data>
     2. Plain base64 string
-    3. Raw text content
+    3. JSON-serialized blob (e.g. from Power Fx JSON()): "UEsDBBQ..."
+    4. Raw text content
+    5. Bytes directly (from Power Automate)
     
     Returns the decoded bytes.
     """
     import base64
     import re
     
-    if not content_str or not isinstance(content_str, str):
+    if not content_str:
         raise ValueError("Empty or invalid content string")
+    
+    # If already bytes, return as-is
+    if isinstance(content_str, bytes):
+        return content_str
+    
+    if not isinstance(content_str, str):
+        raise ValueError(f"Invalid content type: {type(content_str)}")
     
     s = content_str.strip()
     
@@ -85,7 +94,23 @@ def _decode_file_content(content_str: str) -> bytes:
         raw_part = s.split(",", 1)[1]
         return raw_part.encode("utf-8")
     
-    # Case 3: Plain base64 (starts with typical base64 chars and is long enough)
+    # Case 3: JSON-serialized string (from Power Fx JSON() function)
+    # JSON() wraps strings in double quotes: "UEsDBBQ..."
+    if len(s) >= 2 and s.startswith('"') and s.endswith('"'):
+        inner = s[1:-1]  # Remove surrounding quotes
+        # Check if it's base64 inside the quotes
+        if len(inner) > 50 and re.match(r'^[A-Za-z0-9+/=\r\n]+$', inner):
+            clean = inner.replace('\r', '').replace('\n', '').replace(' ', '')
+            try:
+                decoded = base64.b64decode(clean)
+                if len(decoded) > 0:
+                    return decoded
+            except Exception:
+                pass
+        # Not base64 inside quotes — treat as raw text
+        return inner.encode("utf-8")
+    
+    # Case 4: Plain base64 (starts with typical base64 chars and is long enough)
     if len(s) > 50 and re.match(r'^[A-Za-z0-9+/=\r\n]+$', s):
         # Remove any whitespace/newlines
         clean = s.replace('\r', '').replace('\n', '').replace(' ', '')
@@ -97,8 +122,95 @@ def _decode_file_content(content_str: str) -> bytes:
         except Exception:
             pass
     
-    # Case 4: Raw text content (treat as text file content)
+    # Case 5: Raw text content (treat as text file content)
     return s.encode("utf-8")
+
+
+# ── Helper: download file from URL ────────────────────────────────
+def _download_file_from_url(url: str, timeout: int = 30) -> bytes:
+    """
+    Download a file from a URL (e.g., SharePoint, OneDrive, Teams attachment URL).
+    Used when Copilot Studio provides a fileUrl instead of base64 content.
+    """
+    import urllib.request
+    import ssl
+    
+    logging.info(f"Downloading file from URL: {url[:100]}...")
+    
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    
+    req = urllib.request.Request(url)
+    req.add_header("User-Agent", "LEON-Spec-Azure-Function/2.0")
+    
+    with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
+        return resp.read()
+
+
+# ── Helper: extract file from request body (all formats) ───────────
+def _extract_file_from_body(body: dict, req: func.HttpRequest = None) -> tuple:
+    """
+    Extract file_name and file_bytes from request body.
+    Handles all input formats:
+    1. { "fileName": "file.ods", "fileContent": "<base64>" }
+    2. { "fileName": "file.ods", "fileUrl": "https://..." }
+    3. { "file": { "name": "file.ods", "contentBytes": "<base64>" } }
+    4. { "file": "<base64>", "fileName": "file.ods" }
+    5. { "fileName": "file.ods" }  (file already uploaded)
+    
+    Returns (file_name, file_bytes) — file_bytes may be None if only fileName is provided.
+    """
+    file_name = None
+    file_bytes = None
+    
+    if not body:
+        return (None, None)
+    
+    # Case: fileUrl provided — download from URL
+    if "fileUrl" in body and body["fileUrl"]:
+        url = body["fileUrl"]
+        file_name = body.get("fileName", "")
+        if not file_name:
+            # Try to extract filename from URL
+            from urllib.parse import urlparse, unquote
+            parsed = urlparse(url)
+            file_name = unquote(parsed.path.split("/")[-1]) or "conformity_matrix.ods"
+        try:
+            file_bytes = _download_file_from_url(url)
+            logging.info(f"Downloaded {len(file_bytes)} bytes from URL")
+        except Exception as e:
+            logging.error(f"Failed to download from URL: {e}")
+            raise ValueError(f"Could not download file from URL: {str(e)[:200]}")
+        return (file_name, file_bytes)
+    
+    # Case: fileContent provided — decode base64
+    if "fileContent" in body and body["fileContent"]:
+        file_bytes = _decode_file_content(body["fileContent"])
+        file_name = body.get("fileName", "conformity_matrix.ods")
+        return (file_name, file_bytes)
+    
+    # Case: file object provided (Copilot Studio attachment format)
+    if "file" in body and body["file"]:
+        file_obj = body["file"]
+        if isinstance(file_obj, dict):
+            file_name = file_obj.get("name", "") or file_obj.get("Name", "") or "conformity_matrix.ods"
+            b64 = (file_obj.get("contentBytes", "") or 
+                   file_obj.get("Content", "") or 
+                   file_obj.get("content", ""))
+            if b64:
+                file_bytes = _decode_file_content(b64)
+            return (file_name, file_bytes)
+        elif isinstance(file_obj, str):
+            file_bytes = _decode_file_content(file_obj)
+            file_name = body.get("fileName", "conformity_matrix.ods")
+            return (file_name, file_bytes)
+    
+    # Case: only fileName provided (file already uploaded)
+    if "fileName" in body and body["fileName"]:
+        return (body["fileName"], None)
+    
+    return (None, None)
 
 
 # ── Helper: Copilot Studio response format ─────────────────────────
@@ -827,3 +939,148 @@ def validation_pdf(req: func.HttpRequest) -> func.HttpResponse:
 
     from azure_handler import handle_validation_pdf
     return _safe_handler(handle_validation_pdf, file_name)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# ENDPOINT 11: /api/conformity — Conformity Matrix Analysis
+# ═══════════════════════════════════════════════════════════════════
+@app.route(route="conformity", methods=["POST"])
+def conformity(req: func.HttpRequest) -> func.HttpResponse:
+    """
+    Analyze a conformity matrix spreadsheet (ODS or XLSX).
+
+    Auto-detects the sheet, header row, and 'Conformite FNR' / 'Commentaires FNR'
+    columns (even if names change). Returns:
+    - List of OK / NOK / NA / STANDBY items with exact comments
+    - AI-detected inconsistencies between status and comment
+    - Pie chart (base64 PNG)
+    - Summary statistics
+    - PDF report (base64)
+
+    Accepts:
+    1. JSON: { "fileName": "file.ods" }  (file must be already uploaded)
+    2. JSON: { "fileName": "file.ods", "fileContent": "<base64>" }
+    3. Multipart form: file field
+    4. Raw binary with X-File-Name header
+    """
+    logging.info("=== /api/conformity called ===")
+
+    content_type = req.headers.get("Content-Type", "")
+    body_bytes = req.get_body()
+    body_len = len(body_bytes) if body_bytes else 0
+    file_name = None
+    file_bytes = None
+
+    # Try JSON body first
+    body = _get_body(req)
+    if body:
+        file_name, file_bytes = _extract_file_from_body(body, req)
+    
+    # Fallback: multipart form data
+    if not file_name and "multipart/form-data" in content_type:
+        try:
+            file_name, file_bytes = _parse_multipart(body_bytes, content_type)
+        except Exception:
+            pass
+    
+    # Fallback: raw binary with X-File-Name header
+    if not file_name and body_len > 0 and not ("application/json" in content_type):
+        file_bytes = body_bytes
+        file_name = req.headers.get("X-File-Name", "conformity_matrix.ods")
+
+    if not file_name:
+        return _error_response("Missing 'fileName' or file content in request.", 422)
+
+    from azure_handler import handle_conformity
+    return _safe_handler(handle_conformity, file_name, file_bytes)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# ENDPOINT 12: /api/conformity-excel — Color-coded Excel report
+# ═══════════════════════════════════════════════════════════════════
+@app.route(route="conformity-excel", methods=["POST"])
+def conformity_excel(req: func.HttpRequest) -> func.HttpResponse:
+    """
+    Upload a conformity matrix and get a color-coded Excel report.
+    Same input formats as /api/conformity.
+    Returns JSON with reportExcel (base64 XLSX).
+    """
+    logging.info("=== /api/conformity-excel called ===")
+
+    content_type = req.headers.get("Content-Type", "")
+    body_bytes = req.get_body()
+    body_len = len(body_bytes) if body_bytes else 0
+    file_name = None
+    file_bytes = None
+
+    body = _get_body(req)
+    if body:
+        file_name, file_bytes = _extract_file_from_body(body, req)
+    
+    # Fallback: multipart form data
+    if not file_name and "multipart/form-data" in content_type:
+        try:
+            file_name, file_bytes = _parse_multipart(body_bytes, content_type)
+        except Exception:
+            pass
+    
+    # Fallback: raw binary with X-File-Name header
+    if not file_name and body_len > 0 and not ("application/json" in content_type):
+        file_bytes = body_bytes
+        file_name = req.headers.get("X-File-Name", "conformity_matrix.ods")
+
+    if not file_name or not file_bytes:
+        return _error_response("Missing file content or fileName. Provide fileContent (base64), fileUrl, or file object.", 422)
+
+    from azure_handler import handle_conformity_excel
+    return _safe_handler(handle_conformity_excel, file_name, file_bytes)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# ENDPOINT 13: /api/conformity-compare — Multi-matrix comparison
+# ═══════════════════════════════════════════════════════════════════
+@app.route(route="conformity-compare", methods=["POST"])
+def conformity_compare(req: func.HttpRequest) -> func.HttpResponse:
+    """
+    Compare two or more conformity matrices.
+
+    Request body:
+      { "fileNames": ["matrix_v1.ods", "matrix_v2.ods"] }
+
+    Returns JSON with comparison data, status changes, and chart.
+    """
+    logging.info("=== /api/conformity-compare called ===")
+    body = _get_body(req)
+    file_names = body.get("fileNames", [])
+
+    if not file_names or len(file_names) < 2:
+        return _error_response("At least 2 file names required for comparison.", 400)
+
+    from azure_handler import handle_conformity_compare
+    return _safe_handler(handle_conformity_compare, file_names)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# ENDPOINT 14: /api/conformity-powerbi — Power BI dataset
+# ═══════════════════════════════════════════════════════════════════
+@app.route(route="conformity-powerbi", methods=["POST"])
+def conformity_powerbi(req: func.HttpRequest) -> func.HttpResponse:
+    """
+    Generate a Power BI-compatible dataset JSON from a conformity matrix.
+
+    Request body:
+      { "fileName": "matrix.ods" }  (file must be already uploaded)
+      OR
+      { "fileName": "matrix.ods", "fileContent": "<base64>" }  (upload + analyze)
+
+    Returns JSON with dataset definition, data rows, and dashboard config.
+    """
+    logging.info("=== /api/conformity-powerbi called ===")
+    body = _get_body(req)
+    file_name, file_bytes = _extract_file_from_body(body, req) if body else (None, None)
+    
+    if not file_name:
+        return _error_response("Missing 'fileName' in request body. Provide fileName, fileContent (base64), or fileUrl.", 422)
+
+    from azure_handler import handle_conformity_powerbi
+    return _safe_handler(handle_conformity_powerbi, file_name, file_bytes)
