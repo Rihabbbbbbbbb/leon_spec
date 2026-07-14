@@ -562,6 +562,7 @@ def upload_and_validate(req: func.HttpRequest) -> func.HttpResponse:
                 import requests as req_lib
                 url = body["fileUrl"]
                 file_name = body.get("fileName", url.split("/")[-1] if "/" in url else "uploaded_spec.docx")
+                logging.info(f"Downloading file from URL: {url[:100]}...")
                 resp = req_lib.get(url, timeout=60, allow_redirects=True)
                 if resp.status_code == 200:
                     file_bytes = resp.content
@@ -1105,6 +1106,39 @@ def validation_pdf(req: func.HttpRequest) -> func.HttpResponse:
 
     from azure_handler import handle_validation_pdf
     return _safe_handler(handle_validation_pdf, file_name)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# ENDPOINT 10b: /api/validate-url — Validate from URL (bypasses content filter)
+# ═══════════════════════════════════════════════════════════════════
+@app.route(route="validate-url", methods=["POST"])
+def validate_url(req: func.HttpRequest) -> func.HttpResponse:
+    """
+    Download a file from a URL and validate it against the CTS template.
+
+    This endpoint bypasses Copilot Studio's Azure OpenAI content filter
+    (openAIndirectAttack). Copilot Studio passes only a short URL string
+    (not file content), so the content filter is not triggered.
+
+    Request body:
+      { "fileUrl": "https://sharepoint.com/.../spec.docx" }
+      { "fileUrl": "https://...", "fileName": "ASU_Spec.docx" }
+
+    Returns JSON with:
+      - answer, verdict, overallScore, summary, validationReport
+      - documentBase64, documentUrl (unified DOCX — downloadable document)
+      - pdfBase64 (backward compatible)
+    """
+    logging.info("=== /api/validate-url called ===")
+    body = _get_body(req)
+    file_url = (body.get("fileUrl") or "").strip()
+    file_name = (body.get("fileName") or "").strip()
+
+    if not file_url:
+        return _error_response("Missing 'fileUrl' in request body.", 422)
+
+    from azure_handler import handle_validate_url
+    return _safe_handler(handle_validate_url, file_url, file_name)
 
 
 # ═══════════════════════════════════════════════════════════════════

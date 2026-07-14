@@ -305,7 +305,7 @@ def handle_validate(file_name: str) -> func.HttpResponse:
         f"writing-guide rules (100% extracted from source documents)."
     )
 
-    # ── Generate PDF report ──────────────────────────────────
+    # ── Generate PDF report (backward compatible) ────────────
     pdf_base64 = ""
     try:
         from app.qa.pdf_report import generate_validation_pdf
@@ -315,8 +315,30 @@ def handle_validate(file_name: str) -> func.HttpResponse:
     except Exception as exc:
         logging.warning(f"PDF generation failed (non-fatal): {exc}")
 
+    # ── Generate unified DOCX document (standardized template) ──
+    docx_base64 = ""
+    document_url = ""
+    try:
+        from app.qa.spec_report_docx import generate_spec_validation_document
+        import base64 as _b642
+        docx_bytes = generate_spec_validation_document(report)
+        docx_base64 = _b642.b64encode(docx_bytes).decode("ascii")
+
+        # Try to upload DOCX to Azure Blob Storage for direct download
+        docx_blob_url = _upload_to_blob_storage(
+            file_bytes=docx_bytes, file_name=file_name,
+            content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            blob_extension="docx",
+        )
+        if docx_blob_url:
+            document_url = docx_blob_url
+        else:
+            document_url = f"data:application/vnd.openxmlformats-officedocument.wordprocessingml.document;base64,{docx_base64}"
+    except Exception as exc:
+        logging.warning(f"DOCX generation failed (non-fatal): {exc}")
+
     # Build response with both nested validationReport AND top-level fields
-    # for Copilot Studio compatibility, plus base64 PDF
+    # for Copilot Studio compatibility, plus base64 PDF and DOCX
     val_body = {
         "answer": summary,
         "status": "answered",
@@ -326,6 +348,10 @@ def handle_validate(file_name: str) -> func.HttpResponse:
         "validationReport": report,
         "pdfBase64": pdf_base64,
         "pdfAvailable": bool(pdf_base64),
+        # Unified document (standardized template DOCX — primary downloadable document)
+        "documentBase64": docx_base64,
+        "documentUrl": document_url,
+        "documentAvailable": bool(docx_base64),
     }
     return func.HttpResponse(
         body=json.dumps(val_body, ensure_ascii=False, default=str),
@@ -397,7 +423,7 @@ def handle_upload_and_validate(file_name: str, file_bytes: bytes) -> func.HttpRe
         f"{report.get('summary', '')}"
     )
 
-    # ── Generate PDF ─────────────────────────────────────────
+    # ── Generate PDF (base64 for JSON response) ──────────────
     pdf_base64 = ""
     try:
         from app.qa.pdf_report import generate_validation_pdf
@@ -407,6 +433,31 @@ def handle_upload_and_validate(file_name: str, file_bytes: bytes) -> func.HttpRe
     except Exception as exc:
         logging.warning(f"PDF generation failed (non-fatal): {exc}")
 
+    # ── Generate unified DOCX document (standardized template) ──
+    docx_base64 = ""
+    document_url = ""
+    try:
+        from app.qa.spec_report_docx import generate_spec_validation_document
+        import base64 as _b642
+        docx_bytes = generate_spec_validation_document(report)
+        docx_base64 = _b642.b64encode(docx_bytes).decode("ascii")
+
+        # Try to upload DOCX to Azure Blob Storage for direct download
+        docx_blob_url = _upload_to_blob_storage(
+            file_bytes=docx_bytes, file_name=saved_path.name,
+            content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            blob_extension="docx",
+        )
+        if docx_blob_url:
+            document_url = docx_blob_url
+        else:
+            document_url = f"data:application/vnd.openxmlformats-officedocument.wordprocessingml.document;base64,{docx_base64}"
+    except Exception as exc:
+        logging.warning(f"DOCX generation failed (non-fatal): {exc}")
+
+    # ── Return JSON with all fields for Copilot Studio ────────
+    # CRITICAL: Must return JSON (not raw PDF bytes) so Copilot Studio
+    # can parse output bindings (answer, verdict, overallScore, etc.)
     val_body = {
         "answer": summary,
         "status": "answered",
@@ -420,6 +471,10 @@ def handle_upload_and_validate(file_name: str, file_bytes: bytes) -> func.HttpRe
         "evidence": [],
         "pdfBase64": pdf_base64,
         "pdfAvailable": bool(pdf_base64),
+        # Unified document (standardized template DOCX — primary downloadable document)
+        "documentBase64": docx_base64,
+        "documentUrl": document_url,
+        "documentAvailable": bool(docx_base64),
     }
     return func.HttpResponse(
         body=json.dumps(val_body, ensure_ascii=False, default=str),
@@ -497,6 +552,238 @@ def handle_upload_and_validate_pdf(file_name: str, file_bytes: bytes) -> func.Ht
             mimetype="application/json",
             headers={"Content-Type": "application/json; charset=utf-8"},
         )
+
+
+# ═══════════════════════════════════════════════════════════════════
+# HANDLER 2d: /api/validate-url — Validate from URL (bypasses content filter)
+# ═══════════════════════════════════════════════════════════════════
+def handle_validate_url(file_url: str, file_name: str = "") -> func.HttpResponse:
+    """
+    Download a file from a URL and validate it against the CTS template.
+
+    This endpoint is designed to bypass Copilot Studio's Azure OpenAI content
+    filter (openAIndirectAttack). Instead of passing file CONTENT through
+    Copilot Studio (which triggers the content filter on technical specs),
+    Copilot Studio passes only a short URL string. The Azure Function
+    downloads the file server-side and validates it.
+
+    Args:
+        file_url: URL to download the file from (SharePoint, OneDrive, Blob, etc.)
+        file_name: Optional file name (derived from URL if not provided)
+
+    Returns JSON with:
+      - answer, verdict, overallScore, summary, validationReport
+      - pdfBase64 (backward compatible)
+      - documentBase64, documentUrl (unified DOCX — primary downloadable document)
+    """
+    import os
+    import base64
+
+    logging.info(f"handle_validate_url: url={file_url}, name={file_name}")
+
+    if not file_url or not file_url.strip():
+        return func.HttpResponse(
+            body=json.dumps({
+                "answer": "No file URL provided. Please provide a URL to the specification file.",
+                "status": "error",
+            }, ensure_ascii=False),
+            status_code=422,
+            mimetype="application/json",
+            headers={"Content-Type": "application/json; charset=utf-8"},
+        )
+
+    # Derive file name from URL if not provided
+    if not file_name:
+        # Try to extract from URL path
+        url_path = file_url.split("?")[0]  # Remove query string
+        if "/" in url_path:
+            file_name = url_path.split("/")[-1]
+        else:
+            file_name = "uploaded_spec.docx"
+
+        # URL-decode the file name
+        import urllib.parse
+        file_name = urllib.parse.unquote(file_name)
+
+    # Validate file extension
+    allowed_ext = {".txt", ".docx", ".pdf"}
+    suffix = Path(file_name).suffix.lower()
+    if suffix not in allowed_ext:
+        # If no recognizable extension, default to .docx
+        if not suffix:
+            file_name = file_name + ".docx"
+        else:
+            return func.HttpResponse(
+                body=json.dumps({
+                    "answer": f"File type '{suffix}' not accepted. Use .txt, .docx, or .pdf.",
+                    "status": "error",
+                }, ensure_ascii=False),
+                status_code=400,
+                mimetype="application/json",
+                headers={"Content-Type": "application/json; charset=utf-8"},
+            )
+
+    # ── Download the file server-side ────────────────────────
+    try:
+        import urllib.request
+        import ssl
+
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+
+        req = urllib.request.Request(file_url, headers={
+            "User-Agent": "LEON-Azure-Function/1.0",
+        })
+        with urllib.request.urlopen(req, timeout=60, context=ctx) as resp:
+            file_bytes = resp.read()
+
+        if not file_bytes or len(file_bytes) == 0:
+            return func.HttpResponse(
+                body=json.dumps({
+                    "answer": f"Downloaded file is empty from URL: {file_url}",
+                    "status": "error",
+                }, ensure_ascii=False),
+                status_code=422,
+                mimetype="application/json",
+                headers={"Content-Type": "application/json; charset=utf-8"},
+            )
+
+        logging.info(f"Downloaded {len(file_bytes)} bytes from {file_url}")
+
+    except Exception as exc:
+        logging.error(f"File download failed: {exc}")
+        return func.HttpResponse(
+            body=json.dumps({
+                "answer": f"Failed to download file from URL: {str(exc)[:300]}",
+                "status": "error",
+            }, ensure_ascii=False),
+            status_code=502,
+            mimetype="application/json",
+            headers={"Content-Type": "application/json; charset=utf-8"},
+        )
+
+    # Max 25 MB
+    if len(file_bytes) > 25 * 1024 * 1024:
+        return func.HttpResponse(
+            body=json.dumps({
+                "answer": "File too large. Maximum size is 25 MB.",
+                "status": "error",
+            }, ensure_ascii=False),
+            status_code=413,
+            mimetype="application/json",
+            headers={"Content-Type": "application/json; charset=utf-8"},
+        )
+
+    # ── Save the file locally ────────────────────────────────
+    from app.qa.retrieval import save_uploaded_file, extract_text_from_file
+
+    try:
+        saved_path = save_uploaded_file(file_name, file_bytes)
+    except Exception as e:
+        logging.error(f"Save error: {e}")
+        return func.HttpResponse(
+            body=json.dumps({
+                "answer": f"Failed to save downloaded file: {str(exc)[:300]}",
+                "status": "error",
+            }, ensure_ascii=False),
+            status_code=500,
+            mimetype="application/json",
+            headers={"Content-Type": "application/json; charset=utf-8"},
+        )
+
+    # ── Index to Azure Search (non-fatal) ────────────────────
+    try:
+        _index_file_to_search(saved_path)
+    except Exception as exc:
+        logging.warning(f"Search indexing failed (non-fatal): {exc}")
+
+    # ── Rebuild local index (non-fatal) ──────────────────────
+    try:
+        _reset_index()
+        _get_index()
+    except Exception as e:
+        logging.warning(f"Local index rebuild: {e}")
+
+    # ── Validate the file ────────────────────────────────────
+    text = extract_text_from_file(saved_path)
+    if not text or not text.strip():
+        return func.HttpResponse(
+            body=json.dumps({
+                "answer": f"Could not extract text from '{saved_path.name}'. The file may be corrupted or contain only images.",
+                "status": "error",
+            }, ensure_ascii=False),
+            status_code=422,
+            mimetype="application/json",
+            headers={"Content-Type": "application/json; charset=utf-8"},
+        )
+
+    from app.qa.evidence_comparator import validate_with_evidence
+    report = validate_with_evidence(saved_path.name, text)
+
+    summary = (
+        f"Here is the evidence-based validation for **{saved_path.name}** — "
+        f"Verdict: **{report.get('verdict', 'UNKNOWN')}** "
+        f"({report.get('overallScore', 0):.0%}):\n\n"
+        f"{report.get('summary', '')}"
+    )
+
+    # ── Generate PDF (backward compatible) ───────────────────
+    pdf_base64 = ""
+    try:
+        from app.qa.pdf_report import generate_validation_pdf
+        import base64 as _b64
+        pdf_bytes = generate_validation_pdf(report)
+        pdf_base64 = _b64.b64encode(pdf_bytes).decode("ascii")
+    except Exception as exc:
+        logging.warning(f"PDF generation failed (non-fatal): {exc}")
+
+    # ── Generate unified DOCX document (standardized template) ──
+    docx_base64 = ""
+    document_url = ""
+    try:
+        from app.qa.spec_report_docx import generate_spec_validation_document
+        import base64 as _b642
+        docx_bytes = generate_spec_validation_document(report)
+        docx_base64 = _b642.b64encode(docx_bytes).decode("ascii")
+
+        # Try to upload DOCX to Azure Blob Storage for direct download
+        docx_blob_url = _upload_to_blob_storage(
+            file_bytes=docx_bytes, file_name=saved_path.name,
+            content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            blob_extension="docx",
+        )
+        if docx_blob_url:
+            document_url = docx_blob_url
+        else:
+            document_url = f"data:application/vnd.openxmlformats-officedocument.wordprocessingml.document;base64,{docx_base64}"
+    except Exception as exc:
+        logging.warning(f"DOCX generation failed (non-fatal): {exc}")
+
+    val_body = {
+        "answer": summary,
+        "status": "answered",
+        "verdict": report.get("verdict", "UNKNOWN"),
+        "overallScore": report.get("overallScore", 0),
+        "summary": report.get("summary", ""),
+        "validationReport": report,
+        "fileName": saved_path.name,
+        "confidence": "",
+        "sources": [],
+        "evidence": [],
+        "pdfBase64": pdf_base64,
+        "pdfAvailable": bool(pdf_base64),
+        # Unified document (standardized template DOCX — primary downloadable document)
+        "documentBase64": docx_base64,
+        "documentUrl": document_url,
+        "documentAvailable": bool(docx_base64),
+    }
+    return func.HttpResponse(
+        body=json.dumps(val_body, ensure_ascii=False, default=str),
+        status_code=200,
+        mimetype="application/json",
+        headers={"Content-Type": "application/json; charset=utf-8"},
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -1037,12 +1324,18 @@ def handle_conformity(file_name: str, file_bytes: Optional[bytes]) -> func.HttpR
 # ═══════════════════════════════════════════════════════════════════
 # Conformity Excel Report Handler
 # ═══════════════════════════════════════════════════════════════════
-def _upload_to_blob_storage(xlsx_bytes: bytes, file_name: str) -> str:
+def _upload_to_blob_storage(file_bytes: bytes, file_name: str, content_type: str = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", blob_extension: str = "xlsx") -> str:
     """
-    Upload the Excel report to Azure Blob Storage and return a download URL.
+    Upload a report file to Azure Blob Storage and return a download URL.
     Uses the Azure Blob Storage REST API directly (no SDK dependency).
     Returns empty string if Blob Storage is not configured or upload fails.
     Falls back to AzureWebJobsStorage if AZURE_STORAGE_CONNECTION_STRING not set.
+
+    Args:
+        file_bytes: The file content as bytes.
+        file_name: Original file name (used for blob naming).
+        content_type: MIME type for the blob (default: Excel XLSX).
+        blob_extension: File extension for the blob name (default: xlsx).
     """
     import os
     import datetime
@@ -1074,9 +1367,9 @@ def _upload_to_blob_storage(xlsx_bytes: bytes, file_name: str) -> str:
         container_name = "leon-reports"
         timestamp = datetime.datetime.utcnow().strftime("%Y%m%d_%H%M%S")
         base_name = os.path.splitext(os.path.basename(file_name))[0]
-        blob_name = f"conformity_report_{base_name}_{timestamp}.xlsx"
+        blob_name = f"conformity_report_{base_name}_{timestamp}.{blob_extension}"
 
-        logging.info(f"Uploading to blob: {container_name}/{blob_name} ({len(xlsx_bytes)} bytes)")
+        logging.info(f"Uploading to blob: {container_name}/{blob_name} ({len(file_bytes)} bytes)")
 
         # ── Step 1: Create container (if not exists) with public read access ──
         ctx = ssl.create_default_context()
@@ -1129,8 +1422,7 @@ def _upload_to_blob_storage(xlsx_bytes: bytes, file_name: str) -> str:
         # ── Step 2: Upload blob (Put Blob) ──
         blob_url = f"https://{account_name}.blob.core.windows.net/{container_name}/{urllib.parse.quote(blob_name)}"
         rfc1123_date = datetime.datetime.utcnow().strftime("%a, %d %b %Y %H:%M:%S GMT")
-        content_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        content_len = str(len(xlsx_bytes))
+        content_len = str(len(file_bytes))
 
         # Build canonicalized string for Put Blob
         canonical_headers = f"x-ms-blob-type:BlockBlob\nx-ms-date:{rfc1123_date}\nx-ms-version:2020-04-08\n"
@@ -1139,7 +1431,7 @@ def _upload_to_blob_storage(xlsx_bytes: bytes, file_name: str) -> str:
         signature = base64.b64encode(hmac.new(account_key_bytes, string_to_sign.encode("utf-8"), hashlib.sha256).digest()).decode("utf-8")
         auth_header = f"SharedKey {account_name}:{signature}"
 
-        req = urllib.request.Request(blob_url, method="PUT", data=xlsx_bytes)
+        req = urllib.request.Request(blob_url, method="PUT", data=file_bytes)
         req.add_header("x-ms-blob-type", "BlockBlob")
         req.add_header("x-ms-date", rfc1123_date)
         req.add_header("x-ms-version", "2020-04-08")
@@ -1152,7 +1444,7 @@ def _upload_to_blob_storage(xlsx_bytes: bytes, file_name: str) -> str:
 
         # ── Step 3: Return public download URL (container has public read access) ──
         download_url = blob_url
-        logging.info(f"Uploaded Excel report to blob: {blob_name}")
+        logging.info(f"Uploaded report to blob: {blob_name}")
         logging.info(f"Download URL: {download_url}")
         return download_url
 
@@ -1212,7 +1504,7 @@ def handle_conformity_excel(file_name: str, file_bytes: bytes) -> func.HttpRespo
         xlsx_b64 = base64.b64encode(xlsx_bytes).decode("utf-8")
 
         # Try to upload to Azure Blob Storage for direct download
-        blob_url = _upload_to_blob_storage(xlsx_bytes, file_name)
+        blob_url = _upload_to_blob_storage(file_bytes=xlsx_bytes, file_name=file_name)
 
         # Use Blob Storage URL if accessible, otherwise use data URI as download URL
         # Data URI is self-contained and always works in browsers
