@@ -551,9 +551,11 @@ def upload_and_validate(req: func.HttpRequest) -> func.HttpResponse:
                 file_name = body.get("fileName", "uploaded_spec.docx")
             elif body and "file" in body:
                 if isinstance(body["file"], str):
+                    # file is a data URI or base64 string
                     file_bytes = _decode_file_content(body["file"])
                     file_name = body.get("fileName", "uploaded_spec.docx")
                 elif isinstance(body["file"], dict):
+                    # Copilot Studio passes file as {"name":"...","contentBytes":"..."}
                     file_name = body["file"].get("name", "uploaded_spec.docx")
                     b64_content = body["file"].get("contentBytes", "") or body["file"].get("content", "")
                     if b64_content:
@@ -1188,7 +1190,7 @@ def conformity(req: func.HttpRequest) -> func.HttpResponse:
         file_bytes = body_bytes
         file_name = req.headers.get("X-File-Name", "conformity_matrix.ods")
 
-    if not file_name:
+    if not file_name or not file_bytes:
         return _error_response("Missing 'fileName' or file content in request.", 422)
 
     from azure_handler import handle_conformity
@@ -1332,3 +1334,279 @@ def conformity_powerbi(req: func.HttpRequest) -> func.HttpResponse:
 
     from azure_handler import handle_conformity_powerbi
     return _safe_handler(handle_conformity_powerbi, file_name, file_bytes)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# ENDPOINT 15: /api/upload-page — HTML file upload page (bypasses content filter)
+# ═══════════════════════════════════════════════════════════════════
+@app.route(route="upload-page", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
+def upload_page(req: func.HttpRequest) -> func.HttpResponse:
+    """Serve an HTML page where users can upload their spec file and get a URL."""
+    html = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LEON — Upload Specification File</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: 'Segoe UI', system-ui, sans-serif; background: #f0f2f5; min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+.container { background: white; border-radius: 16px; box-shadow: 0 4px 24px rgba(0,0,0,0.1); max-width: 600px; width: 90%; padding: 48px; }
+h1 { color: #0078d4; font-size: 28px; margin-bottom: 8px; }
+.subtitle { color: #605e5c; margin-bottom: 32px; font-size: 15px; }
+.upload-area { border: 2px dashed #0078d4; border-radius: 12px; padding: 48px 24px; text-align: center; cursor: pointer; transition: all 0.2s; }
+.upload-area:hover { background: #f3f9fd; border-color: #106ebe; }
+.upload-area.dragover { background: #deecf9; border-color: #106ebe; }
+.upload-icon { font-size: 48px; color: #0078d4; margin-bottom: 16px; }
+.upload-text { color: #605e5c; font-size: 15px; margin-bottom: 8px; }
+.upload-hint { color: #a19f9d; font-size: 13px; }
+input[type="file"] { display: none; }
+.btn { background: #0078d4; color: white; border: none; border-radius: 8px; padding: 12px 32px; font-size: 15px; cursor: pointer; margin-top: 24px; width: 100%; transition: background 0.2s; }
+.btn:hover { background: #106ebe; }
+.btn:disabled { background: #c8c6c4; cursor: not-allowed; }
+.result { margin-top: 32px; padding: 24px; border-radius: 12px; display: none; }
+.result.success { background: #dff6dd; border: 1px solid #107c10; }
+.result.error { background: #fde7e9; border: 1px solid #d13438; }
+.result h3 { margin-bottom: 12px; font-size: 16px; }
+.url-box { background: white; border: 1px solid #d2d0ce; border-radius: 8px; padding: 16px; margin: 16px 0; word-break: break-all; font-family: monospace; font-size: 13px; color: #0078d4; }
+.copy-btn { background: #107c10; color: white; border: none; border-radius: 6px; padding: 8px 20px; font-size: 14px; cursor: pointer; margin-top: 8px; }
+.copy-btn:hover { background: #0b6a0b; }
+.instructions { margin-top: 24px; padding: 16px; background: #f3f9fd; border-radius: 8px; font-size: 14px; color: #605e5c; line-height: 1.6; }
+.instructions ol { padding-left: 20px; }
+.instructions li { margin-bottom: 8px; }
+.spinner { display: none; width: 40px; height: 40px; border: 4px solid #f3f3f3; border-top: 4px solid #0078d4; border-radius: 50%; animation: spin 1s linear infinite; margin: 24px auto; }
+@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div class="container">
+<h1>LEON Spec Upload</h1>
+<p class="subtitle">Upload your specification file to get a shareable link for LEON Copilot Studio</p>
+
+<div class="upload-area" id="dropZone" onclick="document.getElementById('fileInput').click()">
+<div class="upload-icon">📄</div>
+<div class="upload-text">Click to browse or drag & drop your file here</div>
+<div class="upload-hint">Supported: .docx, .pdf, .txt (max 25 MB)</div>
+</div>
+<input type="file" id="fileInput" accept=".docx,.pdf,.txt">
+
+<div class="spinner" id="spinner"></div>
+
+<button class="btn" id="uploadBtn" onclick="uploadFile()" disabled>Upload & Get Link</button>
+
+<div class="result" id="result">
+<h3 id="resultTitle"></h3>
+<div id="resultContent"></div>
+</div>
+
+<div class="instructions">
+<strong>How to use this link in LEON:</strong>
+<ol>
+<li>Upload your file above and copy the generated link</li>
+<li>Go to LEON in Copilot Studio (Teams)</li>
+<li>Type "validate spec" or "validate this spec"</li>
+<li>When LEON asks for the link, paste the URL you copied</li>
+<li>LEON will download and validate your specification</li>
+</ol>
+</div>
+</div>
+
+<script>
+const dropZone = document.getElementById('dropZone');
+const fileInput = document.getElementById('fileInput');
+const uploadBtn = document.getElementById('uploadBtn');
+const spinner = document.getElementById('spinner');
+const result = document.getElementById('result');
+const resultTitle = document.getElementById('resultTitle');
+const resultContent = document.getElementById('resultContent');
+let selectedFile = null;
+
+fileInput.addEventListener('change', (e) => {
+    if (e.target.files.length > 0) {
+        selectedFile = e.target.files[0];
+        uploadBtn.disabled = false;
+        dropZone.querySelector('.upload-text').textContent = selectedFile.name;
+    }
+});
+
+dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('dragover'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+dropZone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    dropZone.classList.remove('dragover');
+    if (e.dataTransfer.files.length > 0) {
+        selectedFile = e.dataTransfer.files[0];
+        fileInput.files = e.dataTransfer.files;
+        uploadBtn.disabled = false;
+        dropZone.querySelector('.upload-text').textContent = selectedFile.name;
+    }
+});
+
+async function uploadFile() {
+    if (!selectedFile) return;
+    uploadBtn.disabled = true;
+    uploadBtn.textContent = 'Uploading...';
+    spinner.style.display = 'block';
+    result.style.display = 'none';
+
+    const formData = new FormData();
+    formData.append('file', selectedFile);
+
+    try {
+        const code = new URLSearchParams(window.location.search).get('code');
+        const url = code ? '/api/upload-and-get-url?code=' + encodeURIComponent(code) : '/api/upload-and-get-url';
+        const resp = await fetch(url, { method: 'POST', body: formData });
+        const data = await resp.json();
+
+        spinner.style.display = 'none';
+        result.style.display = 'block';
+
+        if (resp.ok && data.fileUrl) {
+            result.className = 'result success';
+            resultTitle.textContent = '✅ Upload Successful!';
+            resultContent.innerHTML = `
+                <p>Your file is ready. Copy this link and paste it into LEON:</p>
+                <div class="url-box" id="urlBox">${data.fileUrl}</div>
+                <button class="copy-btn" onclick="copyUrl()">📋 Copy Link</button>
+                <p style="margin-top:12px;font-size:13px;color:#605e5c;">File: ${data.fileName} (${(data.fileSize/1024).toFixed(0)} KB)</p>
+            `;
+        } else {
+            result.className = 'result error';
+            resultTitle.textContent = '❌ Upload Failed';
+            resultContent.innerHTML = `<p>${data.error || data.answer || 'Unknown error'}</p>`;
+        }
+    } catch (err) {
+        spinner.style.display = 'none';
+        result.style.display = 'block';
+        result.className = 'result error';
+        resultTitle.textContent = '❌ Upload Failed';
+        resultContent.innerHTML = `<p>${err.message}</p>`;
+    }
+
+    uploadBtn.disabled = false;
+    uploadBtn.textContent = 'Upload & Get Link';
+}
+
+function copyUrl() {
+    const urlText = document.getElementById('urlBox').textContent;
+    navigator.clipboard.writeText(urlText).then(() => {
+        const btn = document.querySelector('.copy-btn');
+        btn.textContent = '✅ Copied!';
+        setTimeout(() => btn.textContent = '📋 Copy Link', 2000);
+    });
+}
+</script>
+</body>
+</html>"""
+    return func.HttpResponse(
+        body=html,
+        status_code=200,
+        mimetype="text/html",
+        headers={"Content-Type": "text/html; charset=utf-8"},
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════
+# ENDPOINT 16: /api/upload-and-get-url — Upload file to Blob Storage, return URL
+# ═══════════════════════════════════════════════════════════════════
+@app.route(route="upload-and-get-url", methods=["POST"])
+def upload_and_get_url(req: func.HttpRequest) -> func.HttpResponse:
+    """
+    Upload a specification file to Azure Blob Storage and return a public URL.
+    This URL can be pasted into Copilot Studio to validate the file via /api/validate-url.
+
+    Accepts: multipart/form-data (field "file"), or JSON { "fileName": "...", "fileContent": "<base64>" }
+    Returns: { "fileUrl": "https://...blob.core.windows.net/...", "fileName": "...", "fileSize": 12345 }
+    """
+    logging.info("=== /api/upload-and-get-url called ===")
+
+    content_type = req.headers.get("Content-Type", "")
+    body_bytes = req.get_body()
+    file_name = None
+    file_bytes = None
+
+    # ── Path A: multipart/form-data ────────────────────────────────
+    if "multipart/form-data" in content_type:
+        try:
+            file_name, file_bytes = _parse_multipart(body_bytes, content_type)
+            logging.info(f"Multipart: {file_name}, {len(file_bytes)} bytes")
+        except Exception as exc:
+            logging.error(f"Multipart parse failed: {exc}")
+
+    # ── Path B: JSON body (base64) ──────────────────────────────────
+    if not file_bytes:
+        try:
+            body = _get_body(req)
+            if body and "fileContent" in body:
+                file_bytes = _decode_file_content(body["fileContent"])
+                file_name = body.get("fileName", "uploaded_spec.docx")
+            elif body and "file" in body and isinstance(body["file"], str):
+                file_bytes = _decode_file_content(body["file"])
+                file_name = body.get("fileName", "uploaded_spec.docx")
+        except Exception as exc:
+            logging.error(f"JSON parse error: {exc}")
+
+    # ── Path C: raw binary with X-File-Name header ─────────────────
+    if not file_bytes and req.headers.get("X-File-Name"):
+        file_bytes = body_bytes
+        file_name = req.headers.get("X-File-Name", "uploaded_spec.docx")
+
+    if not file_bytes:
+        return _error_response("No file content found. Use multipart/form-data with field 'file'.", 400)
+
+    if not file_name:
+        file_name = "uploaded_spec.docx"
+
+    # Validate extension
+    suffix = Path(file_name).suffix.lower()
+    if suffix not in {".txt", ".docx", ".pdf"}:
+        return _error_response(f"File type '{suffix}' not accepted. Use .txt, .docx, or .pdf.", 400)
+
+    # Max 25 MB
+    if len(file_bytes) > 25 * 1024 * 1024:
+        return _error_response("File too large. Maximum size is 25 MB.", 413)
+
+    # Upload to Blob Storage
+    from azure_handler import _upload_to_blob_storage
+    ct_map = {
+        ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ".pdf": "application/pdf",
+        ".txt": "text/plain",
+    }
+    content_type_blob = ct_map.get(suffix, "application/octet-stream")
+    blob_url = _upload_to_blob_storage(
+        file_bytes=file_bytes,
+        file_name=file_name,
+        content_type=content_type_blob,
+        blob_extension=suffix.lstrip("."),
+    )
+
+    if not blob_url:
+        # Fallback: save locally and return a data URI
+        import base64 as _b64
+        b64 = _b64.b64encode(file_bytes).decode("ascii")
+        data_uri = f"data:{content_type_blob};base64,{b64}"
+        logging.warning("Blob upload failed — returning data URI (may be too large for Copilot Studio)")
+        return func.HttpResponse(
+            body=json.dumps({
+                "fileUrl": data_uri,
+                "fileName": file_name,
+                "fileSize": len(file_bytes),
+                "warning": "Blob Storage not configured — returned as data URI. Configure AzureWebJobsStorage for public URLs.",
+            }, ensure_ascii=False),
+            status_code=200,
+            mimetype="application/json",
+            headers={"Content-Type": "application/json; charset=utf-8"},
+        )
+
+    logging.info(f"Upload-and-get-url success: {file_name} -> {blob_url}")
+    return func.HttpResponse(
+        body=json.dumps({
+            "fileUrl": blob_url,
+            "fileName": file_name,
+            "fileSize": len(file_bytes),
+        }, ensure_ascii=False),
+        status_code=200,
+        mimetype="application/json",
+        headers={"Content-Type": "application/json; charset=utf-8"},
+    )

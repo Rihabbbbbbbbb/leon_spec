@@ -1367,7 +1367,11 @@ def _upload_to_blob_storage(file_bytes: bytes, file_name: str, content_type: str
         container_name = "leon-reports"
         timestamp = datetime.datetime.utcnow().strftime("%Y%m%d_%H%M%S")
         base_name = os.path.splitext(os.path.basename(file_name))[0]
-        blob_name = f"conformity_report_{base_name}_{timestamp}.{blob_extension}"
+        # Use a generic prefix if the blob_extension is not xlsx (not a conformity report)
+        if blob_extension == "xlsx":
+            blob_name = f"conformity_report_{base_name}_{timestamp}.{blob_extension}"
+        else:
+            blob_name = f"spec_{base_name}_{timestamp}.{blob_extension}"
 
         logging.info(f"Uploading to blob: {container_name}/{blob_name} ({len(file_bytes)} bytes)")
 
