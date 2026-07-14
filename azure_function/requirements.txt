@@ -6,14 +6,16 @@ python-docx>=0.8.11
 PyPDF2>=3.0.0
 openai>=1.0.0
 azure-core>=1.30.0
-azure-search-documents>=11.6.0b8
+azure-search-documents>=11.6.0
 azure-identity>=1.17.0
 python-dotenv>=1.0.0
-# Explicit azure-core namespace packages for Flex remote build
-azure-ai-search-documents>=11.6.0b8
 # PDF report generation
 fpdf2>=2.7.8
 # Conformity matrix analysis (ODS/XLSX reading + charts)
 odfpy>=1.4.1
 openpyxl>=3.1.0
 matplotlib>=3.8.0
+# Azure Blob Storage (for Excel report file delivery)
+azure-storage-blob>=12.19.0
+# lxml (for ODS XML fixing — malformed XML recovery)
+lxml>=4.9.0

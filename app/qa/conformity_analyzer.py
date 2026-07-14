@@ -1377,17 +1377,17 @@ def _score_comment(comment: str, signals: List[tuple]) -> List[tuple]:
 
 def detect_inconsistencies(analysis: ConformityAnalysis) -> List[Dict]:
     """
-    Use deterministic rules + optional LLM to detect inconsistencies
-    between conformity status and comment.
+    Detect logical non-coherence in supplier OK responses.
 
-    Deterministic checks (scored system — multiple signals increase severity):
-    - status=OK but comment contains negative language (not ok, fail, pending, deviation, etc.)
-    - status=NOK but comment contains positive language (ok, conform, done, etc.)
-    - status=OK but comment is empty (warning)
-    - status=NA but comment contains conformity language
+    FOCUS: Only analyze items where the supplier marked 'OK' — check if the
+    comment contradicts the OK status (e.g. comment describes non-conformity
+    while status is OK). This is the core non-coherence pattern that matters:
+    status=OK but comment tells a different story.
+
+    Checks performed (OK-items only):
+    - status=OK but comment contains negative/non-conform language
     - status=OK but comment mentions N/A or not applicable
-    - status=OK but comment mentions conflict/contradiction with another requirement
-    - status=NOK but comment is purely factual (measurements) without negative language
+    - status=OK but no comment provided
 
     LLM check (optional): deeper semantic analysis of comment vs status.
     """
@@ -1398,8 +1398,9 @@ def detect_inconsistencies(analysis: ConformityAnalysis) -> List[Dict]:
         comment = item.comment.strip()
         conf_raw = item.conformity_raw.strip()
 
-        # Skip empty rows
-        if cat == "EMPTY" and not comment:
+        # Only analyze OK items — the focus is on supplier-declared OK
+        # with comments that may reveal hidden non-conformity.
+        if cat != "OK":
             continue
 
         # Skip pure domain-code comments (SYS, SW, VE, EE, etc.)
@@ -1407,8 +1408,10 @@ def detect_inconsistencies(analysis: ConformityAnalysis) -> List[Dict]:
 
         issue = None
 
-        # ── Check 1: OK status but negative comment ──
-        if cat == "OK" and comment and not is_domain_only:
+        # ── Check A: OK status but negative/non-conform comment ──
+        # This is the CORE non-coherence detection: the supplier says OK
+        # but the comment language suggests otherwise.
+        if comment and not is_domain_only:
             neg_matches = _score_comment(comment, _NEGATIVE_SIGNALS)
             if neg_matches:
                 score = sum(w for _, w, _ in neg_matches)
@@ -1425,100 +1428,22 @@ def detect_inconsistencies(analysis: ConformityAnalysis) -> List[Dict]:
                     "signals": labels,
                     "matched": matched_texts,
                     "explanation": (
-                        f"Status is '{conf_raw}' (OK) but the comment contains "
-                        f"negative language (signals: {labels}, score: {score}): "
-                        f"'{comment[:200]}'. This suggests the requirement "
-                        f"may NOT actually be conform."
+                        f"Le fournisseur a marqué '{conf_raw}' (OK) mais le "
+                        f"commentaire contient un langage négatif ou de non-conformité "
+                        f"(signaux: {labels}, score: {score}): "
+                        f"'{comment[:200]}'. Incohérence logique — le commentaire "
+                        f"ne correspond pas au statut OK déclaré."
                     ),
                 }
 
-        # ── Check 2: NOK status but positive comment ──
-        if cat == "NOK" and comment and not is_domain_only:
-            pos_matches = _score_comment(comment, _POSITIVE_SIGNALS)
-            # Remove positive matches that are neutralised by negation
-            # (e.g., "not ok" should not count as positive)
-            if _POSITIVE_NEUTRALISER.search(_normalize(comment)):
-                pos_matches = [
-                    m for m in pos_matches
-                    if not _POSITIVE_NEUTRALISER.search(_normalize(comment))
-                ]
-                # If all positive matches were neutralised, clear the list
-                if pos_matches and all(
-                    _POSITIVE_NEUTRALISER.search(_normalize(comment))
-                    for _ in pos_matches
-                ):
-                    pos_matches = []
-
-            neg_matches = _score_comment(comment, _NEGATIVE_SIGNALS)
-
-            if pos_matches and not neg_matches:
-                score = sum(w for _, w, _ in pos_matches)
-                labels = ", ".join(sorted(set(l for l, _, _ in pos_matches)))
-                matched_texts = [t for _, _, t in pos_matches]
-                severity = "error" if score >= 3 else "warning"
-                issue = {
-                    "type": "NOK_POSITIVE_COMMENT",
-                    "severity": severity,
-                    "req_id": item.req_id,
-                    "conformity": conf_raw,
-                    "comment": comment,
-                    "score": score,
-                    "signals": labels,
-                    "matched": matched_texts,
-                    "explanation": (
-                        f"Status is '{conf_raw}' (NOK) but the comment contains "
-                        f"positive language (signals: {labels}, score: {score}): "
-                        f"'{comment[:200]}'. This suggests the requirement "
-                        f"may actually be conform."
-                    ),
-                }
-
-        # ── Check 3: OK status but no comment (warning, only for first column set) ──
-        # Skip if the conformity value itself already contains "ok" (e.g. "EE: ok")
-        # since the value is self-explanatory in that case
-        if cat == "OK" and not comment and item.column_set == 0:
-            if not re.search(r"\bok\b", _normalize(conf_raw)):
-                issue = {
-                    "type": "OK_NO_COMMENT",
-                    "severity": "warning",
-                    "req_id": item.req_id,
-                    "conformity": conf_raw,
-                    "comment": "",
-                    "explanation": (
-                        f"Status is '{conf_raw}' (OK) but no comment is provided. "
-                        f"A comment explaining why the requirement is conform is recommended."
-                    ),
-                }
-
-        # ── Check 4: NA status but comment suggests conformity ──
-        if cat == "NA" and comment and not is_domain_only:
-            pos_matches = _score_comment(comment, _POSITIVE_SIGNALS)
-            cnorm = _normalize(comment)
-            if pos_matches and "not applicable" not in cnorm and "non applicable" not in cnorm:
-                score = sum(w for _, w, _ in pos_matches)
-                labels = ", ".join(sorted(set(l for l, _, _ in pos_matches)))
-                issue = {
-                    "type": "NA_CONFORM_COMMENT",
-                    "severity": "warning",
-                    "req_id": item.req_id,
-                    "conformity": conf_raw,
-                    "comment": comment,
-                    "score": score,
-                    "signals": labels,
-                    "explanation": (
-                        f"Status is '{conf_raw}' (NA) but the comment suggests "
-                        f"conformity (signals: {labels}): '{comment[:200]}'. "
-                        f"Verify if this requirement is truly not applicable."
-                    ),
-                }
-
-        # ── Check 5: OK status but comment mentions N/A or not applicable ──
-        if cat == "OK" and comment and not is_domain_only:
+        # ── Check B: OK status but comment mentions N/A or not applicable ──
+        # Logical gap: if it's not applicable, why is it marked OK?
+        if comment and not is_domain_only and not issue:
             na_match = re.search(
                 r"\b(n/?a|not\s+applicable|non\s+applicable|hors\s+périmètre|hors\s+scope)\b",
                 _normalize(comment),
             )
-            if na_match and not issue:
+            if na_match:
                 issue = {
                     "type": "OK_NA_COMMENT",
                     "severity": "warning",
@@ -1528,105 +1453,33 @@ def detect_inconsistencies(analysis: ConformityAnalysis) -> List[Dict]:
                     "signals": "na_in_ok",
                     "matched": [na_match.group()],
                     "explanation": (
-                        f"Status is '{conf_raw}' (OK) but the comment mentions "
-                        f"'not applicable' / 'N/A': '{comment[:200]}'. "
-                        f"Verify if this requirement should be marked as NA instead."
+                        f"Le fournisseur a marqué '{conf_raw}' (OK) mais le "
+                        f"commentaire mentionne 'N/A' ou 'not applicable': "
+                        f"'{comment[:200]}'. Incohérence — si l'exigence n'est "
+                        f"pas applicable, le statut OK n'est pas cohérent."
                     ),
                 }
 
-        # ── Check 6: NOK status but comment is purely factual (no negative language) ──
-        # This detects cases where NOK is marked but the comment only contains
-        # measurements/specifications without any negative language
-        if cat == "NOK" and comment and not is_domain_only:
-            neg_matches = _score_comment(comment, _NEGATIVE_SIGNALS)
-            pos_matches = _score_comment(comment, _POSITIVE_SIGNALS)
-            # If no negative and no positive signals, and comment looks factual
-            # (contains numbers, units, or technical specifications)
-            if not neg_matches and not pos_matches:
-                has_numbers = bool(re.search(r"\d+\.?\d*\s*(mm|mA|V|Hz|cd|lm|W|°|C|%)", comment))
-                has_technical = bool(re.search(
-                    r"\b(typ|nominal|edge|fald|standard|high|low|luminance|"
-                    r"voltage|current|temperature|brightness|contrast|"
-                    r"frequency|power|consumption)\b", comment, re.IGNORECASE,
-                ))
-                if has_numbers or has_technical:
-                    issue = {
-                        "type": "NOK_FACTUAL_COMMENT",
-                        "severity": "warning",
-                        "req_id": item.req_id,
-                        "conformity": conf_raw,
-                        "comment": comment,
-                        "explanation": (
-                            f"Status is '{conf_raw}' (NOK) but the comment only "
-                            f"contains factual/technical data without negative "
-                            f"language: '{comment[:200]}'. The NOK status may "
-                            f"need justification — verify if this requirement "
-                            f"is truly non-conform."
-                        ),
-                    }
-
-        # ── Check 7: NOK status but comment says "not applicable" ──
-        # If the comment says N/A or not applicable, the status should be NA, not NOK
-        if cat == "NOK" and comment and not is_domain_only and not issue:
-            na_match = re.search(
-                r"\b(n/?a|not\s+applicable|non\s+applicable|hors\s+périmètre|hors\s+scope)\b",
-                _normalize(comment),
-            )
-            if na_match:
+        # ── Check C: OK status but no comment ──
+        # Warning only — OK without explanation is not a logical contradiction
+        # but reduces auditability.
+        if not comment and item.column_set == 0:
+            if not re.search(r"\bok\b", _normalize(conf_raw)):
                 issue = {
-                    "type": "NOK_NA_COMMENT",
+                    "type": "OK_NO_COMMENT",
                     "severity": "warning",
                     "req_id": item.req_id,
                     "conformity": conf_raw,
-                    "comment": comment,
-                    "signals": "na_in_nok",
-                    "matched": [na_match.group()],
+                    "comment": "",
                     "explanation": (
-                        f"Status is '{conf_raw}' (NOK) but the comment mentions "
-                        f"'not applicable' / 'N/A': '{comment[:200]}'. "
-                        f"Verify if this requirement should be marked as NA "
-                        f"instead of NOK."
-                    ),
-                }
-
-        # ── Check 8: NOK status but comment contains pending/TODO language ──
-        # If the comment says "to be confirmed", "in development", "pending",
-        # the NOK may be premature — it's still being worked on
-        if cat == "NOK" and comment and not is_domain_only and not issue:
-            pending_match = re.search(
-                r"\b(to\s+be\s+(confirmed|defined|determined|verified|checked)|"
-                r"in\s+development\s+phase|pending|en\s+cours|à\s+confirmer|"
-                r"à\s+définir|à\s+vérifier)\b",
-                _normalize(comment),
-            )
-            if pending_match:
-                issue = {
-                    "type": "NOK_PENDING_COMMENT",
-                    "severity": "warning",
-                    "req_id": item.req_id,
-                    "conformity": conf_raw,
-                    "comment": comment,
-                    "signals": "pending",
-                    "matched": [pending_match.group()],
-                    "explanation": (
-                        f"Status is '{conf_raw}' (NOK) but the comment contains "
-                        f"pending/development language: '{comment[:200]}'. "
-                        f"The requirement may still be in progress — "
-                        f"verify if NOK is the correct status or if it should "
-                        f"be marked as 'in progress' / 'pending'."
+                        f"Le fournisseur a marqué '{conf_raw}' (OK) sans "
+                        f"commentaire. Un commentaire justifiant la conformité "
+                        f"est recommandé pour l'auditabilité."
                     ),
                 }
 
         if issue:
             inconsistencies.append(issue)
-
-    # ── Optional LLM deep analysis ──────────────────────────────
-    # Only if we have inconsistencies and LLM is available
-    if inconsistencies:
-        try:
-            _llm_deep_analysis(analysis, inconsistencies)
-        except Exception:
-            pass  # LLM is optional; deterministic checks are sufficient
 
     analysis.inconsistencies = inconsistencies
     return inconsistencies
@@ -1725,6 +1578,88 @@ _OK_SUSPICION_PATTERNS: List[tuple] = [
     # Rejected / refusal
     (r"\b(reject|refus|dismiss|decline|réfus)\b",
      "rejected", 3),
+
+    # ── Additional patterns from negative signal detection ──
+    # Fail / defect / bug / broken (severity: 3 — strong non-conformity signals)
+    (r"\b(fail(ed|ure)?|defect|bug|broken)\b",
+     "fail_defect", 3),
+
+    # Missing / incomplete (severity: 2)
+    (r"\b(missing|incomplete)\b",
+     "missing_incomplete", 2),
+
+    # Does not meet / comply / satisfy (severity: 3)
+    (r"\b(does\s+not|do\s+not|doesn'?t|don'?t)\s*(meet|comply|satisf|fulfil)",
+     "not_meet", 3),
+    (r"\bnot\s+(met|satisfied|achieved|fulfilled|compliant)\b",
+     "not_met", 3),
+
+    # Non-conformity prefixes (non conform, non ok, non test, not ok)
+    (r"\bnon\s*(conform|ok|test|verif|implement)\b",
+     "non_conformity", 3),
+    (r"\bnot?\s*(?:be\s+)?(ok|conform|test|implement|done|complete|met|satisf)\b",
+     "negated_conformity", 3),
+
+    # French: pas conforme / pas ok / pas terminé / pas fait / pas prêt / pas validé
+    (r"\bpas\s+(conforme|ok|termin|fait|prêt|pret|valid)\b",
+     "fr_pas_conforme", 3),
+    (r"\bnon\s*conforme\b",
+     "fr_non_conforme", 3),
+    (r"\b(pas\s+(possible|capable|en\s+mesure))\b",
+     "fr_cannot", 3),
+
+    # Problème / souci (French problem/issue)
+    (r"\b(problème|souci|préoccupation)\b",
+     "fr_problem", 2),
+
+    # Deviation / derogation / waiver (French)
+    (r"\b(dérogation|écart|dispense)\b",
+     "fr_deviation", 2),
+
+    # Partial / limited (French)
+    (r"\b(partiel|partielle|limité|limitée|solution\s+de\s+rechange)\b",
+     "fr_partial", 2),
+
+    # Conflict / contradiction (French)
+    (r"\b(conflit|contradiction|incohérent|incohérence)\b",
+     "fr_conflict", 2),
+
+    # Refusé / refusée (French rejected)
+    (r"\b(refus(é|ée|er))\b",
+     "fr_rejected", 3),
+
+    # Delay / late / retard
+    (r"\b(delay|late|overdue|retard)\b",
+     "delay", 1),
+
+    # Under review / investigation
+    (r"\b(under\s+(review|investigation)|being\s+(reviewed|investigated))\b",
+     "under_review", 2),
+
+    # TODO / TBD / TBA
+    (r"\b(todo|tbd|tba)\b",
+     "todo", 1),
+
+    # No cybersecurity / no safety / no solution / no support / no capability
+    (r"\bno\s+(cybersecurity|security|safety|solution|way|support|capability)\b",
+     "no_noun", 2),
+
+    # Still / remaining / outstanding (single words, broader)
+    (r"\b(still|remaining|outstanding|not\s+yet)\b",
+     "still_outstanding", 1),
+    (r"\b(reste|encore|pas\s+encore)\b",
+     "fr_remaining", 1),
+
+    # Pending / waiting / blocked / not ready / not done / not available
+    (r"\b(pending|wait|block|not\s+ready|not\s+done|not\s+available|"
+     r"not\s+\w+(?:\s+\w+)?\s+yet)\b",
+     "pending", 2),
+
+    # KO (French rejection)
+    (r"\bko\b", "ko", 3),
+
+    # Error
+    (r"\berror\b", "error", 2),
 ]
 
 
@@ -1741,94 +1676,94 @@ def _generate_ai_comment_ok(
     if "na_language" in labels:
         return (
             "⚠️ Le commentaire mentionne 'N/A' ou 'not applicable' mais le "
-            "statut est OK. Vérifier si cette exigence devrait être classée NA. "
-            "Si l'exigence est réellement applicable et OK, le commentaire doit "
-            "le justifier clairement."
+            "statut est OK. Incohérence logique — si l'exigence n'est pas "
+            "applicable, le statut OK ne correspond pas au commentaire. "
+            "Vérifier la cohérence entre le statut déclaré et le contenu."
         )
     if "cannot" in labels:
         return (
             "⚠️ Le commentaire indique une impossibilité ou incapacité technique "
             "('cannot', 'unable', 'impossible') alors que le statut FNR est OK. "
-            "Ceci est contradictoire — si quelque chose ne peut pas être fait, "
-            "le statut devrait être NOK. Vérifier la cohérence."
+            "Incohérence logique — le commentaire décrit une non-conformité "
+            "tandis que le statut déclare OK. Vérifier la cohérence."
         )
     if "not_responsible" in labels:
         return (
             "⚠️ Le fournisseur décline sa responsabilité dans le commentaire "
-            "mais a marqué OK. Si le fournisseur n'est pas responsable de cette "
-            "exigence, le statut devrait être NA (non applicable). Sinon, le "
-            "commentaire doit expliquer comment l'exigence est satisfaite."
+            "mais a marqué OK. Incohérence logique — si le fournisseur n'est "
+            "pas responsable de cette exigence, le commentaire contredit le "
+            "statut OK. Vérifier la cohérence."
         )
     if "rejected" in labels:
         return (
             "⚠️ Le commentaire contient un langage de refus/rejet alors que le "
-            "statut est OK. Incohérence majeure — un rejet implique NOK. "
-            "Vérifier si le statut doit être corrigé."
+            "statut est OK. Incohérence logique majeure — le commentaire "
+            "décrit un refus mais le statut indique OK. Vérifier la cohérence."
         )
     if "pending_confirmation" in labels or "in_development" in labels:
         return (
             "⚠️ Le commentaire indique que ce point est encore en cours de "
             "développement ou en attente de confirmation, mais le statut est OK. "
-            "Un statut OK ne devrait être attribué qu'une fois la conformité "
-            "pleinement validée. Envisager un statut temporaire ou ajouter "
-            "une condition dans le commentaire."
+            "Incohérence logique — le commentaire suggère que la conformité "
+            "n'est pas encore validée. Vérifier la cohérence entre le statut "
+            "déclaré et l'état réel."
         )
     if "needs_action" in labels or "stla_action" in labels:
         return (
             "⚠️ Le commentaire indique qu'une action est nécessaire (par le "
-            "fournisseur ou STLA), mais le statut est déjà OK. Si des actions "
-            "sont encore requises, le statut OK est prématuré. "
-            "Vérifier si ces actions sont des formalités ou des prérequis "
-            "bloquants."
+            "fournisseur ou STLA), mais le statut est déjà OK. Incohérence "
+            "logique — si des actions sont encore requises, le commentaire "
+            "contredit le statut OK. Vérifier la cohérence."
         )
     if "alternative_approach" in labels:
         return (
             "⚠️ Le commentaire mentionne une approche alternative, une déviation "
             "ou une substitution par rapport à l'exigence originale. Bien que le "
-            "statut soit OK, l'approche alternative doit être formellement "
-            "acceptée par STLA. Vérifier que la déviation est documentée."
+            "statut soit OK, l'approche alternative n'est pas documentée dans "
+            "le statut. Vérifier la cohérence."
         )
     if "conflict" in labels:
         return (
             "⚠️ Le commentaire mentionne un conflit ou une contradiction avec "
-            "une autre exigence. Le statut OK peut ne pas refléter cette "
-            "situation — vérifier si le conflit impacte la conformité réelle."
+            "une autre exigence. Le statut OK ne reflète pas cette situation "
+            "décrite dans le commentaire — incohérence logique. "
+            "Vérifier la cohérence."
         )
     if "partial_limited" in labels:
         return (
             "⚠️ Le commentaire suggère une conformité partielle ou limitée "
             "('partial', 'limited to', 'only for') alors que le statut est OK. "
-            "Si la conformité n'est que partielle, préciser les limitations "
-            "dans le commentaire et évaluer si le statut OK est approprié."
+            "Incohérence logique — le commentaire décrit des limitations "
+            "qui contredisent un statut OK complet. Vérifier la cohérence."
         )
     if "temporary" in labels:
         return (
             "⚠️ Le commentaire mentionne une solution temporaire ou provisoire. "
-            "Un statut OK avec une solution temporaire peut être acceptable, "
-            "mais doit être documenté avec un plan d'action pour la solution "
-            "définitive."
+            "Le statut OK ne mentionne pas cette condition temporaire — "
+            "incohérence logique. Vérifier la cohérence entre le statut "
+            "et le commentaire."
         )
     if "remaining" in labels:
         return (
             "⚠️ Le commentaire indique qu'il reste des éléments à compléter. "
-            "Le statut OK est prématuré tant que tous les éléments ne sont "
-            "pas finalisés. Vérifier le statut réel de ces éléments restants."
+            "Le statut OK ne reflète pas ces éléments restants — "
+            "incohérence logique. Vérifier la cohérence."
         )
 
     # Generic fallback based on score
     if score >= 3:
         return (
-            f"⚠️ Le commentaire contient plusieurs signaux préoccupants "
-            f"({', '.join(labels)}) qui suggèrent que la conformité n'est "
-            f"peut-être pas totalement acquise. Une revue humaine est "
-            f"recommandée pour vérifier la cohérence entre le statut OK "
-            f"et le contenu du commentaire."
+            f"⚠️ Le commentaire contient plusieurs signaux ({', '.join(labels)}) "
+            f"qui contredisent le statut OK déclaré par le fournisseur. "
+            f"Incohérence logique — le commentaire ne correspond pas au "
+            f"statut OK. Une revue humaine est recommandée pour vérifier "
+            f"la cohérence."
         )
     if score >= 1:
         return (
             f"ℹ️ Le commentaire présente des signaux mineurs "
-            f"({', '.join(labels)}) qui méritent attention. "
-            f"Vérifier que le statut OK est bien justifié malgré ces éléments."
+            f"({', '.join(labels)}) qui ne correspondent pas au statut OK. "
+            f"Vérifier la cohérence entre le statut déclaré et le commentaire."
         )
     return ""
 
@@ -1837,12 +1772,18 @@ def analyze_ok_deep(analysis: ConformityAnalysis) -> List[Dict]:
     """
     Deep-analyze OK conformity items to detect hidden non-conformity signals.
 
-    For each OK item with a non-trivial comment, checks if the comment language
-    suggests the requirement may NOT actually be fully conform, despite the
-    supplier marking it OK. Generates an AI-style analysis comment explaining
-    the concern.
+    Unified analysis combining:
+    - Suspicion pattern detection (20+ categories: pending, cannot, N/A language,
+      rejected, alternative approach, partial, temporary, missing, defect, etc.)
+    - OK_NO_COMMENT detection (OK without justifying comment)
+    - Negative signal scoring from comprehensive pattern library
 
-    Only analyzes OK items (not NOK, NA, or EMPTY).
+    For each OK item, checks if the comment language suggests the requirement
+    may NOT actually be fully conform, despite the supplier marking it OK.
+    Generates an AI-style analysis comment explaining the concern.
+
+    Replaces the old separate detect_inconsistencies() + analyze_ok_deep()
+    (which were analyzing the same OK items with overlapping patterns).
     """
     findings: List[Dict] = []
 
@@ -1851,7 +1792,29 @@ def analyze_ok_deep(analysis: ConformityAnalysis) -> List[Dict]:
             continue
 
         comment = item.comment.strip()
+        conf_raw = item.conformity_raw.strip()
+
+        # ── Check 0: OK status but no comment provided ──
+        # Warning only — OK without explanation is not a logical contradiction
+        # but reduces auditability. Only flag if conformity_raw is just "/"
+        # (undocumented OK), not when raw contains explicit OK signals.
         if not comment:
+            if not re.search(r"\bok\b", _normalize(conf_raw)):
+                findings.append({
+                    "reqId": item.req_id,
+                    "reference": item.reference,
+                    "conformity": conf_raw,
+                    "comment": "",
+                    "score": 1,
+                    "signals": ["ok_no_comment"],
+                    "matched": ["no_comment"],
+                    "aiComment": (
+                        f"ℹ️ Le fournisseur a marqué '{conf_raw}' (OK) sans "
+                        f"commentaire justificatif. Un commentaire expliquant "
+                        f"la conformité est recommandé pour l'auditabilité."
+                    ),
+                    "severity": "info",
+                })
             continue
 
         # Skip pure domain code comments (these are just domain assignments, not real comments)
@@ -1864,7 +1827,7 @@ def analyze_ok_deep(analysis: ConformityAnalysis) -> List[Dict]:
         ):
             continue
 
-        # Score the comment against suspicion patterns
+        # Score the comment against ALL suspicion patterns
         cnorm = _normalize(comment)
         matches: List[tuple] = []
         for pattern, label, weight in _OK_SUSPICION_PATTERNS:
@@ -1876,12 +1839,12 @@ def analyze_ok_deep(analysis: ConformityAnalysis) -> List[Dict]:
             continue
 
         score = sum(w for _, w, _ in matches)
-        ai_comment = _generate_ai_comment_ok(comment, matches, item.conformity_raw)
+        ai_comment = _generate_ai_comment_ok(comment, matches, conf_raw)
 
         findings.append({
             "reqId": item.req_id,
             "reference": item.reference,
-            "conformity": item.conformity_raw,
+            "conformity": conf_raw,
             "comment": comment[:300],
             "score": score,
             "signals": sorted(set(l for l, _, _ in matches)),
@@ -1894,74 +1857,9 @@ def analyze_ok_deep(analysis: ConformityAnalysis) -> List[Dict]:
     findings.sort(key=lambda f: f["score"], reverse=True)
 
     analysis.ok_deep_findings = findings
+    # Backward compat: populate inconsistencies with the same unified findings
+    analysis.inconsistencies = findings
     return findings
-    """
-    Use GPT-4o to perform deeper semantic analysis of inconsistencies.
-    Enhances existing inconsistencies with AI insights and may find new ones.
-    """
-    try:
-        from app.embeddings import call_llm
-    except ImportError:
-        return
-
-    # Build a summary of items for the LLM (limit to avoid token overflow)
-    # Focus on items that have both a conformity value and a comment
-    items_with_data = [
-        item for item in analysis.items
-        if item.conformity_raw and item.comment
-    ]
-
-    if not items_with_data:
-        return
-
-    # Limit to first 100 items for LLM analysis
-    sample = items_with_data[:100]
-
-    items_text = "\n".join(
-        f"- REQ: {item.req_id} | Conformité: '{item.conformity_raw}' | "
-        f"Commentaire: '{item.comment[:150]}'"
-        for item in sample
-    )
-
-    system_msg = (
-        "You are a conformity matrix auditor for Stellantis automotive specifications. "
-        "Analyze each requirement's conformity status vs its comment and identify "
-        "inconsistencies. Return a JSON array of findings, each with: "
-        '"req_id", "issue_type", "severity" (error/warning), "explanation". '
-        "Only flag genuine inconsistencies where the status and comment contradict. "
-        "Return [] if no issues found."
-    )
-
-    user_msg = (
-        f"Analyze these {len(sample)} requirements from the conformity matrix "
-        f"(sheet: {analysis.sheet_name}):\n\n{items_text}\n\n"
-        "Identify inconsistencies between conformity status and comments. "
-        "Return JSON array only."
-    )
-
-    try:
-        response = call_llm(system_msg, user_msg, temperature=0.1, max_tokens=2000)
-        if response and response.strip():
-            # Try to parse JSON from response
-            import json
-            # Find JSON array in response
-            json_match = re.search(r'\[.*\]', response, re.DOTALL)
-            if json_match:
-                llm_findings = json.loads(json_match.group())
-                # Merge LLM findings with deterministic ones
-                existing_req_ids = {d["req_id"] for d in inconsistencies}
-                for finding in llm_findings:
-                    if finding.get("req_id") not in existing_req_ids:
-                        inconsistencies.append({
-                            "type": "AI_DETECTED",
-                            "severity": finding.get("severity", "warning"),
-                            "req_id": finding.get("req_id", ""),
-                            "conformity": "",
-                            "comment": "",
-                            "explanation": finding.get("explanation", ""),
-                        })
-    except Exception:
-        pass  # LLM analysis is best-effort
 
 
 # ── Pie chart generation ────────────────────────────────────────────
@@ -2221,21 +2119,28 @@ def generate_report_text(analysis: ConformityAnalysis) -> str:
             lines.append(f"  🔍 {item.req_id}: {conf_str}{comment_str}")
         lines.append("")
 
-    # Inconsistencies
+    # Deep analysis findings (unified: covers all OK suspicion signals)
     if analysis.inconsistencies:
         lines.append("─" * 50)
-        lines.append(f"INCOHÉRENCES DÉTECTÉES PAR L'IA — {len(analysis.inconsistencies)}")
+        lines.append(f"ANALYSE APPROFONDIE DES RÉPONSES OK — {len(analysis.inconsistencies)} point(s) d'attention")
         lines.append("─" * 50)
         for inc in analysis.inconsistencies:
-            icon = "🔴" if inc["severity"] == "error" else "🟡"
-            lines.append(f"  {icon} [{inc['type']}] {inc['req_id']}")
-            lines.append(f"     Conformité: '{inc['conformity']}'")
-            lines.append(f"     Commentaire: '{inc['comment']}'")
-            lines.append(f"     Analyse: {inc['explanation']}")
+            sev = inc.get("severity", "warning")
+            icon = "🔴" if sev == "error" else "🟡" if sev == "warning" else "ℹ️"
+            signals = ", ".join(inc.get("signals", []))
+            lines.append(f"  {icon} [{sev.upper()}] {inc.get('reqId', inc.get('req_id', ''))} (score: {inc.get('score', 0)})")
+            if signals:
+                lines.append(f"     Signaux: {signals}")
+            if inc.get('conformity'):
+                lines.append(f"     Conformité: '{inc['conformity']}'")
+            if inc.get('comment'):
+                lines.append(f"     Commentaire: '{inc['comment'][:200]}'")
+            if inc.get('aiComment'):
+                lines.append(f"     Analyse: {inc['aiComment']}")
             lines.append("")
     else:
         lines.append("─" * 50)
-        lines.append("✅ AUCUNE INCOHÉRENCE DÉTECTÉE")
+        lines.append("✅ ANALYSE APPROFONDIE DES OK — Aucun point d'attention détecté")
         lines.append("─" * 50)
         lines.append("")
 
@@ -2252,28 +2157,27 @@ def generate_report_text(analysis: ConformityAnalysis) -> str:
 
 def analyze_conformity_matrix(filepath: str, file_name: str = "") -> ConformityAnalysis:
     """
-    Complete pipeline: extract → classify → detect inconsistencies → chart → report.
+    Complete pipeline: extract → classify → deep analyze OK → chart → report.
 
     Args:
         filepath: Path to the ODS or XLSX file.
         file_name: Display name for the file.
 
     Returns:
-        ConformityAnalysis with all data, stats, inconsistencies, chart, and report.
+        ConformityAnalysis with all data, stats, findings, chart, and report.
     """
     # 1. Extract data
     analysis = extract_conformity_data(filepath, file_name)
 
-    # 2. Detect inconsistencies (deterministic + LLM)
-    detect_inconsistencies(analysis)
-
-    # 3. Deep-analyze OK responses for hidden non-conformity
+    # 2. Deep-analyze OK responses for hidden non-conformity (unified analysis)
+    #    This replaces the old separate detect_inconsistencies() + analyze_ok_deep()
+    #    which were analyzing the same OK items with overlapping patterns.
     analyze_ok_deep(analysis)
 
-    # 4. Generate pie chart
+    # 3. Generate pie chart
     generate_pie_chart(analysis)
 
-    # 5. Generate report text
+    # 4. Generate report text
     generate_report_text(analysis)
 
     return analysis
@@ -2379,7 +2283,7 @@ def compare_matrices(filepaths: List[str], file_names: Optional[List[str]] = Non
     analyses: List[ConformityAnalysis] = []
     for fp, fn in zip(filepaths, file_names):
         analysis = extract_conformity_data(fp, fn)
-        detect_inconsistencies(analysis)
+        analyze_ok_deep(analysis)
         analyses.append(analysis)
 
         comparison.matrices.append({

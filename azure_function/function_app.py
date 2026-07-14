@@ -66,23 +66,71 @@ def _decode_file_content(content_str) -> bytes:
     3. JSON-serialized blob (e.g. from Power Fx JSON()): "UEsDBBQ..."
     4. Raw text content
     5. Bytes directly (from Power Automate)
+    6. Dict/object with 'content' or 'contentBytes' key (Copilot Studio file object)
+    7. URL-safe base64 (uses - and _ instead of + and /)
+    8. JSON string representing a file object (from Copilot Studio JSON() function):
+       '{"content":"UEsDBBQ...","name":"file.xlsm","contentType":"..."}'
+    9. Raw binary data (from application/octet-stream) — bytes passed directly
     
     Returns the decoded bytes.
     """
     import base64
     import re
+    import json as _json
     
     if not content_str:
         raise ValueError("Empty or invalid content string")
     
-    # If already bytes, return as-is
+    # If already bytes, return as-is (Case 5 / Case 9)
     if isinstance(content_str, bytes):
         return content_str
+    
+    # Case 6: Dict/object with content key (Copilot Studio file object)
+    if isinstance(content_str, dict):
+        b64 = (content_str.get("content", "") or
+               content_str.get("contentBytes", "") or
+               content_str.get("Content", "") or
+               content_str.get("data", "") or
+               content_str.get("$base64", ""))
+        if b64:
+            return _decode_file_content(b64)
+        raise ValueError("Dict content has no 'content' or 'contentBytes' key")
     
     if not isinstance(content_str, str):
         raise ValueError(f"Invalid content type: {type(content_str)}")
     
     s = content_str.strip()
+    
+    # Case 8: JSON string representing a file object
+    # This happens when Copilot Studio uses =JSON(Topic.ConformityFile, JSONFormat.IncludeBinaryData)
+    # The output is a JSON string like: {"content":"UEsDBBQ...","name":"file.xlsm"}
+    if len(s) > 20 and s.startswith('{') and s.endswith('}'):
+        try:
+            obj = _json.loads(s)
+            if isinstance(obj, dict):
+                # Try to extract file content from the JSON object
+                b64 = (obj.get("content", "") or
+                       obj.get("contentBytes", "") or
+                       obj.get("Content", "") or
+                       obj.get("data", "") or
+                       obj.get("$base64", ""))
+                if b64:
+                    logging.info(f"Decoded JSON file object, content length: {len(b64)}")
+                    return _decode_file_content(b64)
+                # Maybe the object itself has nested content
+                for key in obj:
+                    val = obj[key]
+                    if isinstance(val, str) and len(val) > 100:
+                        # Try to decode as base64
+                        try:
+                            decoded = base64.b64decode(val)
+                            if len(decoded) > 100:
+                                logging.info(f"Decoded base64 from key '{key}', size: {len(decoded)}")
+                                return decoded
+                        except Exception:
+                            pass
+        except (_json.JSONDecodeError, ValueError):
+            pass  # Not valid JSON, try other cases
     
     # Case 1: Data URI  (data:application/...;base64,UEsDBBQ...)
     if s.startswith("data:") and ";base64," in s:
@@ -98,6 +146,9 @@ def _decode_file_content(content_str) -> bytes:
     # JSON() wraps strings in double quotes: "UEsDBBQ..."
     if len(s) >= 2 and s.startswith('"') and s.endswith('"'):
         inner = s[1:-1]  # Remove surrounding quotes
+        # Check if it's a JSON object inside the quotes
+        if inner.startswith('{') and inner.endswith('}'):
+            return _decode_file_content(inner)
         # Check if it's base64 inside the quotes
         if len(inner) > 50 and re.match(r'^[A-Za-z0-9+/=\r\n]+$', inner):
             clean = inner.replace('\r', '').replace('\n', '').replace(' ', '')
@@ -122,30 +173,59 @@ def _decode_file_content(content_str) -> bytes:
         except Exception:
             pass
     
+    # Case 7: URL-safe base64 (uses - and _ instead of + and /)
+    if len(s) > 50 and re.match(r'^[A-Za-z0-9\-_=\r\n]+$', s):
+        clean = s.replace('\r', '').replace('\n', '').replace(' ', '')
+        # Convert URL-safe to standard base64
+        clean = clean.replace('-', '+').replace('_', '/')
+        # Add padding if needed
+        padding = 4 - (len(clean) % 4)
+        if padding != 4:
+            clean += '=' * padding
+        try:
+            decoded = base64.b64decode(clean)
+            if len(decoded) > 0:
+                return decoded
+        except Exception:
+            pass
+    
     # Case 5: Raw text content (treat as text file content)
+    logging.warning(f"Could not decode as base64, treating as raw text (len={len(s)})")
     return s.encode("utf-8")
 
 
 # ── Helper: download file from URL ────────────────────────────────
-def _download_file_from_url(url: str, timeout: int = 30) -> bytes:
+def _download_file_from_url(url: str, timeout: int = 60, auth_token: str = None) -> bytes:
     """
     Download a file from a URL (e.g., SharePoint, OneDrive, Teams attachment URL).
     Used when Copilot Studio provides a fileUrl instead of base64 content.
+    Handles redirects, SSL, and optional authentication (bearer token).
     """
     import urllib.request
     import ssl
     
-    logging.info(f"Downloading file from URL: {url[:100]}...")
+    logging.info(f"Downloading file from URL: {url[:120]}...")
     
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
     
     req = urllib.request.Request(url)
-    req.add_header("User-Agent", "LEON-Spec-Azure-Function/2.0")
+    req.add_header("User-Agent", "LEON-Spec-Azure-Function/3.0")
+    # If an auth token is provided (e.g., from Copilot Studio), use it
+    if auth_token:
+        req.add_header("Authorization", f"Bearer {auth_token}")
     
-    with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
-        return resp.read()
+    # Follow redirects (SharePoint/OneDrive URLs often redirect)
+    opener = urllib.request.build_opener(
+        urllib.request.HTTPSHandler(context=ctx),
+        urllib.request.HTTPRedirectHandler()
+    )
+    
+    with opener.open(req, timeout=timeout) as resp:
+        data = resp.read()
+        logging.info(f"Downloaded {len(data)} bytes from URL (status={resp.status})")
+        return data
 
 
 # ── Helper: extract file from request body (all formats) ───────────
@@ -158,6 +238,8 @@ def _extract_file_from_body(body: dict, req: func.HttpRequest = None) -> tuple:
     3. { "file": { "name": "file.ods", "contentBytes": "<base64>" } }
     4. { "file": "<base64>", "fileName": "file.ods" }
     5. { "fileName": "file.ods" }  (file already uploaded)
+    6. Copilot Studio file object: { "fileContent": { "name": "...", "contentUrl": "...", "content": "..." } }
+    7. Copilot Studio file object at root: { "name": "...", "contentUrl": "...", "content": "..." }
     
     Returns (file_name, file_bytes) — file_bytes may be None if only fileName is provided.
     """
@@ -167,7 +249,14 @@ def _extract_file_from_body(body: dict, req: func.HttpRequest = None) -> tuple:
     if not body:
         return (None, None)
     
-    # Case: fileUrl provided — download from URL
+    # Extract auth token from request headers (for authenticated URL downloads)
+    auth_token = None
+    if req:
+        auth_header = req.headers.get("Authorization", "") or req.headers.get("authorization", "")
+        if auth_header.startswith("Bearer "):
+            auth_token = auth_header[7:]
+    
+    # Case: fileUrl provided — download from URL (PREFERRED for Copilot Studio)
     if "fileUrl" in body and body["fileUrl"]:
         url = body["fileUrl"]
         file_name = body.get("fileName", "")
@@ -177,17 +266,37 @@ def _extract_file_from_body(body: dict, req: func.HttpRequest = None) -> tuple:
             parsed = urlparse(url)
             file_name = unquote(parsed.path.split("/")[-1]) or "conformity_matrix.ods"
         try:
-            file_bytes = _download_file_from_url(url)
+            file_bytes = _download_file_from_url(url, auth_token=auth_token)
             logging.info(f"Downloaded {len(file_bytes)} bytes from URL")
         except Exception as e:
             logging.error(f"Failed to download from URL: {e}")
-            raise ValueError(f"Could not download file from URL: {str(e)[:200]}")
+            # Return a clear error instead of crashing
+            raise ValueError(f"Impossible de telecharger le fichier depuis l'URL fournie. Erreur: {str(e)[:200]}")
         return (file_name, file_bytes)
     
-    # Case: fileContent provided — decode base64
+    # Case: fileContent provided — decode base64 (or extract from dict/JSON)
     if "fileContent" in body and body["fileContent"]:
-        file_bytes = _decode_file_content(body["fileContent"])
-        file_name = body.get("fileName", "conformity_matrix.ods")
+        fc = body["fileContent"]
+        # If fileContent is a dict (Copilot Studio file object), extract name + content
+        if isinstance(fc, dict):
+            file_name = (fc.get("name", "") or fc.get("Name", "") or
+                         fc.get("fileName", "") or body.get("fileName", "") or
+                         "conformity_matrix.xlsx")
+            # Try contentUrl first (download from URL)
+            content_url = fc.get("contentUrl", "") or fc.get("ContentUrl", "") or fc.get("url", "")
+            if content_url:
+                try:
+                    file_bytes = _download_file_from_url(content_url, auth_token=auth_token)
+                    logging.info(f"Downloaded {len(file_bytes)} bytes from fileContent.contentUrl")
+                    return (file_name, file_bytes)
+                except Exception as e:
+                    logging.warning(f"Failed to download from fileContent.contentUrl: {e}")
+            # Fall back to content/base64
+            file_bytes = _decode_file_content(fc)
+            return (file_name, file_bytes)
+        # If fileContent is a string, decode it
+        file_bytes = _decode_file_content(fc)
+        file_name = body.get("fileName", "") or "conformity_matrix.xlsx"
         return (file_name, file_bytes)
     
     # Case: file object provided (Copilot Studio attachment format)
@@ -195,6 +304,15 @@ def _extract_file_from_body(body: dict, req: func.HttpRequest = None) -> tuple:
         file_obj = body["file"]
         if isinstance(file_obj, dict):
             file_name = file_obj.get("name", "") or file_obj.get("Name", "") or "conformity_matrix.ods"
+            # Try contentUrl first
+            content_url = file_obj.get("contentUrl", "") or file_obj.get("ContentUrl", "") or file_obj.get("url", "")
+            if content_url:
+                try:
+                    file_bytes = _download_file_from_url(content_url, auth_token=auth_token)
+                    logging.info(f"Downloaded {len(file_bytes)} bytes from file.contentUrl")
+                    return (file_name, file_bytes)
+                except Exception as e:
+                    logging.warning(f"Failed to download from file.contentUrl: {e}")
             b64 = (file_obj.get("contentBytes", "") or 
                    file_obj.get("Content", "") or 
                    file_obj.get("content", ""))
@@ -205,6 +323,24 @@ def _extract_file_from_body(body: dict, req: func.HttpRequest = None) -> tuple:
             file_bytes = _decode_file_content(file_obj)
             file_name = body.get("fileName", "conformity_matrix.ods")
             return (file_name, file_bytes)
+    
+    # Case: Copilot Studio file object at root level (no wrapper key)
+    # This happens when the entire body IS the file object
+    if "contentUrl" in body and body["contentUrl"]:
+        url = body["contentUrl"]
+        file_name = body.get("name", "") or body.get("Name", "") or body.get("fileName", "") or "conformity_matrix.ods"
+        try:
+            file_bytes = _download_file_from_url(url, auth_token=auth_token)
+            logging.info(f"Downloaded {len(file_bytes)} bytes from root contentUrl")
+            return (file_name, file_bytes)
+        except Exception as e:
+            logging.error(f"Failed to download from root contentUrl: {e}")
+            raise ValueError(f"Could not download file from URL: {str(e)[:200]}")
+    
+    if "content" in body and body["content"] and isinstance(body["content"], str):
+        file_name = body.get("name", "") or body.get("Name", "") or body.get("fileName", "") or "conformity_matrix.xlsx"
+        file_bytes = _decode_file_content(body["content"])
+        return (file_name, file_bytes)
     
     # Case: only fileName provided (file already uploaded)
     if "fileName" in body and body["fileName"]:
@@ -496,12 +632,25 @@ def _parse_multipart(body: bytes, content_type: str):
             content = content[:-2]
 
         # Parse Content-Disposition header for filename
+        # Try standard filename="..." first
         filename_match = re.search(r'filename="([^"]*)"', header_bytes)
         if not filename_match:
-            # This is a non-file field (e.g., form data) — skip
-            continue
-
-        filename = filename_match.group(1)
+            # Try RFC 5987 encoding: filename*=UTF-8''filename.xlsm
+            filename_match = re.search(r"filename\*=[^']*''([^;\r\n]+)", header_bytes)
+        if not filename_match:
+            # Try unquoted filename
+            filename_match = re.search(r'filename=([^;\r\n]+)', header_bytes)
+        if not filename_match:
+            # No filename found — but this might still be a file field
+            # Check if it has a Content-Type header (file fields usually do)
+            if "content-type" in header_bytes.lower():
+                filename = "conformity_matrix.xlsx"
+            else:
+                # This is a non-file field (e.g., form data) — skip
+                continue
+        else:
+            filename = filename_match.group(1).strip().strip('"')
+        
         if not filename:
             continue
 
@@ -636,6 +785,23 @@ def list_files(req: func.HttpRequest) -> func.HttpResponse:
 def health(req: func.HttpRequest) -> func.HttpResponse:
     """Health check — returns OK if the function is running, with diagnostics."""
     diag = {"status": "healthy", "version": "2.0.0-enterprise"}
+    
+    # ── Diagnostic: Python path and file system ──────────────────
+    try:
+        diag["sys_path"] = sys.path[:10]
+        diag["cwd"] = os.getcwd()
+        diag["__file__"] = str(Path(__file__).resolve())
+        diag["script_root"] = os.environ.get("AzureWebJobsScriptRoot", "NOT_SET")
+        _parent = str(Path(__file__).resolve().parent)
+        diag["function_dir"] = _parent
+        diag["dir_contents"] = os.listdir(_parent)[:30] if os.path.exists(_parent) else "DIR_NOT_FOUND"
+        diag["app_init_exists"] = os.path.exists(os.path.join(_parent, "app", "__init__.py"))
+        diag["app_dir_exists"] = os.path.exists(os.path.join(_parent, "app"))
+        if os.path.exists(os.path.join(_parent, "app")):
+            diag["app_dir_contents"] = os.listdir(os.path.join(_parent, "app"))[:20]
+    except Exception as e:
+        diag["diag_error"] = str(e)[:300]
+    
     # Test critical imports
     try:
         import azure_config
@@ -952,7 +1118,7 @@ def conformity(req: func.HttpRequest) -> func.HttpResponse:
     Auto-detects the sheet, header row, and 'Conformite FNR' / 'Commentaires FNR'
     columns (even if names change). Returns:
     - List of OK / NOK / NA / STANDBY items with exact comments
-    - AI-detected inconsistencies between status and comment
+    - AI deep analysis of OK responses (hidden non-conformity signals)
     - Pie chart (base64 PNG)
     - Summary statistics
     - PDF report (base64)
@@ -998,14 +1164,15 @@ def conformity(req: func.HttpRequest) -> func.HttpResponse:
 # ═══════════════════════════════════════════════════════════════════
 # ENDPOINT 12: /api/conformity-excel — Color-coded Excel report
 # ═══════════════════════════════════════════════════════════════════
-@app.route(route="conformity-excel", methods=["POST"])
+@app.route(route="conformity-excel", methods=["POST"], auth_level=func.AuthLevel.ANONYMOUS)
 def conformity_excel(req: func.HttpRequest) -> func.HttpResponse:
     """
     Upload a conformity matrix and get a color-coded Excel report.
+    Anonymous endpoint — no API key required (for Copilot Studio tool integration).
     Same input formats as /api/conformity.
-    Returns JSON with reportExcel (base64 XLSX).
+    Returns JSON with reportExcel (base64 XLSX) and optional downloadUrl.
     """
-    logging.info("=== /api/conformity-excel called ===")
+    logging.info("=== /api/conformity-excel called (anonymous) ===")
 
     content_type = req.headers.get("Content-Type", "")
     body_bytes = req.get_body()
@@ -1013,25 +1180,72 @@ def conformity_excel(req: func.HttpRequest) -> func.HttpResponse:
     file_name = None
     file_bytes = None
 
+    logging.info(f"Content-Type: {content_type}, Body length: {body_len}")
+
+    # Path A: JSON body with fileContent/fileUrl/fileName
     body = _get_body(req)
     if body:
-        file_name, file_bytes = _extract_file_from_body(body, req)
+        logging.info(f"Body keys: {list(body.keys())}")
+        try:
+            file_name, file_bytes = _extract_file_from_body(body, req)
+            if file_bytes:
+                logging.info(f"Extracted file from JSON: name={file_name}, size={len(file_bytes)} bytes")
+        except Exception as exc:
+            logging.warning(f"JSON body extraction failed: {exc}")
     
-    # Fallback: multipart form data
-    if not file_name and "multipart/form-data" in content_type:
+    # Path B: multipart form data (file upload from Copilot Studio)
+    if not file_bytes and "multipart/form-data" in content_type:
         try:
             file_name, file_bytes = _parse_multipart(body_bytes, content_type)
-        except Exception:
-            pass
+            logging.info(f"Multipart parsed: name={file_name}, size={len(file_bytes) if file_bytes else 0} bytes")
+        except Exception as exc:
+            logging.warning(f"Multipart parse failed: {exc}")
     
-    # Fallback: raw binary with X-File-Name header
-    if not file_name and body_len > 0 and not ("application/json" in content_type):
+    # Path C: application/octet-stream (raw binary from Copilot Studio)
+    if not file_bytes and body_len > 0 and ("octet-stream" in content_type or "binary" in content_type):
+        file_bytes = body_bytes
+        file_name = req.headers.get("X-File-Name", "")
+        if not file_name:
+            # Try to get filename from Content-Disposition header
+            cd = req.headers.get("Content-Disposition", "")
+            import re as _re
+            fn_match = _re.search(r'filename="?([^";\s]+)"?', cd)
+            file_name = fn_match.group(1) if fn_match else "conformity_matrix.xlsx"
+        logging.info(f"Raw binary upload: {file_name}, {len(file_bytes)} bytes")
+    
+    # Path D: raw binary with X-File-Name header (non-JSON content)
+    if not file_bytes and body_len > 0 and not ("application/json" in content_type):
         file_bytes = body_bytes
         file_name = req.headers.get("X-File-Name", "conformity_matrix.ods")
 
+    # Path E: If we have bytes but no name, try to detect format from content
+    if file_bytes and not file_name:
+        file_name = "conformity_matrix.xlsx"
+        logging.info(f"No file name provided — defaulting to {file_name}")
+
+    # If we have a file name but no extension, try to detect from content
+    if file_name and file_bytes:
+        ext = os.path.splitext(file_name)[1].lower()
+        if ext not in (".ods", ".xlsx", ".xlsm", ".xls"):
+            # Check file magic bytes
+            if file_bytes[:4] == b"PK\x03\x04":
+                # ZIP-based format (XLSX/XLSM)
+                file_name = os.path.splitext(file_name)[0] + ".xlsm"
+                logging.info(f"Detected ZIP format — setting extension to .xlsm: {file_name}")
+            elif file_bytes[:4] == b"PK\x03\x04" or b"mimetypeapplication/vnd" in file_bytes[:100]:
+                # ODS format
+                file_name = os.path.splitext(file_name)[0] + ".ods"
+                logging.info(f"Detected ODS format — setting extension to .ods: {file_name}")
+            else:
+                # Default to .xlsx
+                file_name = os.path.splitext(file_name)[0] + ".xlsx"
+                logging.info(f"Unknown format — defaulting to .xlsx: {file_name}")
+
     if not file_name or not file_bytes:
+        logging.error(f"No file content found. CT={content_type}, body_len={body_len}, body_keys={list(body.keys()) if body else 'none'}")
         return _error_response("Missing file content or fileName. Provide fileContent (base64), fileUrl, or file object.", 422)
 
+    logging.info(f"Processing conformity Excel report for: {file_name} ({len(file_bytes)} bytes)")
     from azure_handler import handle_conformity_excel
     return _safe_handler(handle_conformity_excel, file_name, file_bytes)
 

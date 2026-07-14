@@ -494,21 +494,15 @@
         <div id="meta-info" class="muted" style="font-size:12px"></div>
       </div>
 
-      <!-- OK Deep Analysis (AI review of OK comments) -->
+      <!-- OK Deep Analysis (AI review of OK comments — unified, comprehensive) -->
       <div class="panel" id="okdeep-panel">
         <h2>3. Analyse approfondie des réponses OK <span id="okdeep-count" class="muted"></span></h2>
         <div id="okdeep-list"></div>
       </div>
 
-      <!-- Inconsistencies -->
-      <div class="panel" id="inc-panel">
-        <h2>4. Incohérences détectées <span id="inc-count" class="muted"></span></h2>
-        <div id="inc-list"></div>
-      </div>
-
       <!-- Items table -->
       <div class="panel">
-        <h2>5. Exigences détaillées</h2>
+        <h2>4. Exigences détaillées</h2>
         <div class="filter-bar">
           <input type="text" class="search-box" id="search-box" placeholder="Rechercher par REQ-ID, description, commentaire…" oninput="filterTable()" />
           <button class="filter-btn active" data-filter="ALL" onclick="setFilter('ALL')">Tous</button>
@@ -524,7 +518,6 @@
                 <th>REQ-ID</th>
                 <th>Référence</th>
                 <th>Version applicable</th>
-                <th>Conformité</th>
                 <th>Statut</th>
                 <th>Commentaire</th>
               </tr>
@@ -650,7 +643,6 @@ async function doAnalyze() {
     renderStats(data.analysis);
     renderChart(data.analysis);
     renderOKDeepFindings(data.analysis);
-    renderInconsistencies(data.analysis);
     renderItems(data.analysis);
     renderMeta(data.analysis);
 
@@ -702,8 +694,7 @@ function renderStats(a) {
     {cls:'stat-ok', val:s.ok, label:'OK'},
     {cls:'stat-nok', val:s.nok, label:'NOK'},
     {cls:'stat-na', val:s.na, label:'NA'},
-    {cls:'stat-inc', val:s.inconsistencies, label:'Incohérences'},
-    {cls:'stat-warn', val:(s.okDeepFindings||0), label:'OK à vérifier'},
+    {cls:'stat-warn', val:(s.okDeepFindings||0), label:'Points d\'attention'},
   ];
   document.getElementById('stats-grid').innerHTML = cards.map(c =>
     `<div class="stat-card ${c.cls}"><div class="value">${c.val}</div><div class="label">${c.label}</div></div>`
@@ -734,37 +725,6 @@ function renderMeta(a) {
   meta.innerHTML = `Feuille: <strong>${a.sheetName}</strong> | Ligne en-tête: ${a.headerRow+1} | Ligne données: ${a.dataStartRow+1} | Colonnes conformité: [${a.columnMapping.conformity}] | Colonnes commentaires: [${a.columnMapping.comment}] | Colonnes version applicable: [${a.columnMapping.version_applicable || []}]`;
 }
 
-function renderInconsistencies(a) {
-  const incs = a.inconsistencies || [];
-  const panel = document.getElementById('inc-panel');
-  const h2 = panel.querySelector('h2');
-  const incCount = document.getElementById('inc-count');
-
-  if (incs.length === 0) {
-    if (incCount) incCount.textContent = '(0)';
-    h2.innerHTML = '3. Incohérences détectées <span id="inc-count" class="muted">(0)</span> ✅ Aucune incohérence';
-    document.getElementById('inc-list').innerHTML = '<p class="muted" style="padding:12px">✅ Aucune incohérence détectée entre les statuts et les commentaires.</p>';
-    return;
-  }
-
-  h2.innerHTML = `3. Incohérences détectées <span id="inc-count" class="muted">(${incs.length})</span>`;
-  document.getElementById('inc-list').innerHTML = incs.map(inc => `
-    <div class="inc-card ${inc.severity === 'warning' ? 'warning' : ''}">
-      <div class="header">
-        <span class="badge ${inc.severity === 'error' ? 'badge-NOK' : 'badge-STANDBY'}">${inc.severity.toUpperCase()}</span>
-        <span class="req-id">${inc.reqId || inc.req_id || ''}</span>
-        <span class="type">${inc.type}</span>
-        ${inc.score ? `<span class="muted" style="font-size:11px">Score: ${inc.score}</span>` : ''}
-        ${inc.signals ? `<span class="muted" style="font-size:11px">Signaux: ${inc.signals}</span>` : ''}
-      </div>
-      <div class="explanation">${inc.explanation}</div>
-      ${inc.conformity ? `<div class="meta">Conformité: "${inc.conformity}"</div>` : ''}
-      ${inc.comment ? `<div class="meta">Commentaire: "${inc.comment}"</div>` : ''}
-      ${inc.matched && inc.matched.length ? `<div class="meta">Mots-clés détectés: ${inc.matched.map(m => `"${m}"`).join(', ')}</div>` : ''}
-    </div>
-  `).join('');
-}
-
 function renderItems(a) {
   allItems = a.items || [];
   document.getElementById('items-count').textContent = `${allItems.length} exigences extraites`;
@@ -790,14 +750,13 @@ function filterTable() {
   });
 
   const tbody = document.getElementById('items-tbody');
-  const maxRows = 500; // limit for performance
+  const maxRows = 500;
   const display = filtered.slice(0, maxRows);
   tbody.innerHTML = display.map(item => `
     <tr>
       <td><strong style="font-family:var(--mono)">${item.reqId}</strong></td>
       <td>${item.reference || '<span class="muted">—</span>'}</td>
       <td>${item.version ? '<strong style="font-family:var(--mono);color:var(--accent)">' + item.version + '</strong>' : '<span class="muted">—</span>'}</td>
-      <td>${item.conformityRaw || '<span class="muted">—</span>'}</td>
       <td><span class="badge badge-${item.conformityCategory}">${item.conformityCategory}</span></td>
       <td>${item.comment ? item.comment.substring(0,120) : '<span class="muted">—</span>'}</td>
     </tr>
@@ -810,7 +769,9 @@ function filterTable() {
   }
 }
 
-// ── OK Deep Findings (AI analysis of OK responses) ──────────
+// ── OK Deep Findings (unified deep analysis of OK responses) ──
+// Covers: hidden non-conformity signals, N/A-in-OK, missing comments,
+// negative language, pending/conditional/incomplete status — all in one view.
 function renderOKDeepFindings(a) {
   const findings = a.okDeepFindings || [];
   const panel = document.getElementById('okdeep-panel');
@@ -819,24 +780,34 @@ function renderOKDeepFindings(a) {
 
   if (findings.length === 0) {
     if (okCount) okCount.textContent = '(0)';
-    h2.innerHTML = '3. Analyse approfondie des réponses OK <span id="okdeep-count" class="muted">(0)</span> ✅ Tous les OK sont cohérents';
+    h2.innerHTML = '3. Analyse approfondie des réponses OK <span id="okdeep-count" class="muted">(0)</span> ✅ Aucun point d\'attention';
     document.getElementById('okdeep-list').innerHTML = '<p class="muted" style="padding:12px">✅ Tous les statuts OK sont cohérents avec leurs commentaires — aucun signal suspect détecté.</p>';
     return;
   }
 
-  h2.innerHTML = `3. Analyse approfondie des réponses OK <span id="okdeep-count" class="muted">(${findings.length})</span> ⚠️ Points d'attention`;
-  document.getElementById('okdeep-list').innerHTML = findings.slice(0, 40).map(f => {
+  // Summary stats
+  const errors = findings.filter(f => f.severity === 'error').length;
+  const warnings = findings.filter(f => f.severity === 'warning').length;
+  const infos = findings.filter(f => f.severity === 'info').length;
+  let summaryHtml = '';
+  if (errors > 0) summaryHtml += `<span style="color:var(--nok);font-weight:600">${errors} critique(s)</span> `;
+  if (warnings > 0) summaryHtml += `<span style="color:var(--warn);font-weight:600">${warnings} attention(s)</span> `;
+  if (infos > 0) summaryHtml += `<span style="color:var(--ok);font-weight:600">${infos} info(s)</span>`;
+
+  h2.innerHTML = `3. Analyse approfondie des réponses OK <span id="okdeep-count" class="muted">(${findings.length})</span> ⚠️ ${summaryHtml}`;
+  document.getElementById('okdeep-list').innerHTML = findings.slice(0, 50).map(f => {
     const sevClass = f.severity === 'error' ? 'inc-card' : f.severity === 'warning' ? 'inc-card warning' : 'inc-card';
     const sevBadge = f.severity === 'error' ? 'badge-NOK' : f.severity === 'warning' ? 'badge-STANDBY' : 'badge-NA';
+    const signals = (f.signals || []).join(', ');
+    const isNoComment = signals === 'ok_no_comment';
     return `
     <div class="${sevClass}" style="border-left-color:var(--${f.severity === 'error' ? 'nok' : f.severity === 'warning' ? 'warn' : 'ok'})">
       <div class="header">
         <span class="badge ${sevBadge}">${f.severity.toUpperCase()}</span>
         <span class="req-id">${f.reqId || ''}</span>
-        <span class="type">Score: ${f.score}/10</span>
-        <span class="muted" style="font-size:11px">Signaux: ${(f.signals||[]).join(', ')}</span>
+        <span class="muted" style="font-size:11px">${signals}</span>
       </div>
-      <div class="explanation" style="color:var(--warn)">${f.aiComment || ''}</div>
+      <div class="explanation" style="color:var(--${f.severity === 'error' ? 'nok' : f.severity === 'warning' ? 'warn' : 'text'})">${f.aiComment || ''}</div>
       ${f.conformity ? `<div class="meta">Conformité FNR: "${f.conformity}"</div>` : ''}
       ${f.comment ? `<div class="meta">Commentaire FNR: "${f.comment}"</div>` : ''}
     </div>

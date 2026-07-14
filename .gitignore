@@ -34,3 +34,19 @@ test_output.txt
 # OS
 .DS_Store
 Thumbs.db
+
+# Temporary/debug files
+_*.txt
+_*.py
+_*.xlsx
+_*.zip
+_*.ps1
+_deploy_*/
+_azure_blob_packages/
+_lxml_packages/
+_pkg_temp/
+linux_packages/
+linux_packages_311/
+
+# Office temp files
+~$*

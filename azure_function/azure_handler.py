@@ -975,7 +975,7 @@ def handle_conformity(file_name: str, file_bytes: Optional[bytes]) -> func.HttpR
         nok = summary.get("nok", 0)
         na = summary.get("na", 0)
         total = summary.get("total", 0)
-        inc_count = summary.get("inconsistencies", 0)
+        inc_count = summary.get("okDeepFindings", 0)
 
         answer_parts = [
             f"Analyse de la matrice de conformite FNR terminee.",
@@ -988,13 +988,13 @@ def handle_conformity(file_name: str, file_bytes: Optional[bytes]) -> func.HttpR
         ]
 
         if inc_count > 0:
-            answer_parts.append(f"\n  - Incoherences detectees par l'IA: {inc_count}")
+            answer_parts.append(f"\n  - Points d'attention detectes dans les reponses OK: {inc_count}")
             answer_parts.append("\nLe rapport PDF detaille contient:")
-            answer_parts.append("  - La liste complete des exigences OK et NOK avec commentaires exacts")
+            answer_parts.append("  - La liste complete des exigences avec statuts et commentaires exacts")
             answer_parts.append("  - Le diagramme camembert de repartition")
-            answer_parts.append("  - L'analyse IA des incoherences entre statut et commentaire")
+            answer_parts.append("  - L'analyse approfondie des reponses OK (signaux suspects, incoherences)")
         else:
-            answer_parts.append("\nAucune incoherence detectee entre les statuts et les commentaires.")
+            answer_parts.append("\nAucune incoherence logique detectee — tous les statuts OK sont coherents avec leurs commentaires.")
 
         answer = "\n".join(answer_parts)
 
@@ -1037,19 +1037,155 @@ def handle_conformity(file_name: str, file_bytes: Optional[bytes]) -> func.HttpR
 # ═══════════════════════════════════════════════════════════════════
 # Conformity Excel Report Handler
 # ═══════════════════════════════════════════════════════════════════
+def _upload_to_blob_storage(xlsx_bytes: bytes, file_name: str) -> str:
+    """
+    Upload the Excel report to Azure Blob Storage and return a download URL.
+    Uses the Azure Blob Storage REST API directly (no SDK dependency).
+    Returns empty string if Blob Storage is not configured or upload fails.
+    Falls back to AzureWebJobsStorage if AZURE_STORAGE_CONNECTION_STRING not set.
+    """
+    import os
+    import datetime
+    import hashlib
+    import hmac
+    import base64
+    import urllib.request
+    import urllib.parse
+    import ssl
+
+    try:
+        conn_str = (os.getenv("AZURE_STORAGE_CONNECTION_STRING", "") or
+                    os.getenv("AzureWebJobsStorage", "") or
+                    os.getenv("DEPLOYMENT_STORAGE_CONNECTION_STRING", ""))
+        if not conn_str:
+            logging.info("No storage connection string found — skipping blob upload")
+            return ""
+
+        # Parse connection string
+        parts = dict(p.split("=", 1) for p in conn_str.split(";") if "=" in p)
+        account_name = parts.get("AccountName", "")
+        account_key = parts.get("AccountKey", "")
+        if not account_name or not account_key:
+            logging.warning("Storage connection string missing AccountName or AccountKey")
+            return ""
+
+        # Decode account key
+        account_key_bytes = base64.b64decode(account_key)
+        container_name = "leon-reports"
+        timestamp = datetime.datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        base_name = os.path.splitext(os.path.basename(file_name))[0]
+        blob_name = f"conformity_report_{base_name}_{timestamp}.xlsx"
+
+        logging.info(f"Uploading to blob: {container_name}/{blob_name} ({len(xlsx_bytes)} bytes)")
+
+        # ── Step 1: Create container (if not exists) with public read access ──
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+
+        container_url = f"https://{account_name}.blob.core.windows.net/{container_name}?restype=container"
+        rfc1123_date = datetime.datetime.utcnow().strftime("%a, %d %b %Y %H:%M:%S GMT")
+        # String to sign: VERB + 11 empty standard headers + canonicalized headers + canonicalized resource
+        # Date field (line 7) is EMPTY — x-ms-date goes in canonicalized headers (sorted alphabetically)
+        string_to_sign = f"PUT\n\n\n\n\n\n\n\n\n\n\n\nx-ms-blob-public-access:blob\nx-ms-date:{rfc1123_date}\nx-ms-version:2020-04-08\n/{account_name}/{container_name}?restype=container"
+        signature = base64.b64encode(hmac.new(account_key_bytes, string_to_sign.encode("utf-8"), hashlib.sha256).digest()).decode("utf-8")
+        auth_header = f"SharedKey {account_name}:{signature}"
+
+        req = urllib.request.Request(container_url, method="PUT", data=b"")
+        req.add_header("x-ms-date", rfc1123_date)
+        req.add_header("x-ms-version", "2020-04-08")
+        req.add_header("x-ms-blob-public-access", "blob")
+        req.add_header("Authorization", auth_header)
+        req.add_header("Content-Length", "0")
+
+        try:
+            with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
+                logging.info(f"Container create response: {resp.status}")
+        except urllib.error.HTTPError as e:
+            if e.code == 409:  # ContainerAlreadyExists
+                logging.info("Container already exists — setting public access")
+                # Try to set container ACL to public read
+                acl_url = f"https://{account_name}.blob.core.windows.net/{container_name}?restype=container&comp=acl"
+                rfc1123_date = datetime.datetime.utcnow().strftime("%a, %d %b %Y %H:%M:%S GMT")
+                acl_string_to_sign = f"PUT\n\n\n\n\n\n\n\n\n\n\n\nx-ms-blob-public-access:blob\nx-ms-date:{rfc1123_date}\nx-ms-version:2020-04-08\n/{account_name}/{container_name}?comp=acl&restype=container"
+                acl_signature = base64.b64encode(hmac.new(account_key_bytes, acl_string_to_sign.encode("utf-8"), hashlib.sha256).digest()).decode("utf-8")
+                acl_auth = f"SharedKey {account_name}:{acl_signature}"
+                acl_req = urllib.request.Request(acl_url, method="PUT", data=b"")
+                acl_req.add_header("x-ms-date", rfc1123_date)
+                acl_req.add_header("x-ms-version", "2020-04-08")
+                acl_req.add_header("x-ms-blob-public-access", "blob")
+                acl_req.add_header("Authorization", acl_auth)
+                acl_req.add_header("Content-Length", "0")
+                try:
+                    with urllib.request.urlopen(acl_req, timeout=10, context=ctx) as resp:
+                        logging.info(f"Container ACL set to public: {resp.status}")
+                except Exception as acl_e:
+                    logging.warning(f"Container ACL set failed (non-fatal): {acl_e}")
+            else:
+                logging.warning(f"Container create failed: {e.code} — {e.read()[:200]}")
+        except Exception as e:
+            logging.warning(f"Container create error (non-fatal): {e}")
+
+        # ── Step 2: Upload blob (Put Blob) ──
+        blob_url = f"https://{account_name}.blob.core.windows.net/{container_name}/{urllib.parse.quote(blob_name)}"
+        rfc1123_date = datetime.datetime.utcnow().strftime("%a, %d %b %Y %H:%M:%S GMT")
+        content_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        content_len = str(len(xlsx_bytes))
+
+        # Build canonicalized string for Put Blob
+        canonical_headers = f"x-ms-blob-type:BlockBlob\nx-ms-date:{rfc1123_date}\nx-ms-version:2020-04-08\n"
+        canonical_resource = f"/{account_name}/{container_name}/{urllib.parse.quote(blob_name)}"
+        string_to_sign = f"PUT\n\n\n{content_len}\n\n{content_type}\n\n\n\n\n\n\n{canonical_headers}{canonical_resource}"
+        signature = base64.b64encode(hmac.new(account_key_bytes, string_to_sign.encode("utf-8"), hashlib.sha256).digest()).decode("utf-8")
+        auth_header = f"SharedKey {account_name}:{signature}"
+
+        req = urllib.request.Request(blob_url, method="PUT", data=xlsx_bytes)
+        req.add_header("x-ms-blob-type", "BlockBlob")
+        req.add_header("x-ms-date", rfc1123_date)
+        req.add_header("x-ms-version", "2020-04-08")
+        req.add_header("Authorization", auth_header)
+        req.add_header("Content-Type", content_type)
+        req.add_header("Content-Length", content_len)
+
+        with urllib.request.urlopen(req, timeout=30, context=ctx) as resp:
+            logging.info(f"Blob upload response: {resp.status}")
+
+        # ── Step 3: Return public download URL (container has public read access) ──
+        download_url = blob_url
+        logging.info(f"Uploaded Excel report to blob: {blob_name}")
+        logging.info(f"Download URL: {download_url}")
+        return download_url
+
+    except Exception as exc:
+        logging.warning(f"Blob upload failed (non-fatal): {exc}")
+        return ""
+
+
 def handle_conformity_excel(file_name: str, file_bytes: bytes) -> func.HttpResponse:
     """
     Generate a color-coded Excel report from a conformity matrix.
-    Returns JSON with reportExcel (base64 XLSX).
+    Returns JSON with reportExcel (base64 XLSX) and optional downloadUrl.
     """
     import os
     import base64
+    import ssl
 
-    logging.info(f"handle_conformity_excel: file_name={file_name}")
+    logging.info(f"handle_conformity_excel: file_name={file_name}, file_size={len(file_bytes)} bytes")
+
+    if not file_bytes or len(file_bytes) == 0:
+        return func.HttpResponse(
+            body=json.dumps({
+                "answer": "Le fichier envoye est vide. Veuillez telecharger un fichier ODS ou XLSX valide.",
+                "status": "error",
+            }, ensure_ascii=False),
+            status_code=422,
+            mimetype="application/json",
+            headers={"Content-Type": "application/json; charset=utf-8"},
+        )
 
     from app.config import UPLOADS_DIR
     UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
-    safe_name = os.path.basename(file_name)
+    safe_name = os.path.basename(file_name) if file_name else "conformity_matrix.xlsx"
     file_path = UPLOADS_DIR / safe_name
     file_path.write_bytes(file_bytes)
 
@@ -1057,7 +1193,7 @@ def handle_conformity_excel(file_name: str, file_bytes: bytes) -> func.HttpRespo
     if ext not in (".ods", ".xlsx", ".xlsm", ".xls"):
         return func.HttpResponse(
             body=json.dumps({
-                "answer": f"Unsupported file type '{ext}'. Please upload an ODS or XLSX file.",
+                "answer": f"Format de fichier non supporte '{ext}'. Veuillez telecharger un fichier ODS ou XLSX.",
                 "status": "error",
             }, ensure_ascii=False),
             status_code=422,
@@ -1075,24 +1211,95 @@ def handle_conformity_excel(file_name: str, file_bytes: bytes) -> func.HttpRespo
         xlsx_bytes = generate_conformity_excel(analysis_dict)
         xlsx_b64 = base64.b64encode(xlsx_bytes).decode("utf-8")
 
-        summary = analysis_dict.get("summary", {})
-        answer = (
-            f"Rapport Excel genere avec succes.\n"
-            f"Total: {summary.get('total', 0)} exigences | "
-            f"OK: {summary.get('ok', 0)} | NOK: {summary.get('nok', 0)} | "
-            f"NA: {summary.get('na', 0)}\n"
-            f"Incoherences: {summary.get('inconsistencies', 0)}\n"
-            f"Le fichier Excel contient des lignes codees par couleur (vert=OK, rouge=NOK)."
-        )
+        # Try to upload to Azure Blob Storage for direct download
+        blob_url = _upload_to_blob_storage(xlsx_bytes, file_name)
 
+        # Use Blob Storage URL if accessible, otherwise use data URI as download URL
+        # Data URI is self-contained and always works in browsers
+        if blob_url:
+            # Test if the blob URL is accessible
+            import urllib.request as _urllib_req
+            try:
+                test_req = _urllib_req.Request(blob_url, method="HEAD")
+                test_ctx = ssl.create_default_context()
+                test_ctx.check_hostname = False
+                test_ctx.verify_mode = ssl.CERT_NONE
+                with _urllib_req.urlopen(test_req, timeout=5, context=test_ctx) as test_resp:
+                    if test_resp.status == 200:
+                        download_url = blob_url
+                        logging.info(f"Using Blob Storage download URL (verified)")
+                    else:
+                        download_url = f"data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,{xlsx_b64}"
+                        logging.info(f"Blob URL returned {test_resp.status} — using data URI")
+            except Exception as test_e:
+                download_url = f"data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,{xlsx_b64}"
+                logging.info(f"Blob URL test failed ({test_e}) — using data URI")
+        else:
+            download_url = f"data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,{xlsx_b64}"
+            logging.info("Blob upload failed — using data URI as download URL")
+
+        summary = analysis_dict.get("summary", {})
+        total = summary.get("total", 0)
+        ok = summary.get("ok", 0)
+        nok = summary.get("nok", 0)
+        na = summary.get("na", 0)
+        empty = summary.get("empty", 0)
+        deep_findings = summary.get("okDeepFindings", 0)
+        needs_review = summary.get("needsReview", 0)
+
+        # Build a rich answer text for Copilot Studio to show the user
+        answer_lines = [
+            f"Rapport Excel genere avec succes pour '{file_name}'.",
+            f"",
+            f"Statistiques de conformite:",
+            f"  - Total des exigences: {total}",
+            f"  - OK (conforme): {ok}",
+            f"  - NOK (non conforme): {nok}",
+            f"  - NA (non applicable): {na}",
+            f"  - Sans statut: {empty}",
+            f"",
+            f"Analyse approfondie:",
+            f"  - Points d'attention (OK suspects): {deep_findings}",
+            f"  - Exigences a verifier: {needs_review}",
+        ]
+        if download_url and not download_url.startswith("data:"):
+            answer_lines.extend([
+                f"",
+                f"Le fichier Excel est disponible au telechargement:",
+                f"{download_url}",
+            ])
+        else:
+            answer_lines.extend([
+                f"",
+                f"Le fichier Excel a ete genere ({len(xlsx_bytes)} octets).",
+                f"  1. Summary (statistiques + graphique camembert)",
+                f"  2. All Items (toutes les exigences, lignes colorees par statut)",
+                f"  3. Analyse approfondie OK (points d'attention)",
+            ])
+        answer = "\n".join(answer_lines)
+
+        # Build response with BOTH nested analysis (backward compatible)
+        # AND flat root-level fields (for Copilot Studio connector)
         body = {
             "answer": answer,
             "status": "answered",
             "confidence": "HIGH",
             "fileName": file_name,
+            # Flat fields for Copilot Studio (unique names, no duplicates)
+            "totalReqs": total,
+            "okReqs": ok,
+            "nokReqs": nok,
+            "naReqs": na,
+            "emptyReqs": empty,
+            "inconsistencies": summary.get("inconsistencies", 0),
+            "okDeepFindings": deep_findings,
+            "needsReview": needs_review,
+            # Nested analysis (backward compatible, existing code)
             "analysis": analysis_dict,
             "reportExcel": xlsx_b64,
         }
+        # Always include download URL (Blob Storage SAS URL or data URI fallback)
+        body["downloadUrl"] = download_url
 
         return func.HttpResponse(
             body=json.dumps(body, ensure_ascii=False, default=str),
@@ -1106,7 +1313,7 @@ def handle_conformity_excel(file_name: str, file_bytes: bytes) -> func.HttpRespo
         logging.error(f"Excel report failed: {exc}\n{traceback.format_exc()}")
         return func.HttpResponse(
             body=json.dumps({
-                "answer": f"Erreur: {str(exc)[:500]}",
+                "answer": f"Erreur lors de la generation du rapport: {str(exc)[:500]}",
                 "status": "error",
             }, ensure_ascii=False),
             status_code=500,

@@ -1,0 +1,188 @@
+{
+  "swagger": "2.0",
+  "info": {
+    "title": "LEON - Excel Conformity Report",
+    "description": "Generate an Excel report from a conformity matrix file. Pass the file URL and name, receive statistics and a download link.",
+    "version": "3.2.0",
+    "contact": {
+      "name": "LEON Support",
+      "url": "https://leon-spec-gbexcnefdmakfpdg.francecentral-01.azurewebsites.net"
+    }
+  },
+  "host": "leon-spec-gbexcnefdmakfpdg.francecentral-01.azurewebsites.net",
+  "basePath": "/",
+  "schemes": [
+    "https"
+  ],
+  "consumes": [
+    "application/json"
+  ],
+  "produces": [
+    "application/json"
+  ],
+  "paths": {
+    "/api/conformity-excel": {
+      "post": {
+        "summary": "Generate Excel Conformity Report",
+        "description": "Analyzes a conformity matrix file and generates an Excel report with statistics and points of attention.",
+        "operationId": "GenerateExcelConformityReport",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/ConformityExcelRequest"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Excel report generated successfully",
+            "schema": {
+              "$ref": "#/definitions/ConformityExcelResponse"
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "422": {
+            "description": "Unsupported file format",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "ConformityExcelRequest": {
+      "type": "object",
+      "required": [
+        "fileName",
+        "fileUrl"
+      ],
+      "properties": {
+        "fileName": {
+          "type": "string",
+          "description": "Name of the conformity matrix file with extension (.ods, .xlsx, .xlsm).",
+          "x-ms-summary": "File name"
+        },
+        "fileUrl": {
+          "type": "string",
+          "description": "URL of the conformity matrix file to analyze.",
+          "x-ms-summary": "File URL"
+        },
+        "fileContent": {
+          "type": "string",
+          "description": "File content as base64 string (alternative to fileUrl).",
+          "x-ms-summary": "File content (base64)",
+          "x-ms-visibility": "internal"
+        }
+      }
+    },
+    "ConformityExcelResponse": {
+      "type": "object",
+      "properties": {
+        "answer": {
+          "type": "string",
+          "description": "French summary message to show directly to the user.",
+          "x-ms-summary": "Answer"
+        },
+        "status": {
+          "type": "string",
+          "description": "Processing status. Value is 'answered' when successful, or 'error' when failed.",
+          "x-ms-summary": "Status"
+        },
+        "confidence": {
+          "type": "string",
+          "description": "Confidence level of the analysis.",
+          "x-ms-summary": "Confidence"
+        },
+        "fileName": {
+          "type": "string",
+          "description": "Name of the analyzed conformity matrix file.",
+          "x-ms-summary": "Analyzed file name"
+        },
+        "totalReqs": {
+          "type": "integer",
+          "format": "int32",
+          "description": "Total number of requirements found in the matrix.",
+          "x-ms-summary": "Total requirements"
+        },
+        "okReqs": {
+          "type": "integer",
+          "format": "int32",
+          "description": "Number of conform requirements.",
+          "x-ms-summary": "OK requirements"
+        },
+        "nokReqs": {
+          "type": "integer",
+          "format": "int32",
+          "description": "Number of non-conform requirements.",
+          "x-ms-summary": "NOK requirements"
+        },
+        "naReqs": {
+          "type": "integer",
+          "format": "int32",
+          "description": "Number of not applicable requirements.",
+          "x-ms-summary": "NA requirements"
+        },
+        "emptyReqs": {
+          "type": "integer",
+          "format": "int32",
+          "description": "Number of requirements with empty status.",
+          "x-ms-summary": "Empty requirements"
+        },
+        "inconsistencies": {
+          "type": "integer",
+          "format": "int32",
+          "description": "Number of detected inconsistencies.",
+          "x-ms-summary": "Inconsistencies"
+        },
+        "okDeepFindings": {
+          "type": "integer",
+          "format": "int32",
+          "description": "Number of OK items with comments requiring verification.",
+          "x-ms-summary": "OK deep findings"
+        },
+        "needsReview": {
+          "type": "integer",
+          "format": "int32",
+          "description": "Number of items requiring manual review.",
+          "x-ms-summary": "Needs review"
+        },
+        "downloadUrl": {
+          "type": "string",
+          "description": "Direct URL to download the generated Excel report.",
+          "x-ms-summary": "Download URL"
+        }
+      }
+    },
+    "ErrorResponse": {
+      "type": "object",
+      "properties": {
+        "answer": {
+          "type": "string",
+          "description": "French error message.",
+          "x-ms-summary": "Error message"
+        },
+        "status": {
+          "type": "string",
+          "description": "Error status.",
+          "x-ms-summary": "Status"
+        }
+      }
+    }
+  }
+}

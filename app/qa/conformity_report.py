@@ -110,7 +110,6 @@ def generate_conformity_pdf(analysis_dict: dict) -> bytes:
     nok = summary.get("nok", 0)
     na = summary.get("na", 0)
     empty = summary.get("empty", 0)
-    inc_count = summary.get("inconsistencies", 0)
 
     # Summary table
     col_w = _PAGE_WIDTH / 4
@@ -181,38 +180,51 @@ def generate_conformity_pdf(analysis_dict: dict) -> bytes:
                  new_x="LMARGIN", new_y="NEXT")
         pdf.ln(3)
 
-    # ── Inconsistencies summary ────────────────────────────
+    # ── Deep analysis summary ──────────────────────────────
+    ok_findings = analysis_dict.get("okDeepFindings", [])
+    err_count = sum(1 for f in ok_findings if f.get("severity") == "error")
+    warn_count = sum(1 for f in ok_findings if f.get("severity") == "warning")
     pdf.set_font("Helvetica", "B", 10)
-    if inc_count > 0:
-        pdf.set_text_color(220, 53, 69)
-        pdf.cell(0, 6, _clean(f"INCOHERENCES DETECTEES: {inc_count}"),
+    if ok_findings:
+        parts = []
+        if err_count: parts.append(f"{err_count} critique(s)")
+        if warn_count: parts.append(f"{warn_count} attention(s)")
+        pdf.set_text_color(220 if err_count else 255, 140 if not err_count else 53, 0 if not err_count else 69)
+        pdf.cell(0, 6, _clean(f"ANALYSE APPROFONDIE DES OK — {len(ok_findings)} point(s) d'attention ({', '.join(parts)})"),
                  new_x="LMARGIN", new_y="NEXT")
     else:
         pdf.set_text_color(40, 167, 69)
-        pdf.cell(0, 6, _clean("AUCUNE INCOHERENCE DETECTEE"),
+        pdf.cell(0, 6, _clean("ANALYSE APPROFONDIE DES OK — Aucun point d'attention"),
                  new_x="LMARGIN", new_y="NEXT")
 
-    # ── OK items flagged by AI deep analysis ───────────────
-    ok_findings = analysis_dict.get("okDeepFindings", [])
+    # ── OK deep findings detail ─────────────────────────────
     if ok_findings:
         pdf.ln(3)
         pdf.set_font("Helvetica", "B", 10)
         pdf.set_text_color(255, 140, 0)
-        pdf.cell(0, 6, _clean(f"ANALYSE APPROFONDIE DES OK — {len(ok_findings)} point(s) d'attention"),
+        pdf.cell(0, 6, _clean(f"Points d'attention détaillés ({len(ok_findings)})"),
                  new_x="LMARGIN", new_y="NEXT")
         pdf.ln(1)
-        for finding in ok_findings[:30]:
+        for finding in ok_findings[:40]:
+            severity = finding.get("severity", "warning")
+            sev_color = (220, 53, 69) if severity == "error" else (255, 140, 0) if severity == "warning" else (108, 117, 125)
+            sev_label = "ERREUR" if severity == "error" else "AVERTISSEMENT" if severity == "warning" else "INFO"
+
             pdf.set_font("Helvetica", "B", 8)
-            pdf.set_text_color(255, 140, 0)
-            pdf.cell(0, 5, _clean(f"  [!] {finding.get('reqId', '')}"),
+            pdf.set_text_color(*sev_color)
+            pdf.cell(0, 5, _clean(f"  [{sev_label}] {finding.get('reqId', '')}"),
                      new_x="LMARGIN", new_y="NEXT")
             pdf.set_font("Helvetica", "", 8)
             pdf.set_text_color(80, 80, 80)
             conf = finding.get("conformity", "")
             comment = finding.get("comment", "")
-            analysis = finding.get("aiComment", "")
+            analysis_text = finding.get("aiComment", "")
+            signals = finding.get("signals", [])
             if conf:
                 pdf.cell(0, 4, _clean(f"     Conformite: {conf}"),
+                         new_x="LMARGIN", new_y="NEXT")
+            if signals:
+                pdf.cell(0, 4, _clean(f"     Signaux: {', '.join(signals)}"),
                          new_x="LMARGIN", new_y="NEXT")
             if comment:
                 pdf.set_x(pdf.l_margin)
@@ -223,15 +235,15 @@ def generate_conformity_pdf(analysis_dict: dict) -> bytes:
                     pdf.set_x(pdf.l_margin)
                     pdf.cell(0, 4, _clean(f"     Commentaire: {comment[:100]}..."),
                              new_x="LMARGIN", new_y="NEXT")
-            if analysis:
-                pdf.set_text_color(180, 70, 0)
+            if analysis_text:
+                pdf.set_text_color(*sev_color)
                 pdf.set_x(pdf.l_margin)
                 try:
-                    pdf.multi_cell(0, 4, _clean(f"     Analyse: {analysis}"),
+                    pdf.multi_cell(0, 4, _clean(f"     Analyse: {analysis_text}"),
                                  new_x="LMARGIN", new_y="NEXT")
                 except Exception:
                     pdf.set_x(pdf.l_margin)
-                    pdf.cell(0, 4, _clean(f"     Analyse: {analysis[:100]}..."),
+                    pdf.cell(0, 4, _clean(f"     Analyse: {analysis_text[:100]}..."),
                              new_x="LMARGIN", new_y="NEXT")
             pdf.ln(1)
     else:
@@ -304,65 +316,6 @@ def generate_conformity_pdf(analysis_dict: dict) -> bytes:
                          new_x="LMARGIN", new_y="NEXT")
             pdf.ln(1)
 
-    # ── Inconsistencies ─────────────────────────────────────
-    inconsistencies = analysis_dict.get("inconsistencies", [])
-    if inconsistencies:
-        pdf.add_page()
-        pdf.set_font("Helvetica", "B", 12)
-        pdf.set_text_color(0, 51, 102)
-        pdf.cell(0, 8, _clean(f"INCOHERENCES DETECTEES PAR L'IA - {len(inconsistencies)}"),
-                 new_x="LMARGIN", new_y="NEXT")
-        pdf.ln(2)
-
-        for inc in inconsistencies:
-            severity = inc.get("severity", "warning")
-            color = _severity_color(severity)
-
-            pdf.set_font("Helvetica", "B", 9)
-            pdf.set_text_color(*color)
-            sev_label = "ERREUR" if severity == "error" else "AVERTISSEMENT"
-            score_str = f" (score: {inc.get('score', 0)})" if inc.get('score') else ""
-            pdf.cell(0, 5, _clean(f"  [{sev_label}] {inc.get('reqId', '')} - {inc.get('type', '')}{score_str}"),
-                     new_x="LMARGIN", new_y="NEXT")
-
-            pdf.set_font("Helvetica", "", 8)
-            pdf.set_text_color(60, 60, 60)
-            conf = inc.get("conformity", "")
-            comment = inc.get("comment", "")
-            signals = inc.get("signals", "")
-            matched = inc.get("matched", [])
-            if conf:
-                pdf.cell(0, 4, _clean(f"     Conformite: {conf}"),
-                         new_x="LMARGIN", new_y="NEXT")
-            if signals:
-                pdf.cell(0, 4, _clean(f"     Signaux detectes: {signals}"),
-                         new_x="LMARGIN", new_y="NEXT")
-            if matched:
-                pdf.cell(0, 4, _clean(f"     Mots-cles: {', '.join(matched)}"),
-                         new_x="LMARGIN", new_y="NEXT")
-            if comment:
-                pdf.set_x(pdf.l_margin)
-                try:
-                    pdf.multi_cell(0, 4, _clean(f"     Commentaire: {comment}"),
-                                 new_x="LMARGIN", new_y="NEXT")
-                except Exception:
-                    pdf.set_x(pdf.l_margin)
-                    pdf.cell(0, 4, _clean(f"     Commentaire: {comment[:100]}..."),
-                             new_x="LMARGIN", new_y="NEXT")
-
-            pdf.set_text_color(0, 0, 0)
-            explanation = inc.get("explanation", "")
-            if explanation:
-                pdf.set_x(pdf.l_margin)
-                try:
-                    pdf.multi_cell(0, 4, _clean(f"     Analyse IA: {explanation}"),
-                                 new_x="LMARGIN", new_y="NEXT")
-                except Exception:
-                    pdf.set_x(pdf.l_margin)
-                    pdf.cell(0, 4, _clean(f"     Analyse IA: {explanation[:100]}..."),
-                             new_x="LMARGIN", new_y="NEXT")
-            pdf.ln(2)
-
     # ── Footer ──────────────────────────────────────────────
     pdf.ln(5)
     pdf.set_font("Helvetica", "I", 8)
@@ -406,9 +359,9 @@ def generate_conformity_excel(analysis_dict: dict) -> bytes:
     Generate a color-coded Excel report from the conformity analysis.
 
     Sheets:
-    1. "Summary" — statistics table + inconsistency count
+    1. "Summary" — statistics table + points d'attention count
     2. "All Items" — every requirement with color-coded rows by status
-    3. "Inconsistencies" — AI-detected issues with severity colors
+    3. "Analyse approfondie des OK" — deep analysis findings with severity
 
     Returns XLSX file as bytes.
     """
@@ -442,8 +395,8 @@ def generate_conformity_excel(analysis_dict: dict) -> bytes:
     ws_summary["B4"] = analysis_dict.get("sheetName", "N/A")
     ws_summary["A5"] = "Total Requirements:"
     ws_summary["B5"] = analysis_dict.get("totalRows", 0)
-    ws_summary["A6"] = "Inconsistencies:"
-    ws_summary["B6"] = len(analysis_dict.get("inconsistencies", []))
+    ws_summary["A6"] = "Points d'attention:"
+    ws_summary["B6"] = len(analysis_dict.get("okDeepFindings", []))
 
     # Statistics table
     ws_summary["A8"] = "Status"
@@ -548,8 +501,8 @@ def generate_conformity_excel(analysis_dict: dict) -> bytes:
     # ── Sheet 2: All Items ──────────────────────────────────
     ws_items = wb.create_sheet("All Items")
 
-    headers = ["Row", "Req ID", "Reference", "Description", "Conformity (raw)",
-               "Category", "Comment", "Version Applicable", "Column Set"]
+    headers = ["Row", "Req ID", "Reference", "Description",
+               "Category", "Comment", "Version Applicable"]
     for ci, header in enumerate(headers, 1):
         cell = ws_items.cell(row=1, column=ci, value=header)
         cell.fill = header_fill
@@ -563,11 +516,9 @@ def generate_conformity_excel(analysis_dict: dict) -> bytes:
             item.get("reqId", ""),
             item.get("reference", ""),
             item.get("description", ""),
-            item.get("conformityRaw", ""),
             item.get("conformityCategory", ""),
             item.get("comment", ""),
             item.get("version", ""),
-            item.get("columnSet", 0),
         ]
         category = item.get("conformityCategory", "EMPTY")
         fill = _category_fill(category)
@@ -582,7 +533,7 @@ def generate_conformity_excel(analysis_dict: dict) -> bytes:
                 cell.alignment = wrap_align
 
     # Column widths
-    col_widths = [8, 20, 30, 50, 20, 15, 50, 20, 12]
+    col_widths = [8, 20, 30, 50, 15, 50, 20]
     for ci, width in enumerate(col_widths, 1):
         ws_items.column_dimensions[get_column_letter(ci)].width = width
 
@@ -590,63 +541,15 @@ def generate_conformity_excel(analysis_dict: dict) -> bytes:
     ws_items.freeze_panes = "A2"
 
     # Auto-filter
-    ws_items.auto_filter.ref = f"A1:I{len(items) + 1}"
+    ws_items.auto_filter.ref = f"A1:G{len(items) + 1}"
 
-    # ── Sheet 3: Inconsistencies ────────────────────────────
-    inconsistencies = analysis_dict.get("inconsistencies", [])
-    if inconsistencies:
-        ws_inc = wb.create_sheet("Inconsistencies")
-
-        inc_headers = ["Severity", "Type", "Req ID", "Conformity", "Score", "Signals", "Matched Keywords", "Comment", "AI Explanation"]
-        for ci, header in enumerate(inc_headers, 1):
-            cell = ws_inc.cell(row=1, column=ci, value=header)
-            cell.fill = header_fill
-            cell.font = header_font
-            cell.border = thin_border
-
-        for ri, inc in enumerate(inconsistencies, 2):
-            severity = inc.get("severity", "warning")
-            sev_fill = PatternFill(
-                start_color="FFC7CE" if severity == "error" else "FFEB9C",
-                end_color="FFC7CE" if severity == "error" else "FFEB9C",
-                fill_type="solid",
-            )
-            sev_font = Font(
-                color="9C0006" if severity == "error" else "9C6500",
-                bold=severity == "error",
-            )
-            row_data = [
-                severity.upper(),
-                inc.get("type", ""),
-                inc.get("reqId", inc.get("req_id", "")),
-                inc.get("conformity", ""),
-                inc.get("score", ""),
-                inc.get("signals", ""),
-                ", ".join(inc.get("matched", [])) if inc.get("matched") else "",
-                inc.get("comment", ""),
-                inc.get("explanation", ""),
-            ]
-            for ci, val in enumerate(row_data, 1):
-                cell = ws_inc.cell(row=ri, column=ci, value=val)
-                cell.fill = sev_fill
-                cell.font = sev_font
-                cell.border = thin_border
-                if ci in (8, 9):
-                    cell.alignment = wrap_align
-
-        inc_widths = [12, 25, 20, 20, 8, 20, 25, 50, 60]
-        for ci, width in enumerate(inc_widths, 1):
-            ws_inc.column_dimensions[get_column_letter(ci)].width = width
-        ws_inc.freeze_panes = "A2"
-        ws_inc.auto_filter.ref = f"A1:I{len(inconsistencies) + 1}"
-
-    # ── Sheet 4: OK Deep Analysis ──────────────────────────
+    # ── Sheet 3: Analyse approfondie des OK ──────────────────
     ok_findings = analysis_dict.get("okDeepFindings", [])
     if ok_findings:
-        ws_ok = wb.create_sheet("OK Deep Analysis")
+        ws_ok = wb.create_sheet("Analyse approfondie OK")
 
         ok_headers = ["Severity", "Req ID", "Reference", "Conformity",
-                       "Score", "Signals", "Matched Keywords", "Comment",
+                       "Signals", "Comment",
                        "AI Analysis"]
         for ci, header in enumerate(ok_headers, 1):
             cell = ws_ok.cell(row=1, column=ci, value=header)
@@ -673,9 +576,7 @@ def generate_conformity_excel(analysis_dict: dict) -> bytes:
                 finding.get("reqId", ""),
                 finding.get("reference", ""),
                 finding.get("conformity", ""),
-                finding.get("score", 0),
                 ", ".join(finding.get("signals", [])),
-                ", ".join(finding.get("matched", [])),
                 finding.get("comment", ""),
                 finding.get("aiComment", ""),
             ]
@@ -684,14 +585,14 @@ def generate_conformity_excel(analysis_dict: dict) -> bytes:
                 cell.fill = sev_fill
                 cell.font = sev_font
                 cell.border = thin_border
-                if ci in (8, 9):
+                if ci in (6, 7):
                     cell.alignment = wrap_align
 
-        ok_widths = [12, 20, 20, 20, 8, 20, 25, 50, 60]
+        ok_widths = [12, 20, 20, 20, 20, 50, 60]
         for ci, width in enumerate(ok_widths, 1):
             ws_ok.column_dimensions[get_column_letter(ci)].width = width
         ws_ok.freeze_panes = "A2"
-        ws_ok.auto_filter.ref = f"A1:I{len(ok_findings) + 1}"
+        ws_ok.auto_filter.ref = f"A1:G{len(ok_findings) + 1}"
 
     # ── Save to bytes ───────────────────────────────────────
     buf = io.BytesIO()
@@ -754,16 +655,17 @@ def generate_powerbi_dataset(analysis_dict: dict) -> dict:
             "SheetName": analysis_dict.get("sheetName", ""),
         })
 
-    # Table 3: Inconsistencies (for alert visual)
+    # Table 3: Analyse approfondie OK (for alert visual)
     inc_table = []
     for inc in inconsistencies:
         inc_table.append({
             "Severity": inc.get("severity", "warning"),
-            "Type": inc.get("type", ""),
+            "Signals": ", ".join(inc.get("signals", [])),
+            "Score": inc.get("score", 0),
             "ReqID": inc.get("reqId", inc.get("req_id", "")),
             "Conformity": inc.get("conformity", ""),
             "Comment": inc.get("comment", ""),
-            "Explanation": inc.get("explanation", ""),
+            "AIAnalysis": inc.get("aiComment", ""),
             "FileName": analysis_dict.get("fileName", ""),
         })
 

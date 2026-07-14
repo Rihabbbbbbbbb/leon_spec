@@ -287,7 +287,7 @@
     "schemas": {
       "ConformityExcelRequest": {
         "type": "object",
-        "required": ["fileName", "fileContent"],
+        "required": ["fileName"],
         "properties": {
           "fileName": {
             "type": "string",
@@ -296,13 +296,17 @@
           },
           "fileContent": {
             "type": "string",
-            "description": "Contenu du fichier encodé en base64. Obtenu depuis le fichier attaché par l'utilisateur."
+            "description": "Contenu du fichier encodé en base64. Optionnel — peut utiliser fileUrl à la place."
+          },
+          "fileUrl": {
+            "type": "string",
+            "description": "URL du fichier à télécharger (SharePoint, OneDrive, etc.). Alternative à fileContent."
           }
         }
       },
       "ConformityRequest": {
         "type": "object",
-        "required": ["fileName", "fileContent"],
+        "required": ["fileName"],
         "properties": {
           "fileName": {
             "type": "string",
@@ -311,7 +315,11 @@
           },
           "fileContent": {
             "type": "string",
-            "description": "Contenu du fichier encodé en base64. Obtenu depuis le fichier attaché par l'utilisateur."
+            "description": "Contenu du fichier encodé en base64. Optionnel — le fichier peut déjà être uploadé, ou utiliser fileUrl."
+          },
+          "fileUrl": {
+            "type": "string",
+            "description": "URL du fichier à télécharger. Alternative à fileContent."
           }
         }
       },
@@ -378,6 +386,38 @@
           "fileName": {
             "type": "string",
             "description": "Nom du fichier analysé"
+          },
+          "totalReqs": {
+            "type": "integer",
+            "description": "Nombre total d'exigences"
+          },
+          "okReqs": {
+            "type": "integer",
+            "description": "Nombre d'exigences OK (conformes)"
+          },
+          "nokReqs": {
+            "type": "integer",
+            "description": "Nombre d'exigences NOK (non conformes)"
+          },
+          "naReqs": {
+            "type": "integer",
+            "description": "Nombre d'exigences NA (non applicables)"
+          },
+          "emptyReqs": {
+            "type": "integer",
+            "description": "Nombre d'exigences sans statut (vide)"
+          },
+          "inconsistencies": {
+            "type": "integer",
+            "description": "Nombre d'incohérences détectées (statut vs commentaire)"
+          },
+          "okDeepFindings": {
+            "type": "integer",
+            "description": "Nombre de réponses OK avec commentaires suspects nécessitant vérification"
+          },
+          "needsReview": {
+            "type": "integer",
+            "description": "Nombre d'exigences nécessitant une révision manuelle"
           },
           "analysis": {
             "$ref": "#/components/schemas/AnalysisSummary"
@@ -512,45 +552,31 @@
       "AnalysisSummary": {
         "type": "object",
         "properties": {
-          "fileName": {
-            "type": "string"
-          },
-          "sheetName": {
-            "type": "string",
-            "description": "Nom de la feuille détectée automatiquement"
-          },
-          "headerRow": {
-            "type": "integer",
-            "description": "Index de la ligne d'en-tête détectée"
-          },
-          "dataStartRow": {
-            "type": "integer",
-            "description": "Index de la première ligne de données"
-          },
-          "totalRows": {
-            "type": "integer",
-            "description": "Nombre total d'exigences extraites"
-          },
+          "fileName": { "type": "string" },
+          "sheetName": { "type": "string", "description": "Nom de la feuille détectée automatiquement" },
+          "headerRow": { "type": "integer", "description": "Index de la ligne d'en-tête détectée" },
+          "dataStartRow": { "type": "integer", "description": "Index de la première ligne de données" },
+          "totalRows": { "type": "integer", "description": "Nombre total d'exigences extraites" },
           "stats": {
             "type": "object",
+            "description": "Statistiques de conformité (OK, NOK, NA, EMPTY uniquement)",
             "properties": {
               "OK": { "type": "integer" },
               "NOK": { "type": "integer" },
               "NA": { "type": "integer" },
-              "STANDBY": { "type": "integer" },
-              "DEVIATION": { "type": "integer" },
-              "BLOCK": { "type": "integer" },
-              "UNKNOWN": { "type": "integer" },
               "EMPTY": { "type": "integer" }
             }
           },
           "columnMapping": {
             "type": "object",
-            "description": "Mapping des colonnes détectées (conformity, comment, req_id)",
+            "description": "Mapping des colonnes détectées (conformity, comment, req_id, version, version_applicable, stellantis_verdict)",
             "properties": {
               "conformity": { "type": "array", "items": { "type": "integer" } },
               "comment": { "type": "array", "items": { "type": "integer" } },
-              "req_id": { "type": "array", "items": { "type": "integer" } }
+              "req_id": { "type": "array", "items": { "type": "integer" } },
+              "version": { "type": "array", "items": { "type": "integer" } },
+              "version_applicable": { "type": "array", "items": { "type": "integer" } },
+              "stellantis_verdict": { "type": "array", "items": { "type": "integer" } }
             }
           },
           "items": {
@@ -564,24 +590,47 @@
                 "reference": { "type": "string" },
                 "description": { "type": "string" },
                 "conformityRaw": { "type": "string" },
-                "conformityCategory": { "type": "string" },
+                "conformityCategory": { "type": "string", "description": "OK, NOK, NA, ou EMPTY" },
                 "comment": { "type": "string" },
-                "columnSet": { "type": "integer" }
+                "version": { "type": "string", "description": "Version applicable" },
+                "versionApplicable": { "type": "string" },
+                "columnSet": { "type": "integer" },
+                "needsReview": { "type": "boolean" },
+                "classificationConfidence": { "type": "string" }
               }
             }
           },
           "inconsistencies": {
             "type": "array",
-            "description": "Incohérences détectées par l'IA entre statut et commentaire",
+            "description": "Analyse approfondie des réponses OK — signaux suspects détectés (identique à okDeepFindings)",
             "items": {
               "type": "object",
               "properties": {
-                "type": { "type": "string" },
-                "severity": { "type": "string" },
-                "req_id": { "type": "string" },
+                "reqId": { "type": "string" },
+                "reference": { "type": "string" },
                 "conformity": { "type": "string" },
                 "comment": { "type": "string" },
-                "explanation": { "type": "string" }
+                "score": { "type": "integer" },
+                "signals": { "type": "array", "items": { "type": "string" }, "description": "Catégories de signaux détectés" },
+                "aiComment": { "type": "string", "description": "Analyse IA explicative en français" },
+                "severity": { "type": "string", "description": "error, warning, ou info" }
+              }
+            }
+          },
+          "okDeepFindings": {
+            "type": "array",
+            "description": "Analyse approfondie des réponses OK (identique à inconsistencies — rétrocompatibilité)",
+            "items": {
+              "type": "object",
+              "properties": {
+                "reqId": { "type": "string" },
+                "reference": { "type": "string" },
+                "conformity": { "type": "string" },
+                "comment": { "type": "string" },
+                "score": { "type": "integer" },
+                "signals": { "type": "array", "items": { "type": "string" } },
+                "aiComment": { "type": "string" },
+                "severity": { "type": "string", "description": "error, warning, ou info" }
               }
             }
           },
@@ -592,20 +641,14 @@
               "ok": { "type": "integer" },
               "nok": { "type": "integer" },
               "na": { "type": "integer" },
-              "standby": { "type": "integer" },
-              "unknown": { "type": "integer" },
               "empty": { "type": "integer" },
-              "inconsistencies": { "type": "integer" }
+              "inconsistencies": { "type": "integer", "description": "Nombre de points d'attention (identiques à okDeepFindings)" },
+              "okDeepFindings": { "type": "integer", "description": "Nombre de points d'attention détectés dans les réponses OK" },
+              "needsReview": { "type": "integer" }
             }
           },
-          "chartBase64": {
-            "type": "string",
-            "description": "Camembert de répartition (base64 PNG)"
-          },
-          "reportText": {
-            "type": "string",
-            "description": "Rapport texte complet"
-          }
+          "chartBase64": { "type": "string", "description": "Camembert de répartition (base64 PNG ou SVG)" },
+          "reportText": { "type": "string", "description": "Rapport texte complet" }
         }
       },
       "ErrorResponse": {
