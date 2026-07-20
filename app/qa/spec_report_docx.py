@@ -4,18 +4,13 @@ Unified DOCX report generator for specification validation.
 This is the STANDARDIZED TEMPLATE that LEON always uses to deliver
 specification validation reports to the user as a downloadable document.
 
-The document contains ALL analysis details in a consistent layout:
-  1.  Title page header (LEON branding + report title)
-  2.  Document metadata (file name, date, text length)
-  3.  Executive summary (auto-generated text + verdict)
-  4.  Score breakdown (5-axis scores with visual bars)
-  5.  Summary counts (errors / warnings / passes / info)
-  6.  Detailed findings (full double-evidence: source rule + user excerpt)
-  7.  Section coverage (found vs missing mandatory sections)
-  8.  Writing guide compliance (checked rules)
-  9.  Recommendations (auto-generated action items)
-  10. Validation metadata (rules used, source documents)
-  11. Footer (LEON branding + page numbers)
+Designed to be COMPACT and ENGINEER-FOCUSED (target: 3-6 pages):
+  1. Synthèse       — verdict banner, key metadata, scores per axis, counts
+  2. Problèmes à corriger — errors then warnings, each with location,
+                      evidence excerpt and suggested fix (the actionable core)
+  3. Couverture des sections — missing sections highlighted, found inline
+  4. Recommandations — top prioritized actions
+  5. Périmètre de l'analyse — rules checked, sources, method (audit trail)
 
 Uses python-docx (already in requirements.txt) for Azure Function compatibility.
 """
@@ -48,8 +43,7 @@ def _add_page_number_footer(section):
     footer.is_linked_to_previous = False
     p = footer.paragraphs[0] if footer.paragraphs else footer.add_paragraph()
     p.alignment = 1  # CENTER
-    run = p.add_run("Page ")
-    # Add PAGE field
+    run = p.add_run("LEON — Rapport de validation | Page ")
     fldChar1 = OxmlElement("w:fldChar")
     fldChar1.set(qn("w:fldCharType"), "begin")
     instrText = OxmlElement("w:instrText")
@@ -62,12 +56,20 @@ def _add_page_number_footer(section):
     run._r.append(fldChar2)
 
 
+_VERDICT_LABELS = {
+    "GOOD": "GOOD — Spécification conforme",
+    "ACCEPTABLE_WITH_FIXES": "ACCEPTABLE — corrections à prévoir",
+    "NOT_RELIABLE": "NOT RELIABLE — révision approfondie nécessaire",
+    "NON_COMPLIANT": "NON COMPLIANT — non conforme au template CTS",
+}
+
+
 def _verdict_color(verdict: str) -> tuple:
     """Return RGB color for a verdict."""
     return {
         "GOOD": (40, 167, 69),
-        "ACCEPTABLE_WITH_FIXES": (255, 193, 7),
-        "NOT_RELIABLE": (253, 126, 20),
+        "ACCEPTABLE_WITH_FIXES": (176, 122, 0),
+        "NOT_RELIABLE": (204, 85, 0),
         "NON_COMPLIANT": (220, 53, 69),
     }.get(verdict, (108, 117, 125))
 
@@ -96,7 +98,7 @@ def _severity_rgb(severity: str) -> tuple:
     """Return RGB color for a severity level."""
     return {
         "error": (220, 53, 69),
-        "warning": (255, 140, 0),
+        "warning": (176, 122, 0),
         "pass": (40, 167, 69),
         "info": (23, 162, 184),
     }.get(severity, (108, 117, 125))
@@ -118,12 +120,45 @@ def _score_hex(score: float) -> str:
 # MAIN DOCUMENT GENERATOR
 # ═══════════════════════════════════════════════════════════════════
 
+# Caps to keep the report short — the full machine-readable detail
+# stays available in the JSON validationReport.
+_MAX_PROBLEM_BLOCKS = 40      # detailed error/warning blocks
+_MAX_RECOMMENDATIONS = 6
+_EXCERPT_MAX = 180
+_MSG_MAX = 300
+
+# Correction examples per rule — shown in the per-problem detail blocks.
+# Keyed by rule_id first, then by check category as fallback.
+_RULE_EXAMPLES = {
+    "TEMPLATE": 'Avant : « Response time shall be <<x>> ms » → Après : « Response time shall be 50 ms ».',
+    "R20": "Format d'identifiant attendu : REF-PSP-ASU-0001 (préfixe REF-/APP-/GEN- + composant + numéro unique).",
+    "R22": 'Tableau d\'exigence à 3 colonnes : « REF-ASU-CD-X-001 | The unit shall … | REQ-0508543 » (ou « N/A » si pas d\'exigence amont).',
+    "R23": "Avant : « The system shall respond quickly » → Après : « The system shall respond within 100 ms ».",
+    "R05": "Titre attendu : « Requirements Document of the Alarm Siren Unit (ASU) Module ».",
+    "R07": "Ajouter en en-tête un tableau « Written by / Checked by / Approved by » avec noms et dates.",
+    "R09": "Ajouter une « Table of updates » : Version | Date | Auteur | Nature de la modification.",
+    "WRITING_GUIDE": "Ajouter la section recommandée, même brève — indiquer « Not applicable » si elle est sans objet.",
+    "A_SECTION_COVERAGE": "Ajouter le titre de section manquant à sa place dans le plan standard du template, puis rédiger son contenu.",
+    "E_REQUIREMENT_LANGUAGE": "Avant : « The system should log errors » → Après : « The system shall log errors ».",
+    "F_REQUIREMENT_IDS": "Attribuer un identifiant unique à chaque exigence : REF-PSP-<COMPOSANT>-001, -002, …",
+    "G_TRACEABILITY": "Renseigner l'exigence amont pour chaque exigence (colonne « Input requirement ») ou « N/A ».",
+    "R17": "Vérifier la section APPLICABLE DOCUMENTS / STANDARDS : chaque norme citée dans une exigence (ex. [STA20], ISO 26262) doit y figurer, et chaque norme déclarée doit être réellement utilisée par au moins une exigence.",
+    "J_STANDARDS_CONSISTENCY": "Vérifier la section APPLICABLE DOCUMENTS / STANDARDS : chaque norme citée dans une exigence (ex. [STA20], ISO 26262) doit y figurer, et chaque norme déclarée doit être réellement utilisée par au moins une exigence.",
+}
+
+
+def _example_for(finding: Dict) -> str:
+    """Return a correction example for a finding, if one is defined."""
+    return (
+        _RULE_EXAMPLES.get(finding.get("rule_id", ""))
+        or _RULE_EXAMPLES.get(finding.get("check", ""))
+        or ""
+    )
+
+
 def generate_spec_validation_document(report: Dict) -> bytes:
     """
-    Generate a unified DOCX document with ALL specification validation details.
-
-    This is the STANDARDIZED TEMPLATE that LEON always uses to deliver
-    specification validation reports to the user.
+    Generate the standardized LEON validation report (compact DOCX).
 
     Args:
         report: The validation report dict from validate_with_evidence()
@@ -132,7 +167,7 @@ def generate_spec_validation_document(report: Dict) -> bytes:
         DOCX file as bytes
     """
     from docx import Document
-    from docx.shared import Inches, Pt, RGBColor, Cm
+    from docx.shared import Pt, RGBColor, Cm
     from docx.enum.text import WD_ALIGN_PARAGRAPH
     from docx.enum.table import WD_TABLE_ALIGNMENT
 
@@ -140,12 +175,12 @@ def generate_spec_validation_document(report: Dict) -> bytes:
 
     # ── Page setup ─────────────────────────────────────────
     section = doc.sections[0]
-    section.top_margin = Cm(2)
-    section.bottom_margin = Cm(2)
+    section.top_margin = Cm(1.8)
+    section.bottom_margin = Cm(1.8)
     section.left_margin = Cm(2)
     section.right_margin = Cm(2)
 
-    # ── Helper: add styled heading ─────────────────────────
+    # ── Helpers ────────────────────────────────────────────
     def _add_heading(text, level=1, color=(0, 51, 102)):
         h = doc.add_heading(text, level=level)
         for run in h.runs:
@@ -164,460 +199,332 @@ def generate_spec_validation_document(report: Dict) -> bytes:
             p.alignment = align
         return p
 
+    def _style_header_cell(cell, size=9):
+        for run in cell.paragraphs[0].runs:
+            run.bold = True
+            run.font.color.rgb = RGBColor(255, 255, 255)
+            run.font.size = Pt(size)
+        _set_cell_shading(cell, "003366")
+
+    # ── Report data ────────────────────────────────────────
+    file_name = report.get("fileName", "N/A")
+    verdict = report.get("verdict", "UNKNOWN")
+    overall_score = report.get("overallScore", 0)
+    counts = report.get("summaryCounts", {})
+    scores = report.get("scores", {})
+    findings = report.get("findings", [])
+    detailed = report.get("detailed", {})
+    errors = detailed.get("errors") or [f for f in findings if f.get("severity") == "error"]
+    warnings = detailed.get("warnings") or [f for f in findings if f.get("severity") == "warning"]
+    sections_found = report.get("sectionsFound", [])
+    sections_missing = report.get("sectionsMissing", [])
+    rules_used = report.get("rulesUsed", {})
+
     # ═══════════════════════════════════════════════════════
-    # 1. TITLE PAGE / HEADER
+    # HEADER
     # ═══════════════════════════════════════════════════════
     title = doc.add_paragraph()
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    run = title.add_run("LEON")
-    run.font.size = Pt(28)
+    run = title.add_run("LEON — Rapport de Validation de Spécification")
+    run.font.size = Pt(18)
     run.bold = True
-    run.font.color.rgb = RGBColor(0, 51, 102)
-
-    subtitle = doc.add_paragraph()
-    subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    run = subtitle.add_run("Rapport de Validation de Spécification CTS")
-    run.font.size = Pt(16)
     run.font.color.rgb = RGBColor(0, 51, 102)
 
     tagline = doc.add_paragraph()
     tagline.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    run = tagline.add_run("Assistant IA de Gouvernance & Validation — Stellantis Mechatronics Engineering")
+    run = tagline.add_run(
+        f"{file_name}  ·  {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}  ·  "
+        f"Stellantis Mechatronics Engineering"
+    )
     run.font.size = Pt(9)
     run.italic = True
     run.font.color.rgb = RGBColor(108, 117, 125)
-
-    # Horizontal rule
-    doc.add_paragraph("_" * 85).alignment = WD_ALIGN_PARAGRAPH.CENTER
+    doc.add_paragraph()
 
     # ═══════════════════════════════════════════════════════
-    # 2. DOCUMENT METADATA
+    # 1. SYNTHÈSE — verdict banner + scores + counts
     # ═══════════════════════════════════════════════════════
-    _add_heading("Informations du Document", level=2)
+    _add_heading("1. Synthèse", level=2)
 
-    file_name = report.get("fileName", "N/A")
-    text_length = report.get("textLength", 0)
-    verdict = report.get("verdict", "UNKNOWN")
-    overall_score = report.get("overallScore", 0)
+    # Verdict banner (single shaded cell)
+    banner = doc.add_table(rows=1, cols=1)
+    banner.style = "Table Grid"
+    cell = banner.cell(0, 0)
+    score_txt = f"{overall_score:.0%}" if isinstance(overall_score, (int, float)) else str(overall_score)
+    cell.text = f"{_VERDICT_LABELS.get(verdict, verdict)}   —   Score global : {score_txt}"
+    for run in cell.paragraphs[0].runs:
+        run.bold = True
+        run.font.size = Pt(13)
+        run.font.color.rgb = RGBColor(*_verdict_color(verdict))
+    cell.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+    _set_cell_shading(cell, _verdict_hex(verdict))
+    doc.add_paragraph()
 
-    meta_items = [
-        ("Fichier analysé", file_name),
-        ("Date d'analyse", datetime.datetime.now().strftime("%Y-%m-%d à %H:%M")),
-        ("Taille du texte extrait", f"{text_length:,} caractères"),
-        ("Verdict global", verdict),
-        ("Score global", f"{overall_score:.0%}" if isinstance(overall_score, (int, float)) else str(overall_score)),
+    # Counts (one horizontal row)
+    count_data = [
+        ("Erreurs", counts.get("errors", 0), "FFC7CE"),
+        ("Avertissements", counts.get("warnings", 0), "FFEB9C"),
+        ("Vérifications conformes", counts.get("pass", 0), "C6EFCE"),
+        ("Sections manquantes", len(sections_missing), "FFC7CE" if sections_missing else "C6EFCE"),
     ]
-    meta_table = doc.add_table(rows=len(meta_items), cols=2)
-    meta_table.style = "Light List Accent 1"
-    for i, (label, value) in enumerate(meta_items):
-        meta_table.cell(i, 0).text = label
-        meta_table.cell(i, 1).text = str(value)
-        for run in meta_table.cell(i, 0).paragraphs[0].runs:
+    counts_table = doc.add_table(rows=2, cols=len(count_data))
+    counts_table.style = "Table Grid"
+    counts_table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    for ci, (label, value, hex_c) in enumerate(count_data):
+        head = counts_table.cell(0, ci)
+        head.text = label
+        _style_header_cell(head)
+        val_cell = counts_table.cell(1, ci)
+        val_cell.text = str(value)
+        val_cell.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+        for run in val_cell.paragraphs[0].runs:
             run.bold = True
-
+            run.font.size = Pt(12)
+        _set_cell_shading(val_cell, hex_c)
     doc.add_paragraph()
 
-    # ═══════════════════════════════════════════════════════
-    # 3. EXECUTIVE SUMMARY
-    # ═══════════════════════════════════════════════════════
-    _add_heading("1. Résumé Exécutif", level=2)
-
-    summary_text = report.get("summary", "")
-    if summary_text:
-        _add_para(summary_text, size=10)
-
-    doc.add_paragraph()
-
-    # Verdict box (styled paragraph)
-    v_color = _verdict_color(verdict)
-    _add_para(f"Verdict: {verdict} ({overall_score:.0%})" if isinstance(overall_score, (int, float)) else f"Verdict: {verdict}",
-              bold=True, size=14, color=v_color)
-
-    doc.add_paragraph()
-
-    # ═══════════════════════════════════════════════════════
-    # 4. SCORE BREAKDOWN
-    # ═══════════════════════════════════════════════════════
-    _add_heading("2. Détail des Scores par Axe", level=2)
-
-    scores = report.get("scores", {})
-    score_labels = {
-        "structure": "Structure (Couverture des Sections)",
-        "section_order": "Ordre des Sections",
-        "template_cleanliness": "Propreté du Template",
-        "requirements_quality": "Qualité des Exigences",
-        "writing_guide_compliance": "Conformité au Guide d'Écriture",
-    }
-    score_weights = {
-        "structure": 0.25,
-        "section_order": 0.05,
-        "template_cleanliness": 0.10,
-        "requirements_quality": 0.35,
-        "writing_guide_compliance": 0.25,
-    }
-
-    score_table = doc.add_table(rows=len(score_labels) + 2, cols=4)
+    # Scores per axis (compact)
+    score_rows = [
+        ("structure", "Structure (sections du template)", 0.25),
+        ("section_order", "Ordre des sections", 0.05),
+        ("template_cleanliness", "Propreté du template", 0.10),
+        ("requirements_quality", "Qualité des exigences", 0.35),
+        ("writing_guide_compliance", "Conformité au guide d'écriture", 0.25),
+    ]
+    score_table = doc.add_table(rows=len(score_rows) + 1, cols=3)
     score_table.style = "Table Grid"
     score_table.alignment = WD_TABLE_ALIGNMENT.CENTER
-
-    # Header row
-    s_headers = ["Axe d'Évaluation", "Poids", "Score", "Barre Visuelle"]
-    for ci, header in enumerate(s_headers):
-        cell = score_table.cell(0, ci)
-        cell.text = header
-        for run in cell.paragraphs[0].runs:
-            run.bold = True
-            run.font.color.rgb = RGBColor(255, 255, 255)
-            run.font.size = Pt(10)
-        _set_cell_shading(cell, "003366")
-
-    # Data rows
-    for ri, (key, label) in enumerate(score_labels.items(), 1):
+    for ci, header in enumerate(["Axe d'évaluation", "Poids", "Score"]):
+        _style_header_cell(score_table.cell(0, ci))
+        score_table.cell(0, ci).text = header
+        _style_header_cell(score_table.cell(0, ci))
+    for ri, (key, label, weight) in enumerate(score_rows, 1):
         val = scores.get(key, 0)
-        weight = score_weights.get(key, 0)
-        bar_len = int(val * 20) if isinstance(val, (int, float)) else 0
-        bar = "[" + "=" * bar_len + ">" + " " * (20 - bar_len) + "]"
-
+        val_f = val if isinstance(val, (int, float)) else 0
         score_table.cell(ri, 0).text = label
         score_table.cell(ri, 1).text = f"{weight:.0%}"
-        score_table.cell(ri, 2).text = f"{val:.0%}" if isinstance(val, (int, float)) else "0%"
-        score_table.cell(ri, 3).text = bar
-
-        hex_color = _score_hex(val if isinstance(val, (int, float)) else 0)
-        for ci in range(4):
-            _set_cell_shading(score_table.cell(ri, ci), hex_color)
-        for run in score_table.cell(ri, 0).paragraphs[0].runs:
-            run.bold = True
-            run.font.size = Pt(9)
-        for ci in range(1, 4):
+        score_table.cell(ri, 2).text = f"{val_f:.0%}"
+        hex_color = _score_hex(val_f)
+        for ci in range(3):
             for run in score_table.cell(ri, ci).paragraphs[0].runs:
                 run.font.size = Pt(9)
-
-    # Overall row
-    total_row = len(score_labels) + 1
-    score_table.cell(total_row, 0).text = "SCORE GLOBAL"
-    score_table.cell(total_row, 1).text = "100%"
-    score_table.cell(total_row, 2).text = f"{overall_score:.0%}" if isinstance(overall_score, (int, float)) else "0%"
-    score_table.cell(total_row, 3).text = ""
-    for ci in range(4):
-        for run in score_table.cell(total_row, ci).paragraphs[0].runs:
-            run.bold = True
-            run.font.size = Pt(10)
-        _set_cell_shading(score_table.cell(total_row, ci), _verdict_hex(verdict))
-
+            _set_cell_shading(score_table.cell(ri, ci), hex_color)
     doc.add_paragraph()
 
     # ═══════════════════════════════════════════════════════
-    # 5. SUMMARY COUNTS
+    # 2. PROBLÈMES À CORRIGER — the actionable core
     # ═══════════════════════════════════════════════════════
-    _add_heading("3. Synthèse des Résultats", level=2)
+    n_problems = len(errors) + len(warnings)
+    _add_heading(f"2. Problèmes à Corriger ({n_problems})", level=2)
 
-    counts = report.get("summaryCounts", {})
-    count_categories = [
-        ("Erreurs", counts.get("errors", 0), (220, 53, 69), "FFC7CE"),
-        ("Avertissements", counts.get("warnings", 0), (255, 140, 0), "FFEB9C"),
-        ("Conformes", counts.get("pass", 0), (40, 167, 69), "C6EFCE"),
-        ("Informations", counts.get("info", 0), (23, 162, 184), "D9E2F3"),
-    ]
-
-    count_table = doc.add_table(rows=len(count_categories) + 1, cols=2)
-    count_table.style = "Table Grid"
-    count_table.alignment = WD_TABLE_ALIGNMENT.CENTER
-
-    c_headers = ["Type", "Nombre"]
-    for ci, header in enumerate(c_headers):
-        cell = count_table.cell(0, ci)
-        cell.text = header
-        for run in cell.paragraphs[0].runs:
-            run.bold = True
-            run.font.color.rgb = RGBColor(255, 255, 255)
-            run.font.size = Pt(10)
-        _set_cell_shading(cell, "003366")
-
-    for ri, (label, count, rgb, hex_c) in enumerate(count_categories, 1):
-        count_table.cell(ri, 0).text = label
-        count_table.cell(ri, 1).text = str(count)
-        for ci in range(2):
-            _set_cell_shading(count_table.cell(ri, ci), hex_c)
-        for run in count_table.cell(ri, 0).paragraphs[0].runs:
-            run.bold = True
-            run.font.size = Pt(10)
-        for run in count_table.cell(ri, 1).paragraphs[0].runs:
-            run.font.size = Pt(10)
-
-    doc.add_paragraph()
-
-    # ═══════════════════════════════════════════════════════
-    # 6. DETAILED FINDINGS (with double evidence)
-    # ═══════════════════════════════════════════════════════
-    doc.add_page_break()
-    _add_heading("4. Constats Détaillés (Double Preuve)", level=2)
-
-    _add_para(
-        "Chaque constat ci-dessous inclut la règle source extraite du template/guide "
-        "ET l'extrait exact du document utilisateur, garantissant une traçabilité à 100%.",
-        italic=True, size=9, color=(108, 117, 125)
-    )
-    doc.add_paragraph()
-
-    findings = report.get("findings", [])
-    if findings:
-        # Group findings by severity
-        errors = [f for f in findings if f.get("severity") == "error"]
-        warnings = [f for f in findings if f.get("severity") == "warning"]
-        passes = [f for f in findings if f.get("severity") == "pass"]
-        infos = [f for f in findings if f.get("severity") == "info"]
-
+    if n_problems == 0:
         _add_para(
-            f"Total: {len(findings)} constat(s) — "
-            f"{len(errors)} erreur(s), {len(warnings)} avertissement(s), "
-            f"{len(passes)} conforme(s), {len(infos)} information(s).",
-            bold=True, size=10
+            "✅ Aucun problème détecté — le document est conforme au template "
+            "CTS et au guide d'écriture.",
+            bold=True, size=11, color=(40, 167, 69)
         )
-        doc.add_paragraph()
-
-        # Findings table (compact overview)
-        findings_table = doc.add_table(rows=len(findings) + 1, cols=5)
-        findings_table.style = "Table Grid"
-
-        f_headers = ["Sévérité", "Règle", "Catégorie", "Section", "Message"]
-        for ci, header in enumerate(f_headers):
-            cell = findings_table.cell(0, ci)
-            cell.text = header
-            for run in cell.paragraphs[0].runs:
-                run.bold = True
-                run.font.color.rgb = RGBColor(255, 255, 255)
-                run.font.size = Pt(9)
-            _set_cell_shading(cell, "003366")
-
-        for ri, f in enumerate(findings, 1):
-            sev = f.get("severity", "info")
-            sev_label = sev.upper()
-            row_data = [
-                sev_label,
-                f.get("rule_id", ""),
-                f.get("check", ""),
-                f.get("section", ""),
-                f.get("message", "")[:200],
-            ]
-            hex_color = _severity_hex(sev)
-            for ci, val in enumerate(row_data):
-                cell = findings_table.cell(ri, ci)
-                cell.text = str(val)
-                for run in cell.paragraphs[0].runs:
-                    run.font.size = Pt(8)
-                _set_cell_shading(cell, hex_color)
-
-        doc.add_page_break()
-
-        # Detailed findings with full double-evidence
-        _add_heading("Détail des Constats avec Double Preuve", level=3)
-
-        for idx, f in enumerate(findings, 1):
-            sev = f.get("severity", "info")
-            sev_rgb = _severity_rgb(sev)
-            rule_id = f.get("rule_id", "")
-            check = f.get("check", "")
-            message = f.get("message", "")
-            source_rule = f.get("source_rule", "")
-            source_doc = f.get("source_doc", "")
-            user_excerpt = f.get("user_excerpt", "")
-            user_location = f.get("user_location", "")
-            why = f.get("why", "")
-            fix = f.get("fix_suggestion", "")
-
-            # Severity badge + rule ID
-            _add_para(f"[{idx}] {sev.upper()} — {rule_id} ({check})", bold=True, size=10, color=sev_rgb)
-
-            # Message
-            if message:
-                _add_para(f"Message: {message}", size=9)
-
-            # Source rule (evidence 1)
-            if source_rule:
-                _add_para(f"⚖ Règle source ({source_doc}): {source_rule}", italic=True, size=9, color=(100, 100, 100))
-
-            # User excerpt (evidence 2)
-            if user_excerpt:
-                _add_para(f"📄 Extrait du document: \"{user_excerpt}\"", size=9, color=(60, 60, 60))
-            elif user_location:
-                _add_para(f"📄 Localisation: {user_location}", size=9, color=(60, 60, 60))
-
-            # Why it matters
-            if why:
-                _add_para(f"Pourquoi: {why}", size=9, color=(40, 40, 40))
-
-            # Fix suggestion
-            if fix:
-                _add_para(f"✅ Correction suggérée: {fix}", bold=True, size=9, color=(0, 100, 0))
-
-            doc.add_paragraph()  # spacing between findings
     else:
         _add_para(
-            "✓ Aucun constat. Le document est parfaitement conforme au template et au guide d'écriture.",
-            italic=True, color=(40, 167, 69), size=10
+            "Erreurs critiques d'abord, puis avertissements. Pour chaque "
+            "problème : où il se trouve, ce qui ne va pas, et comment le corriger.",
+            italic=True, size=9, color=(108, 117, 125)
         )
 
+        problem_list = (
+            [("ERREUR", f) for f in errors]
+            + [("AVERTISSEMENT", f) for f in warnings]
+        )
+        shown = problem_list[:_MAX_PROBLEM_BLOCKS]
+
+        prob_table = doc.add_table(rows=len(shown) + 1, cols=5)
+        prob_table.style = "Table Grid"
+
+        p_headers = ["#", "Sévérité", "Où (section / localisation)",
+                     "Problème constaté", "Comment corriger"]
+        for ci, header in enumerate(p_headers):
+            cell = prob_table.cell(0, ci)
+            cell.text = header
+            _style_header_cell(cell)
+
+        # Column widths (A4 usable ≈ 17 cm)
+        col_widths = [Cm(0.9), Cm(2.2), Cm(3.4), Cm(6.0), Cm(4.5)]
+
+        for ri, (sev_label, f) in enumerate(shown, 1):
+            sev = f.get("severity", "warning")
+            hex_c = _severity_hex(sev)
+            where = f.get("section", "") or f.get("user_location", "") or "Document entier"
+            message = (f.get("message", "") or "")[:_MSG_MAX]
+            excerpt = (f.get("user_excerpt", "") or "")[:_EXCERPT_MAX]
+            problem_txt = message + (f'\n« {excerpt} »' if excerpt else "")
+            fix = f.get("fix_suggestion", "") or (f.get("why", "") or "")[:_MSG_MAX]
+
+            rule_id = f.get("rule_id", "")
+            sev_txt = sev_label + (f"\n{rule_id}" if rule_id else "")
+            row_data = [str(ri), sev_txt, where, problem_txt, fix or "—"]
+            for ci, val in enumerate(row_data):
+                cell = prob_table.cell(ri, ci)
+                cell.text = str(val)
+                cell.width = col_widths[ci]
+                for para in cell.paragraphs:
+                    for run in para.runs:
+                        run.font.size = Pt(8)
+                        if ci == 1:
+                            run.bold = True
+                            run.font.color.rgb = RGBColor(*_severity_rgb(sev))
+                _set_cell_shading(cell, hex_c)
+        # Fix header column widths too
+        for ci in range(5):
+            prob_table.cell(0, ci).width = col_widths[ci]
+
+        if len(problem_list) > _MAX_PROBLEM_BLOCKS:
+            doc.add_paragraph()
+            _add_para(
+                f"({len(problem_list) - _MAX_PROBLEM_BLOCKS} constat(s) "
+                f"supplémentaires non détaillés ici — liste complète disponible "
+                f"dans l'analyse en ligne.)",
+                italic=True, size=8, color=(108, 117, 125)
+            )
+
+        # ── Per-problem resolution detail ──────────────────
+        doc.add_paragraph()
+        _add_heading("Détail et résolution de chaque problème", level=3)
+        _add_para(
+            "Pour chaque problème du tableau : sa localisation exacte, la "
+            "nature précise du problème, la marche à suivre pour le corriger, "
+            "et un exemple lorsque pertinent.",
+            italic=True, size=9, color=(108, 117, 125)
+        )
+        doc.add_paragraph()
+
+        for idx, (sev_label, f) in enumerate(shown, 1):
+            sev = f.get("severity", "warning")
+            sev_rgb = _severity_rgb(sev)
+            rule_id = f.get("rule_id", "")
+            sec = f.get("section", "")
+            location = f.get("user_location", "")
+            message = (f.get("message", "") or "")[:_MSG_MAX]
+            excerpt = (f.get("user_excerpt", "") or "")[:_EXCERPT_MAX]
+            why = (f.get("why", "") or "")[:_MSG_MAX]
+            fix = f.get("fix_suggestion", "")
+            example = _example_for(f)
+
+            head = f"{idx}. [{sev_label}] {rule_id}" + (f" — {sec}" if sec else "")
+            _add_para(head, bold=True, size=10, color=sev_rgb)
+
+            where_parts = []
+            if sec:
+                where_parts.append(f"section « {sec} »")
+            if location:
+                where_parts.append(location)
+            if where_parts:
+                _add_para("Où : " + " — ".join(where_parts), size=9)
+            if excerpt:
+                _add_para(f"Extrait concerné : « {excerpt} »",
+                          italic=True, size=8, color=(90, 90, 90))
+            if message:
+                _add_para(f"Problème : {message}", size=9)
+            if why:
+                _add_para(f"Pourquoi : {why}", size=9, color=(80, 80, 80))
+            if fix:
+                _add_para(f"→ Correction : {fix}", size=9, color=(0, 100, 0))
+            if example:
+                _add_para(f"Exemple : {example}", italic=True, size=8.5,
+                          color=(0, 51, 102))
+            doc.add_paragraph()
     doc.add_paragraph()
 
     # ═══════════════════════════════════════════════════════
-    # 7. SECTION COVERAGE
+    # 3. COUVERTURE DES SECTIONS
     # ═══════════════════════════════════════════════════════
-    doc.add_page_break()
-    _add_heading("5. Couverture des Sections Obligatoires", level=2)
-
-    sections_found = report.get("sectionsFound", [])
-    sections_missing = report.get("sectionsMissing", [])
-
-    _add_para(
-        f"Sections trouvées: {len(sections_found)} | Sections manquantes: {len(sections_missing)}",
-        bold=True, size=10
-    )
-    doc.add_paragraph()
-
-    if sections_found:
-        _add_heading("Sections présentes dans le document", level=3)
-        for s in sections_found:
-            p = doc.add_paragraph(style="List Bullet")
-            run = p.add_run(str(s))
-            run.font.size = Pt(9)
-            run.font.color.rgb = RGBColor(40, 167, 69)
+    _add_heading("3. Couverture des Sections du Template", level=2)
 
     if sections_missing:
-        doc.add_paragraph()
-        _add_heading("Sections manquantes (obligatoires selon le template)", level=3)
+        _add_para(
+            f"❌ {len(sections_missing)} section(s) obligatoire(s) manquante(s) :",
+            bold=True, size=10, color=(220, 53, 69)
+        )
         for s in sections_missing:
             p = doc.add_paragraph(style="List Bullet")
             run = p.add_run(str(s))
             run.font.size = Pt(9)
+            run.bold = True
             run.font.color.rgb = RGBColor(220, 53, 69)
-            run.bold = True
+    else:
+        _add_para(
+            "✅ Toutes les sections obligatoires du template sont présentes.",
+            bold=True, size=10, color=(40, 167, 69)
+        )
 
+    if sections_found:
+        _add_para(
+            f"{len(sections_found)} sections détectées dans le document.",
+            size=8, color=(108, 117, 125)
+        )
     doc.add_paragraph()
 
     # ═══════════════════════════════════════════════════════
-    # 8. WRITING GUIDE COMPLIANCE
+    # 4. RECOMMANDATIONS
     # ═══════════════════════════════════════════════════════
-    _add_heading("6. Conformité au Guide d'Écriture", level=2)
+    _add_heading("4. Recommandations", level=2)
 
-    rules_used = report.get("rulesUsed", {})
-    mandatory_count = rules_used.get("mandatory_sections_count", 0)
-    wg_rules_count = rules_used.get("writing_guide_rules_count", 0)
-    wg_rules_checked = rules_used.get("writing_guide_rules_checked", 0)
-    template_instructions = rules_used.get("template_instructions_count", 0)
-    checked_ids = rules_used.get("checked_rule_ids", [])
-
-    wg_items = [
-        ("Sections obligatoires du template", str(mandatory_count)),
-        ("Règles du guide d'écriture (total)", str(wg_rules_count)),
-        ("Règles du guide vérifiées", str(wg_rules_checked)),
-        ("Instructions du template extraites", str(template_instructions)),
-    ]
-
-    wg_table = doc.add_table(rows=len(wg_items) + 1, cols=2)
-    wg_table.style = "Table Grid"
-
-    for ci, header in enumerate(["Métrique", "Valeur"]):
-        cell = wg_table.cell(0, ci)
-        cell.text = header
-        for run in cell.paragraphs[0].runs:
-            run.bold = True
-            run.font.color.rgb = RGBColor(255, 255, 255)
-            run.font.size = Pt(10)
-        _set_cell_shading(cell, "003366")
-
-    for ri, (label, value) in enumerate(wg_items, 1):
-        wg_table.cell(ri, 0).text = label
-        wg_table.cell(ri, 1).text = value
-        for run in wg_table.cell(ri, 0).paragraphs[0].runs:
-            run.bold = True
-            run.font.size = Pt(9)
-        for run in wg_table.cell(ri, 1).paragraphs[0].runs:
-            run.font.size = Pt(9)
-
-    if checked_ids:
-        doc.add_paragraph()
-        _add_heading("Règles vérifiées (IDs)", level=3)
-        # Display in columns of 5
-        for i in range(0, len(checked_ids), 5):
-            batch = checked_ids[i:i + 5]
-            p = doc.add_paragraph()
-            run = p.add_run("  ".join(batch))
-            run.font.size = Pt(8)
-            run.font.color.rgb = RGBColor(80, 80, 80)
-
-    doc.add_paragraph()
-
-    # ═══════════════════════════════════════════════════════
-    # 9. RECOMMENDATIONS
-    # ═══════════════════════════════════════════════════════
-    doc.add_page_break()
-    _add_heading("7. Recommandations", level=2)
-
-    recommendations = _generate_recommendations(report)
-
-    for i, rec in enumerate(recommendations, 1):
+    for rec in _generate_recommendations(report)[:_MAX_RECOMMENDATIONS]:
         p = doc.add_paragraph(style="List Number")
         run = p.add_run(rec)
-        run.font.size = Pt(10)
-
+        run.font.size = Pt(9.5)
     doc.add_paragraph()
 
     # ═══════════════════════════════════════════════════════
-    # 10. VALIDATION METADATA
+    # 5. PÉRIMÈTRE DE L'ANALYSE (audit trail, compact)
     # ═══════════════════════════════════════════════════════
-    _add_heading("8. Métadonnées de Validation", level=2)
+    _add_heading("5. Périmètre de l'Analyse", level=2)
 
+    wg_count = rules_used.get("writing_guide_rules_count", 0)
+    wg_checked = rules_used.get("writing_guide_rules_checked", 0)
+    mandatory_count = rules_used.get("mandatory_sections_count", 0)
+    checked_ids = rules_used.get("checked_rule_ids", [])
     source_docs = rules_used.get("source_documents", [])
     extraction_ok = rules_used.get("extraction_ok", True)
+    text_length = report.get("textLength", 0)
+
+    _add_para(
+        f"Document analysé en intégralité ({text_length:,} caractères extraits). "
+        f"Vérifications : {mandatory_count} sections obligatoires du template + "
+        f"{wg_checked}/{wg_count} règles du guide d'écriture "
+        f"({counts.get('pass', 0)} vérifications conformes). "
+        f"Extraction des règles : {'réussie' if extraction_ok else 'AVEC ERREURS'}.",
+        size=9
+    )
+    if checked_ids:
+        _add_para("Règles vérifiées : " + ", ".join(checked_ids),
+                  size=8, color=(108, 117, 125))
+    unchecked_ids = rules_used.get("unchecked_rule_ids", [])
+    if unchecked_ids:
+        _add_para(
+            f"Règles du guide non couvertes par l'analyse automatique "
+            f"({len(unchecked_ids)}) : " + ", ".join(unchecked_ids)
+            + " — à vérifier manuellement.",
+            size=8, color=(176, 122, 0)
+        )
+    if source_docs:
+        _add_para("Documents de référence : " + " ; ".join(source_docs),
+                  size=8, color=(108, 117, 125))
+    _add_para(
+        "Méthode : analyse déterministe basée sur des preuves — chaque constat "
+        "cite la règle source et l'extrait exact du document (double preuve). "
+        "Détail complet disponible dans l'analyse en ligne (interface LEON).",
+        italic=True, size=8, color=(108, 117, 125)
+    )
+
     extraction_errors = rules_used.get("errors", [])
-
-    meta2_items = [
-        ("Extraction des règles", "Réussie" if extraction_ok else "Erreurs détectées"),
-        ("Documents source", ", ".join(source_docs) if source_docs else "N/A"),
-        ("Méthode", "100% basée sur des preuves (déterministe, sans LLM)"),
-        ("Politique de double preuve", "Chaque constat cite la règle source ET l'extrait utilisateur"),
-    ]
-
-    meta2_table = doc.add_table(rows=len(meta2_items), cols=2)
-    meta2_table.style = "Light List Accent 1"
-    for i, (label, value) in enumerate(meta2_items):
-        meta2_table.cell(i, 0).text = label
-        meta2_table.cell(i, 1).text = str(value)
-        for run in meta2_table.cell(i, 0).paragraphs[0].runs:
-            run.bold = True
-            run.font.size = Pt(9)
-        for run in meta2_table.cell(i, 1).paragraphs[0].runs:
-            run.font.size = Pt(9)
-
     if extraction_errors:
-        doc.add_paragraph()
-        _add_heading("Erreurs d'extraction", level=3)
+        _add_para("Erreurs d'extraction des règles :", bold=True, size=8, color=(220, 53, 69))
         for err in extraction_errors:
             p = doc.add_paragraph(style="List Bullet")
             run = p.add_run(str(err))
             run.font.size = Pt(8)
             run.font.color.rgb = RGBColor(220, 53, 69)
 
-    doc.add_paragraph()
-
-    # ═══════════════════════════════════════════════════════
-    # FOOTER
-    # ═══════════════════════════════════════════════════════
-    doc.add_paragraph("_" * 85).alignment = WD_ALIGN_PARAGRAPH.CENTER
-
-    footer_para = doc.add_paragraph()
-    footer_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    run = footer_para.add_run(
-        f"Document généré par LEON — Specification Validation Assistant | "
-        f"{datetime.datetime.now().strftime('%Y-%m-%d %H:%M')} | "
-        f"Stellantis Mechatronics Engineering"
-    )
-    run.font.size = Pt(8)
-    run.italic = True
-    run.font.color.rgb = RGBColor(150, 150, 150)
-
-    # Add page numbers to footer
+    # ── Footer (page numbers) ──────────────────────────────
     _add_page_number_footer(section)
 
     # ── Save to bytes ───────────────────────────────────────
@@ -632,7 +539,7 @@ def generate_spec_validation_document(report: Dict) -> bytes:
 # ═══════════════════════════════════════════════════════════════════
 
 def _generate_recommendations(report: Dict) -> List[str]:
-    """Generate actionable recommendations based on the validation report."""
+    """Generate actionable, prioritized recommendations from the report."""
     recs: List[str] = []
 
     verdict = report.get("verdict", "UNKNOWN")
@@ -641,87 +548,57 @@ def _generate_recommendations(report: Dict) -> List[str]:
     warnings = counts.get("warnings", 0)
     scores = report.get("scores", {})
     sections_missing = report.get("sectionsMissing", [])
-    findings = report.get("findings", [])
 
-    # Verdict-based recommendations
+    # Verdict-based recommendation
     if verdict == "GOOD":
         recs.append(
-            "✓ Le document est globalement conforme. Aucune action corrective majeure nécessaire. "
-            "Continuer à maintenir la qualité pour les futures révisions."
+            "Le document est globalement conforme. Traiter les avertissements "
+            "restants pour la prochaine révision."
+            if warnings else
+            "Le document est conforme. Aucune action corrective nécessaire."
         )
     elif verdict == "ACCEPTABLE_WITH_FIXES":
         recs.append(
-            f"Corriger les {errors} erreur(s) identifiée(s) pour atteindre un verdict GOOD. "
-            f"Les {warnings} avertissement(s) peuvent être traités en seconde priorité."
+            f"Corriger les {errors} erreur(s) pour atteindre le verdict GOOD ; "
+            f"traiter ensuite les {warnings} avertissement(s)."
         )
     elif verdict == "NOT_RELIABLE":
         recs.append(
-            f"Le document nécessite des révisions importantes ({errors} erreurs, {warnings} avertissements). "
-            "Une révision approfondie du document est recommandée avant soumission."
+            f"Révision approfondie nécessaire avant soumission "
+            f"({errors} erreurs, {warnings} avertissements)."
         )
     else:  # NON_COMPLIANT
         recs.append(
-            f"Le document est non conforme ({errors} erreurs critiques). "
-            "Une réécriture significative est nécessaire, en suivant le template CTS et le guide d'écriture."
+            f"Réécriture significative nécessaire en suivant le template CTS "
+            f"et le guide d'écriture ({errors} erreurs critiques)."
         )
 
-    # Section coverage recommendations
     if sections_missing:
         recs.append(
-            f"Ajouter les {len(sections_missing)} section(s) manquante(s): "
-            + ", ".join(str(s) for s in sections_missing[:10])
-            + ("..." if len(sections_missing) > 10 else "")
-            + ". Ces sections sont obligatoires selon le template CTS."
+            f"Ajouter les {len(sections_missing)} section(s) obligatoire(s) "
+            "manquante(s) : "
+            + ", ".join(str(s) for s in sections_missing[:8])
+            + ("…" if len(sections_missing) > 8 else "")
+            + "."
         )
 
-    # Score-based recommendations
-    structure_score = scores.get("structure", 0)
-    if structure_score < 0.60:
+    if scores.get("template_cleanliness", 1) < 0.80:
         recs.append(
-            "Améliorer la structure du document en ajoutant les sections obligatoires du template CTS. "
-            f"Score actuel: {structure_score:.0%}."
+            "Supprimer les placeholders restants (<<…>>, TBD, XXX) "
+            f"(propreté du template : {scores.get('template_cleanliness', 0):.0%})."
         )
 
-    cleanliness_score = scores.get("template_cleanliness", 0)
-    if cleanliness_score < 0.80:
+    if scores.get("requirements_quality", 1) < 0.60:
         recs.append(
-            "Supprimer les placeholders restants (<<...>>, TBD, XXX) du document. "
-            f"Score de propreté: {cleanliness_score:.0%}."
+            "Renforcer les exigences : 'shall' pour chaque exigence obligatoire, "
+            "ID unique par exigence, traçabilité vers les exigences amont "
+            f"(score actuel : {scores.get('requirements_quality', 0):.0%})."
         )
 
-    req_quality_score = scores.get("requirements_quality", 0)
-    if req_quality_score < 0.60:
+    if scores.get("writing_guide_compliance", 1) < 0.60:
         recs.append(
-            "Améliorer la qualité des exigences: utiliser 'shall' pour les exigences obligatoires, "
-            "attribuer un ID unique à chaque exigence, et assurer la traçabilité avec les exigences amont. "
-            f"Score actuel: {req_quality_score:.0%}."
-        )
-
-    wg_score = scores.get("writing_guide_compliance", 0)
-    if wg_score < 0.60:
-        recs.append(
-            "Consulter le guide d'écriture CTS pour les règles de formatage et de rédaction. "
-            f"Score de conformité au guide: {wg_score:.0%}."
-        )
-
-    # Finding-based recommendations
-    error_findings = [f for f in findings if f.get("severity") == "error"]
-    if error_findings:
-        # Group by check category
-        check_groups = {}
-        for f in error_findings:
-            check = f.get("check", "unknown")
-            check_groups.setdefault(check, []).append(f)
-
-        for check, group_findings in check_groups.items():
-            recs.append(
-                f"Catégorie '{check}': {len(group_findings)} erreur(s) à corrérer. "
-                f"Voir les constats détaillés (section 4) pour les corrections suggérées."
-            )
-
-    if not recs:
-        recs.append(
-            "✓ Aucune action corrective nécessaire. Le document est conforme au template et au guide d'écriture."
+            "Consulter le guide d'écriture CTS pour les règles de rédaction "
+            f"(conformité actuelle : {scores.get('writing_guide_compliance', 0):.0%})."
         )
 
     return recs

@@ -15,14 +15,6 @@
       "description": "Production — France Central"
     }
   ],
-  "security": [
-    {
-      "api_key_header": []
-    },
-    {
-      "api_key_query": []
-    }
-  ],
   "paths": {
     "/api/ask": {
       "post": {
@@ -168,22 +160,19 @@
     "/api/upload-and-validate": {
       "post": {
         "summary": "Upload a specification file and validate it against the CTS template",
-        "description": "Uploads a .docx, .txt, or .pdf specification file, indexes it, and immediately validates it against the Stellantis CTS template. Returns the validation verdict, score, and detailed report. Map the file input to Topic.Var1.Content (File type).",
+        "description": "Downloads a .docx, .txt, or .pdf specification file from the provided URL, indexes it, and immediately validates it against the Stellantis CTS template. Returns the validation verdict, score, and detailed report. Uses URL-based file transfer (fileUrl) to bypass Azure OpenAI content filters. Anonymous endpoint — no API key required. Bind fileUrl to Topic.Var1.ContentUrl and fileName to Topic.Var1.Name.",
         "operationId": "UploadAndValidate",
+        "security": [],
         "requestBody": {
           "required": true,
           "content": {
-            "multipart/form-data": {
+            "application/json": {
               "schema": {
-                "type": "object",
-                "required": ["file"],
-                "properties": {
-                  "file": {
-                    "type": "string",
-                    "format": "binary",
-                    "description": "The specification file to upload and validate. Map this to Topic.Var1.Content."
-                  }
-                }
+                "$ref": "#/components/schemas/ValidateUrlRequest"
+              },
+              "example": {
+                "fileUrl": "https://sharepoint.com/.../ASU_Spec.docx",
+                "fileName": "ASU_Technical_Specification.docx"
               }
             }
           }
@@ -217,6 +206,52 @@
           },
           "400": {"description": "Invalid file or no content"},
           "413": {"description": "File too large (>25 MB)"}
+        }
+      }
+    },
+    "/api/validate-url": {
+      "post": {
+        "summary": "Validate a specification file from a URL",
+        "description": "Downloads a specification file from a public URL and validates it against the CTS template. This endpoint bypasses the Azure OpenAI content filter because only a short URL string is sent through Copilot Studio (no file content). The Azure Function downloads and validates the file server-side. Use this when the user provides a SharePoint, OneDrive, or Blob Storage link instead of attaching a file.",
+        "operationId": "ValidateFromUrl",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ValidateUrlRequest"
+              },
+              "example": {
+                "fileUrl": "https://leon-spec-gbexcnefdmakfpdg.francecentral-01.azurewebsites.net/api/download/spec.docx",
+                "fileName": "ASU_Technical_Specification.docx"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "File downloaded and validated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidateUrlResponse"
+                },
+                "example": {
+                  "answer": "Verdict: ACCEPTABLE_WITH_FIXES (83%)",
+                  "status": "answered",
+                  "verdict": "ACCEPTABLE_WITH_FIXES",
+                  "overallScore": 0.83,
+                  "summary": "The specification covers 18 of 22 mandatory sections...",
+                  "fileName": "ASU_Technical_Specification.docx",
+                  "documentUrl": "https://leon-spec.blob.core.windows.net/reports/ASU_validation.docx",
+                  "documentAvailable": true
+                }
+              }
+            }
+          },
+          "400": {"description": "Failed to download file from URL"},
+          "422": {"description": "Missing fileUrl in request body"}
         }
       }
     },
@@ -569,6 +604,65 @@
           "fileContent": {
             "type": "string",
             "description": "The file content as a data URI string (e.g., 'data:application/vnd.openxmlformats-officedocument.wordprocessingml.document;base64,...') or plain base64 string. In Copilot Studio, map this to Topic.Var1.Content."
+          }
+        }
+      },
+      "ValidateUrlRequest": {
+        "type": "object",
+        "required": [
+          "fileUrl"
+        ],
+        "properties": {
+          "fileUrl": {
+            "type": "string",
+            "description": "Public URL to the specification file (SharePoint, OneDrive, Blob Storage, or any direct download link). The Azure Function downloads this file server-side."
+          },
+          "fileName": {
+            "type": "string",
+            "description": "Optional file name. If omitted, extracted from the URL."
+          }
+        }
+      },
+      "ValidateUrlResponse": {
+        "type": "object",
+        "properties": {
+          "answer": {
+            "type": "string",
+            "description": "Human-readable validation summary with verdict and score."
+          },
+          "status": {
+            "type": "string",
+            "description": "Always 'answered' for successful validations."
+          },
+          "verdict": {
+            "type": "string",
+            "enum": ["ACCEPTABLE", "ACCEPTABLE_WITH_FIXES", "NEEDS_REWRITE", "UNKNOWN", "NOT_RELIABLE", "NON_COMPLIANT"],
+            "description": "Validation verdict."
+          },
+          "overallScore": {
+            "type": "number",
+            "format": "float",
+            "description": "Score from 0.0 to 1.0"
+          },
+          "summary": {
+            "type": "string",
+            "description": "Evidence-backed validation summary."
+          },
+          "fileName": {
+            "type": "string",
+            "description": "Name of the validated file."
+          },
+          "validationReport": {
+            "type": "object",
+            "description": "Full evidence-backed validation report."
+          },
+          "documentUrl": {
+            "type": "string",
+            "description": "Download URL for the unified validation document (DOCX)."
+          },
+          "documentAvailable": {
+            "type": "boolean",
+            "description": "True if a validation document is available for download."
           }
         }
       },

@@ -22,6 +22,8 @@ Check categories (all deterministic, no LLM):
   G. TRACEABILITY         — R22: upstream requirement column (or N/A)
   H. WRITING GUIDE RULES  — R01-R53, P01-P10 checks that can be verified deterministically
   I. DOCUMENT IDENTIFICATION — R05/R09: title, revision history, writer/approver
+  J. STANDARDS CONSISTENCY — R17: standards/norms declared in Applicable
+     Documents/Standards vs. actually referenced elsewhere in the document
 """
 from __future__ import annotations
 
@@ -431,7 +433,49 @@ def check_placeholder_residue(
             fix_suggestion="Resolve all TBD/TBC/TODO markers with final values.",
         ))
 
-    if not placeholders and not component_vars and not tbds:
+    # Template instruction sentences left in the document with the <<>>
+    # markers removed but the red instruction text not deleted.
+    # Uses rules.template_instructions extracted from the template source doc.
+    leftover_instructions: List[str] = []
+    if rules.template_instructions:
+        # Remove regions already counted as <<...>> placeholders so we only
+        # catch instructions whose angle-bracket markers were deleted.
+        stripped_text = PLACEHOLDER_RE.sub(" ", user_text)
+        norm_text = re.sub(r"\s+", " ", stripped_text).lower()
+        seen_instructions = set()
+        for ti in rules.template_instructions:
+            inner = ti.placeholder.strip()
+            if inner.startswith("<<") and inner.endswith(">>"):
+                inner = inner[2:-2]
+            inner = re.sub(r"\s+", " ", inner).strip().lower()
+            # Only long, template-specific sentences (short fragments would
+            # match legitimate content by coincidence).
+            if len(inner) < 40 or inner in seen_instructions:
+                continue
+            seen_instructions.add(inner)
+            if inner in norm_text:
+                leftover_instructions.append(inner)
+
+    if leftover_instructions:
+        sample_instr = [i[:80] + ("…" if len(i) > 80 else "") for i in leftover_instructions[:3]]
+        findings.append(EvidenceFinding(
+            check="C_PLACEHOLDER_RESIDUE",
+            severity="warning",
+            section="",
+            rule_id="TEMPLATE",
+            message=(
+                f"{len(leftover_instructions)} template instruction sentence(s) left in the "
+                f"document (the <<>> markers were removed but the instruction text was not deleted)."
+            ),
+            source_rule="Template: 'Writing instructions are PRINTED IN RED, delete them before submitting the document for revision'",
+            source_doc="template",
+            user_excerpt="; ".join(sample_instr),
+            user_location=f"{len(leftover_instructions)} instruction(s) throughout document",
+            why="Instruction text copied from the CTS template must be deleted, not just stripped of its <<>> markers — it is guidance for the author, not specification content.",
+            fix_suggestion="Delete the remaining template instruction sentences from the document.",
+        ))
+
+    if not placeholders and not component_vars and not tbds and not leftover_instructions:
         findings.append(EvidenceFinding(
             check="C_PLACEHOLDER_RESIDUE",
             severity="pass",
@@ -964,9 +1008,14 @@ def check_extended_writing_guide_rules(
 ) -> List[EvidenceFinding]:
     """Check the remaining writing-guide rules that can be verified deterministically.
 
-    This function covers rules R01-R04, R06, R08, R10, R13-R19, R21,
-    R24-R53, P01-P05, P07-P10 — all the rules NOT covered by the
-    check_writing_guide_rules function above.
+    Implemented rules: R01-R04, R06, R08, R10, R13-R15, R19, R21, R24, R25,
+    R27, R30, R31, R33, R36, R37, R40, R41, R45, R46, R49-R53, and
+    P01, P02, P04, P08-P10. (R17 is implemented separately —
+    see check_standards_consistency below.)
+
+    NOT implemented (require human/semantic judgment — reported as
+    unchecked_rule_ids in rulesUsed): R16, R18, R26, R28, R29, R32, R34,
+    R35, R38, R39, R42-R44, R47, R48, P03, P05, P07.
     """
     findings: List[EvidenceFinding] = []
     user_sections = [s[0] for s in _detect_user_sections(user_text)]
@@ -1061,6 +1110,15 @@ def check_extended_writing_guide_rules(
             why="R06 requires generic CdCs to use 'Generic' in the Project box, not 'All projects'. This prevents confusion about the document's applicability scope.",
             fix_suggestion="Replace 'All projects' with 'Generic' in the page footer Project box.",
         ))
+    else:
+        findings.append(EvidenceFinding(
+            check="I_EXTENDED_WG_RULES", severity="info", section="PAGE FOOTERS",
+            rule_id="R06",
+            message="No 'All projects'/'Generic' conflict detected in the document text (R06 not triggered).",
+            source_rule=f"R06: {r06.text if r06 else 'In the Project box, insert Generic and not All projects if the CdC is generic.'}",
+            source_doc="writing_guide", user_excerpt="", user_location="Entire document",
+            why="R06 only applies to generic CdCs that mislabel their scope as 'All projects'. This document doesn't contain that specific wording, so the rule has nothing to flag.",
+        ))
 
     # ── R08: Auditor separate from writers ──
     r08 = get_rule_by_id("R08")
@@ -1077,6 +1135,16 @@ def check_extended_writing_guide_rules(
             user_excerpt=_find_excerpt(user_text, r"written\s+by|checked\s+by", 80),
             user_location="Document header",
             why="R08 requires the auditor to be a different person from the writers. This ensures independent verification.",
+        ))
+    else:
+        findings.append(EvidenceFinding(
+            check="I_EXTENDED_WG_RULES", severity="info", section="APPROVAL",
+            rule_id="R08",
+            message="Document does not clearly label both a writer and a checker/auditor — R08 cannot be verified from the text.",
+            source_rule=f"R08: {r08.text if r08 else 'The auditor is necessarily separate from the writers.'}",
+            source_doc="writing_guide", user_excerpt="", user_location="Document header",
+            why="R08 requires an identifiable, separate auditor. Without both a 'written by' and a 'checked by' label, this cannot be confirmed automatically — verify manually that the auditor is not one of the writers.",
+            fix_suggestion="Add 'Written by' and 'Checked by' labels with distinct names in the document header.",
         ))
 
     # ── R13: Diversity characteristics in tables ──
@@ -1135,6 +1203,15 @@ def check_extended_writing_guide_rules(
             source_doc="writing_guide", user_excerpt="", user_location="REFERENCE/APPLICABLE DOCUMENTS sections",
             why="R14 requires all quoted documents to include their revision index. Without it, the wrong version may be referenced.",
             fix_suggestion="Add revision/version indices to all referenced and applicable documents.",
+        ))
+    else:
+        findings.append(EvidenceFinding(
+            check="I_EXTENDED_WG_RULES", severity="info", section="QUOTED DOCUMENTS",
+            rule_id="R14",
+            message="No reference/applicable document citations detected — R14 (revision index) not applicable.",
+            source_rule=f"R14: {r14.text if r14 else 'These documents are cited with the index of revision.'}",
+            source_doc="writing_guide", user_excerpt="", user_location="REFERENCE/APPLICABLE DOCUMENTS sections",
+            why="R14 only applies when external documents are quoted. None were detected in this document.",
         ))
 
     # ── R15: At least one Design file quoted in reference documents ──
@@ -1480,6 +1557,15 @@ def check_extended_writing_guide_rules(
             why="R31 recommends a Network Context Diagram for network interfaces. Without it, the communication architecture is unclear.",
             fix_suggestion="Add a Network Context Diagram showing the component's network connections.",
         ))
+    else:
+        findings.append(EvidenceFinding(
+            check="I_EXTENDED_WG_RULES", severity="info", section="NETWORK INTERFACES",
+            rule_id="R31",
+            message="No network interfaces detected — R31 (network context diagram) not applicable.",
+            source_rule=f"R31: {r31.text if r31 else 'Rule of writing of the Network Context Diagram (§ 5.3.1).'}",
+            source_doc="writing_guide", user_excerpt="", user_location="Entire document",
+            why="R31 only applies to components with network interfaces (CAN/LIN/etc.). None were detected in this document.",
+        ))
 
     # ── R36: Electric interface diagram ──
     r36 = get_rule_by_id("R36")
@@ -1582,15 +1668,41 @@ def check_extended_writing_guide_rules(
                 why="R50 prohibits development and recycling process requirements in the CTS. They belong in process documents.",
                 fix_suggestion="Move development/recycling process requirements to the appropriate process document.",
             ))
-        if not has_packaging and not has_recycling:
+        if not has_packaging:
             findings.append(EvidenceFinding(
                 check="I_EXTENDED_WG_RULES", severity="pass", section="CONSTRAINT REQUIREMENTS",
                 rule_id="R49",
-                message="No packaging/recycling process requirements in constraint section (R49/R50 compliant).",
-                source_rule=f"R49/R50: Do not insert packaging or development/recycling process requirements in this paragraph.",
+                message="No packaging process requirements in constraint section (R49 compliant).",
+                source_rule=f"R49: {r49.text if r49 else 'Pay attention not to insert requirements concerning the packaging process, which is subject to the Packaging and Assembly ST.'}",
                 source_doc="writing_guide", user_excerpt="", user_location="CONSTRAINT REQUIREMENTS section",
-                why="R49/R50 prohibit process requirements in the CTS constraint section. Process requirements belong in dedicated process documents.",
+                why="R49 prohibits packaging process requirements in the CTS constraint section. They belong in the Packaging and Assembly ST.",
             ))
+        if not has_recycling:
+            findings.append(EvidenceFinding(
+                check="I_EXTENDED_WG_RULES", severity="pass", section="CONSTRAINT REQUIREMENTS",
+                rule_id="R50",
+                message="No development/recycling process requirements in constraint section (R50 compliant).",
+                source_rule=f"R50: {r50.text if r50 else 'Please do not insert requirements concerning the development and recycling process.'}",
+                source_doc="writing_guide", user_excerpt="", user_location="CONSTRAINT REQUIREMENTS section",
+                why="R50 prohibits development/recycling process requirements in the CTS constraint section. They belong in dedicated process documents.",
+            ))
+    else:
+        findings.append(EvidenceFinding(
+            check="I_EXTENDED_WG_RULES", severity="info", section="CONSTRAINT REQUIREMENTS",
+            rule_id="R49",
+            message="No CONSTRAINT REQUIREMENTS section content found — R49 not applicable.",
+            source_rule=f"R49: {r49.text if r49 else 'Pay attention not to insert requirements concerning the packaging process, which is subject to the Packaging and Assembly ST.'}",
+            source_doc="writing_guide", user_excerpt="", user_location="NOT FOUND",
+            why="R49 only applies within the CONSTRAINT REQUIREMENTS section. It was not found in this document (see section coverage).",
+        ))
+        findings.append(EvidenceFinding(
+            check="I_EXTENDED_WG_RULES", severity="info", section="CONSTRAINT REQUIREMENTS",
+            rule_id="R50",
+            message="No CONSTRAINT REQUIREMENTS section content found — R50 not applicable.",
+            source_rule=f"R50: {r50.text if r50 else 'Please do not insert requirements concerning the development and recycling process.'}",
+            source_doc="writing_guide", user_excerpt="", user_location="NOT FOUND",
+            why="R50 only applies within the CONSTRAINT REQUIREMENTS section. It was not found in this document (see section coverage).",
+        ))
 
     # ── R46: Design constraints only internal, interface constraints in §5.3 ──
     r46 = get_rule_by_id("R46")
@@ -1673,6 +1785,25 @@ def check_extended_writing_guide_rules(
                 user_location="NETWORK INTERFACES section",
                 why="R52 requires all network requirements to be specified. This defines the communication protocols and messages.",
             ))
+        else:
+            findings.append(EvidenceFinding(
+                check="I_EXTENDED_WG_RULES", severity="warning", section="NETWORK INTERFACES",
+                rule_id="R52",
+                message="Network interfaces present but no explicit 'shall' network requirement statements detected (R52 violation).",
+                source_rule=f"R52: {r52.text if r52 else 'Specify all the network requirements to be applied to the component specified.'}",
+                source_doc="writing_guide", user_excerpt="", user_location="NETWORK INTERFACES section",
+                why="R52 requires all network requirements to be formally specified with 'shall'. Without them, the communication protocol behavior is undefined.",
+                fix_suggestion="Add formal 'shall' requirements for each CAN/LIN frame, message, or signal used by the component.",
+            ))
+    else:
+        findings.append(EvidenceFinding(
+            check="I_EXTENDED_WG_RULES", severity="info", section="NETWORK INTERFACES",
+            rule_id="R52",
+            message="No network interfaces detected — R52 not applicable.",
+            source_rule=f"R52: {r52.text if r52 else 'Specify all the network requirements to be applied to the component specified.'}",
+            source_doc="writing_guide", user_excerpt="", user_location="Entire document",
+            why="R52 only applies to components with network interfaces. None were detected in this document.",
+        ))
 
     # ── R53: Distinction between semantic I/O and physical I/O ──
     r53 = get_rule_by_id("R53")
@@ -1688,6 +1819,15 @@ def check_extended_writing_guide_rules(
             user_location="FUNCTIONAL REQUIREMENTS section",
             why="R53 requires distinguishing semantic I/O (functional, §5.1) from physical I/O (interface, §5.3). This prevents ambiguity in data definitions.",
         ))
+    else:
+        findings.append(EvidenceFinding(
+            check="I_EXTENDED_WG_RULES", severity="info", section="FUNCTIONAL REQUIREMENTS",
+            rule_id="R53",
+            message="No explicit I/O list found — R53 (semantic vs. physical I/O) not verifiable from this document.",
+            source_rule=f"R53: {r53.text if r53 else 'Rule for distinguishing between the semantic I/O (functional) and the interface physical I/O.'}",
+            source_doc="writing_guide", user_excerpt="", user_location="Entire document",
+            why="R53 requires an explicit I/O list to check the semantic/physical distinction against. None was detected — verify manually if the component has data inputs/outputs.",
+        ))
 
     # ── R10: Secondary writers/participants ──
     r10 = get_rule_by_id("R10")
@@ -1702,6 +1842,15 @@ def check_extended_writing_guide_rules(
             user_excerpt=_find_excerpt(user_text, r"participants|secondary\s+writer|co-?writ"),
             user_location="Document header",
             why="R10 requires secondary writers to be identified. This ensures all contributors are credited and accountable.",
+        ))
+    else:
+        findings.append(EvidenceFinding(
+            check="I_EXTENDED_WG_RULES", severity="info", section="PARTICIPANTS",
+            rule_id="R10",
+            message="No secondary writers/participants mentioned — R10 only applies if others contributed besides the main writer.",
+            source_rule=f"R10: {r10.text if r10 else 'Rules on secondary editors of the RD (§ 0.7).'}",
+            source_doc="writing_guide", user_excerpt="", user_location="Document header",
+            why="R10 governs how secondary/co-writers are credited. It has nothing to check when the document names no secondary contributors.",
         ))
 
     # ── R01: Conformity matrix / template compliance ──
@@ -1763,6 +1912,186 @@ def _extract_section_text(text: str, section_keyword: str) -> str:
     return "\n".join(lines[start_line:end_line])
 
 
+# ── Check J: Standards/norms consistency (R17) ─────────────────────
+# Stellantis internal norm/standard references use bracketed MARK tags —
+# [STA20] (Stellantis STAndard) and [N41] (Norme) — confirmed by the
+# BeStandard integration (app/config.py BESTANDARD_*), which resolves
+# exactly this convention. This is the ONLY identifier real documents
+# actually cite by: a requirement says "per [N9]" or "refer to [STA19]",
+# never the spelled-out name from the Reference/Title column ("NF EN
+# 60352", "IATF 16949"...). Matching those descriptive names as if they
+# were independently citable standards produces noise no requirement
+# could ever satisfy — so only the Mark tag is tracked, on both the
+# declared side and the used side.
+STANDARD_REF_RE = re.compile(r"\[(STA\d{1,4}|N\d{1,3})\]", re.IGNORECASE)
+
+# A "declaration row": Stellantis reference/applicable-document tables are
+# flattened by DOCX extraction into "[TAG] | Reference | Title" lines
+# (Mark | Reference | Title columns). This structural shape is what marks
+# a line as a DECLARATION, regardless of which section heading it happens
+# to sit under — real documents were found to have this table's real
+# content far from where APPLICABLE DOCUMENTS/STANDARDS headings sit
+# (those headings can be empty stubs while the actual table lives
+# hundreds of lines later, undetected by heading-based section slicing).
+_DECLARATION_ROW_RE = re.compile(r"^\s*\[[A-Z0-9_]{1,15}\]\s*\|[^|\n]*\|")
+
+
+def _flexible_ref_pattern(std: str) -> str:
+    """Build a search pattern for a normalized Mark id (e.g. 'STA20') that
+    tolerates a stray space between the letter prefix and its number
+    ('STA 20') when locating an excerpt in the original text."""
+    m = re.match(r"([A-Z]+)(\d[\d_]*)$", std)
+    if not m:
+        return re.escape(std)
+    prefix, digits = m.group(1), m.group(2)
+    return re.escape(prefix) + r"\s?" + re.escape(digits)
+
+
+def _extract_standard_refs(text: str) -> set:
+    """Extract normalized Mark identifiers from text (e.g. {'STA20', 'N41'})."""
+    refs = set()
+    for m in STANDARD_REF_RE.finditer(text):
+        token = (m.group(1) or "").strip()
+        if token:
+            refs.add(re.sub(r"\s+", "", token).upper())
+    return refs
+
+
+def _split_declaration_and_body(user_text: str) -> Tuple[str, str]:
+    """
+    Split the document into (declaration_text, body_text):
+    - declaration_text: every line inside a genuine "Mark | Reference |
+      Title" reference-document table, PLUS the text under any heading
+      literally named APPLICABLE DOCUMENTS/STANDARDS (covers documents
+      that declare standards as plain narrative text instead of a table).
+    - body_text: everything else — the actual requirements/prose where
+      a standard would be genuinely "used".
+
+    A table is located by scanning for contiguous runs of pipe-containing
+    lines that include at least 2 proper "[TAG] | Reference | Title" rows
+    — then the WHOLE run is treated as declaration content, including any
+    row in the middle that is missing its own [TAG] (observed in real
+    documents: a stray row can lose its Mark/tag column while clearly
+    still belonging to the same reference table as its neighbors).
+    """
+    lines = user_text.split("\n")
+    n = len(lines)
+    is_decl_row = [bool(_DECLARATION_ROW_RE.match(l)) for l in lines]
+    has_pipe = ["|" in l for l in lines]
+
+    declared_idx: set = set()
+    i = 0
+    while i < n:
+        if not has_pipe[i]:
+            i += 1
+            continue
+        j = i
+        while j < n and has_pipe[j]:
+            j += 1
+        if sum(is_decl_row[i:j]) >= 2:
+            declared_idx.update(range(i, j))
+        i = j
+
+    declaration_lines = [lines[k] for k in sorted(declared_idx)]
+    body_lines = [l for k, l in enumerate(lines) if k not in declared_idx]
+
+    applicable_text = _extract_section_text(user_text, "APPLICABLE DOCUMENTS") or ""
+    standards_text = _extract_section_text(user_text, "STANDARDS") or ""
+    declaration_text = "\n".join(declaration_lines) + "\n" + applicable_text + "\n" + standards_text
+    body_text = "\n".join(body_lines)
+    if applicable_text:
+        body_text = body_text.replace(applicable_text, "")
+    if standards_text:
+        body_text = body_text.replace(standards_text, "")
+    return declaration_text, body_text
+
+
+def check_standards_consistency(
+    user_text: str,
+    rules: ExtractedRules,
+) -> List[EvidenceFinding]:
+    """
+    Check R17: consistency between the standards/norms DECLARED (in a
+    reference-document table row, or under an Applicable Documents/
+    Standards heading) and those actually REFERENCED elsewhere in the
+    document (requirements, constraints, etc.).
+
+    Emits ONE finding PER problematic standard (not one aggregated
+    message), so the report lists every individual standard that has a
+    problem:
+    - Declared but never cited anywhere else (stale/unused declaration).
+    - Referenced in the document (e.g. a requirement citing [STA20])
+      but never declared (an undeclared dependency — the compliance
+      perimeter is incomplete).
+
+    Emits a single "not applicable" info finding if no standard reference
+    exists anywhere in the document.
+    """
+    findings: List[EvidenceFinding] = []
+    r17 = get_rule_by_id("R17")
+    r17_text = r17.text if r17 else "Rule on the applicable documents and the requirements (§ 3.2)."
+
+    declaration_text, body_text = _split_declaration_and_body(user_text)
+    declared = _extract_standard_refs(declaration_text)
+    used_elsewhere = _extract_standard_refs(body_text)
+
+    if not declared and not used_elsewhere:
+        findings.append(EvidenceFinding(
+            check="J_STANDARDS_CONSISTENCY", severity="info",
+            section="APPLICABLE DOCUMENTS",
+            rule_id="R17",
+            message="No standards/norms detected in this document — R17 not applicable.",
+            source_rule=f"R17: {r17_text}",
+            source_doc="writing_guide", user_excerpt="", user_location="Entire document",
+            why="R17 only applies when the document depends on external standards/norms. None were detected.",
+        ))
+        return findings
+
+    declared_but_unused = sorted(declared - used_elsewhere)
+    used_but_undeclared = sorted(used_elsewhere - declared)
+
+    for std in declared_but_unused:
+        findings.append(EvidenceFinding(
+            check="J_STANDARDS_CONSISTENCY", severity="warning",
+            section="APPLICABLE DOCUMENTS",
+            rule_id="R17",
+            message=f"Standard/norm '{std}' is declared in Applicable Documents/Standards but never cited by any requirement.",
+            source_rule=f"R17: {r17_text}",
+            source_doc="writing_guide",
+            user_excerpt=_find_excerpt(declaration_text, _flexible_ref_pattern(std)),
+            user_location="APPLICABLE DOCUMENTS / STANDARDS (declaration table)",
+            why="A standard listed as applicable but never cited by any requirement suggests either a stale declaration or a missing requirement that should apply it.",
+            fix_suggestion=f"Remove '{std}' from Applicable Documents if it truly doesn't apply, or add the requirement(s) that apply it.",
+        ))
+
+    for std in used_but_undeclared:
+        findings.append(EvidenceFinding(
+            check="J_STANDARDS_CONSISTENCY", severity="warning",
+            section="REQUIREMENTS",
+            rule_id="R17",
+            message=f"Standard/norm '{std}' is cited in the document but NOT declared in Applicable Documents/Standards.",
+            source_rule=f"R17: {r17_text}",
+            source_doc="writing_guide",
+            user_excerpt=_find_excerpt(body_text, _flexible_ref_pattern(std)),
+            user_location="Referenced in document body",
+            why="Every standard/norm a requirement depends on must be declared in Applicable Documents/Standards so the full compliance perimeter is visible and traceable.",
+            fix_suggestion=f"Add '{std}' to the Applicable Documents or Standards section.",
+        ))
+
+    if not declared_but_unused and not used_but_undeclared:
+        findings.append(EvidenceFinding(
+            check="J_STANDARDS_CONSISTENCY", severity="pass",
+            section="APPLICABLE DOCUMENTS",
+            rule_id="R17",
+            message=f"All {len(declared)} declared standard(s)/norm(s) are consistently referenced in the document (R17 compliant).",
+            source_rule=f"R17: {r17_text}",
+            source_doc="writing_guide", user_excerpt="", user_location="APPLICABLE DOCUMENTS / STANDARDS section",
+            why="R17 requires consistency between declared applicable documents/standards and their actual use in the document.",
+        ))
+
+    return findings
+
+
 # ── Scoring ───────────────────────────────────────────────────────
 def _compute_scores(findings: List[EvidenceFinding], rules: ExtractedRules) -> Dict[str, float]:
     """Compute per-axis scores from the findings."""
@@ -1787,12 +2116,14 @@ def _compute_scores(findings: List[EvidenceFinding], rules: ExtractedRules) -> D
     if not has_placeholders:
         cleanliness = 1.0
     else:
-        # Count total artifacts
+        # Count total artifacts. Every C-check warning message starts with
+        # its count ("N template placeholders…", "N unfilled template
+        # variables…", "N TBD/TBC…") — parse the leading integer so ALL
+        # artifact types are counted, not just <<...>> placeholders.
         total_artifacts = 0
         for f in ph_findings:
             if f.severity == "warning":
-                # Extract count from message
-                m = re.search(r"(\d+)\s+template", f.message)
+                m = re.match(r"(\d+)", f.message)
                 if m:
                     total_artifacts += int(m.group(1))
         if total_artifacts <= 2:
@@ -1819,8 +2150,15 @@ def _compute_scores(findings: List[EvidenceFinding], rules: ExtractedRules) -> D
         if req_error > 0:
             requirements_quality *= max(0.3, 1.0 - req_error * 0.2)
 
-    # Axis H+I: Writing guide compliance (includes extended rules)
-    wg_findings = [f for f in findings if f.check in ("H_WRITING_GUIDE_RULES", "I_EXTENDED_WG_RULES")]
+    # Axis H+I: Writing guide compliance (includes extended rules).
+    # Recommended-section warnings (check A, rule_id WRITING_GUIDE) come
+    # from the writing guide too — count them here so they influence the
+    # score instead of being reported but scoreless.
+    wg_findings = [
+        f for f in findings
+        if f.check in ("H_WRITING_GUIDE_RULES", "I_EXTENDED_WG_RULES", "J_STANDARDS_CONSISTENCY")
+        or (f.check == "A_SECTION_COVERAGE" and f.rule_id == "WRITING_GUIDE")
+    ]
     wg_pass = sum(1 for f in wg_findings if f.severity == "pass")
     wg_warn = sum(1 for f in wg_findings if f.severity == "warning")
     wg_info = sum(1 for f in wg_findings if f.severity == "info")
@@ -1891,6 +2229,7 @@ def validate_with_evidence(file_name: str, user_text: str) -> Dict:
     all_findings.extend(check_traceability(user_text, rules))
     all_findings.extend(check_writing_guide_rules(user_text, rules))
     all_findings.extend(check_extended_writing_guide_rules(user_text, rules))
+    all_findings.extend(check_standards_consistency(user_text, rules))
 
     # Compute scores
     scores = _compute_scores(all_findings, rules)
@@ -1951,6 +2290,12 @@ def validate_with_evidence(file_name: str, user_text: str) -> Dict:
         if f.rule_id and f.rule_id not in ("TEMPLATE", "WRITING_GUIDE", "CONTENT", "WG_ACRONYMS", "WG_FIGURES"):
             checked_rule_ids.add(f.rule_id)
 
+    # Rules extracted from the writing guide but NOT covered by any
+    # implemented check — reported for transparency so the coverage
+    # ratio is honest.
+    extracted_rule_ids = {r.rule_id for r in rules.writing_guide_rules}
+    unchecked_rule_ids = sorted(extracted_rule_ids - checked_rule_ids)
+
     summary = (
         f"Overall score: {overall:.0%} — Verdict: {verdict}. "
         f"Structure: {scores.get('structure', 0):.0%} "
@@ -1993,6 +2338,7 @@ def validate_with_evidence(file_name: str, user_text: str) -> Dict:
             "writing_guide_rules_checked": len(checked_rule_ids),
             "template_instructions_count": len(rules.template_instructions),
             "checked_rule_ids": sorted(checked_rule_ids),
+            "unchecked_rule_ids": unchecked_rule_ids,
             "source_documents": [
                 "Component_or_Part_Specification_Template 1.docx",
                 "Component_or_Part_Specification_Writing_guide 1.docx",

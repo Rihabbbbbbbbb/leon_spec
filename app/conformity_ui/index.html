@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>LEON — Matrice de Conformité FNR</title>
+  <title>LEON — Conformité &amp; Validation de Spec</title>
   <style>
     :root {
       --bg: #0f1115;
@@ -446,15 +446,16 @@
 <body>
 <div class="app">
   <header>
-    <h1>LEON — Matrice de Conformité FNR
-      <small>Analyse intelligente de conformité · Détection d'incohérences IA · Rapports PDF/Excel/Power BI</small>
+    <h1>LEON — Analyse Qualité
+      <small>Matrice de conformité FNR · Validation de spécification · Analyse IA · Rapports Excel/Word/PDF</small>
     </h1>
     <span id="health-badge" class="health-badge health-err">Vérification…</span>
   </header>
 
   <!-- Tabs -->
   <div class="tabs">
-    <button class="tab active" data-tab="analyze" onclick="switchTab('analyze')">📊 Analyse</button>
+    <button class="tab active" data-tab="analyze" onclick="switchTab('analyze')">📊 Matrice de Conformité</button>
+    <button class="tab" data-tab="validator" onclick="switchTab('validator')">📄 Validation de Spec</button>
   </div>
 
   <!-- ═══════════════════════════════════════════════════════════════ -->
@@ -462,12 +463,12 @@
   <!-- ═══════════════════════════════════════════════════════════════ -->
   <div id="tab-analyze">
     <div class="panel">
-      <h2>1. Téléverser une matrice de conformité (ODS / XLSX)</h2>
+      <h2>1. Téléverser une ou plusieurs matrices de conformité (ODS / XLSX)</h2>
       <div class="upload-zone" id="upload-zone" onclick="document.getElementById('file-input').click()">
         <div class="upload-icon">📁</div>
-        <p><strong>Cliquez ou glissez un fichier ici</strong></p>
-        <p>Formats acceptés: .ods, .xlsx, .xlsm</p>
-        <input type="file" id="file-input" accept=".ods,.xlsx,.xlsm" />
+        <p><strong>Cliquez ou glissez un ou plusieurs fichiers ici</strong></p>
+        <p>Formats acceptés: .ods, .xlsx, .xlsm — plusieurs fichiers à la fois possibles</p>
+        <input type="file" id="file-input" accept=".ods,.xlsx,.xlsm" multiple />
       </div>
       <div id="file-info-container"></div>
       <div class="btn-row">
@@ -482,7 +483,31 @@
 
     <div class="loading" id="loading-analyze">
       <div class="spinner"></div>
-      <p style="margin-top:12px">Analyse en cours…</p>
+      <p style="margin-top:12px" id="loading-analyze-text">Analyse en cours…</p>
+    </div>
+
+    <!-- Batch results (2+ files): compact per-file summary + combined download -->
+    <div class="results" id="results-batch">
+      <div class="panel">
+        <h2>Résultats — <span id="batch-count"></span></h2>
+        <div id="batch-failed" class="muted" style="font-size:12px;margin-bottom:12px"></div>
+        <div class="table-container">
+          <table id="batch-table">
+            <thead>
+              <tr>
+                <th>Fichier</th>
+                <th>Total</th>
+                <th>OK</th>
+                <th>NOK</th>
+                <th>NA</th>
+                <th>Points d'attention</th>
+              </tr>
+            </thead>
+            <tbody id="batch-tbody"></tbody>
+          </table>
+        </div>
+        <div class="download-links mt-16" id="batch-downloads"></div>
+      </div>
     </div>
 
     <div class="results" id="results-analyze">
@@ -530,23 +555,88 @@
     </div>
   </div>
 
+  <!-- ═══════════════════════════════════════════════════════════════ -->
+  <!-- TAB: Spec Validator -->
+  <!-- ═══════════════════════════════════════════════════════════════ -->
+  <div id="tab-validator" class="hidden">
+    <div class="panel">
+      <h2>1. Téléverser une spécification (DOCX / PDF / TXT)</h2>
+      <div class="upload-zone" id="spec-upload-zone" onclick="document.getElementById('spec-file-input').click()">
+        <div class="upload-icon">📄</div>
+        <p><strong>Cliquez ou glissez un fichier ici</strong></p>
+        <p>Formats acceptés: .docx, .pdf, .txt</p>
+        <input type="file" id="spec-file-input" accept=".docx,.pdf,.txt" />
+      </div>
+      <div id="spec-file-info-container"></div>
+      <div class="btn-row">
+        <button class="btn btn-primary" id="validate-btn" disabled onclick="doValidate()">
+          🔍 Valider la spécification
+        </button>
+        <button class="btn btn-secondary" id="matrix-btn" disabled onclick="doSpecToMatrix()">
+          📊 Générer la Matrice de Conformité
+        </button>
+      </div>
+    </div>
+
+    <div class="loading" id="loading-validate">
+      <div class="spinner"></div>
+      <p style="margin-top:12px">Validation en cours…</p>
+    </div>
+
+    <div class="results" id="results-validate">
+      <!-- Verdict + scores + downloads -->
+      <div class="panel">
+        <h2>2. Verdict de validation</h2>
+        <div class="stats-grid" id="spec-stats-grid"></div>
+        <p id="spec-summary" class="muted" style="margin-top:12px;font-size:13px"></p>
+        <div class="download-links" id="spec-downloads"></div>
+      </div>
+
+      <!-- Findings -->
+      <div class="panel">
+        <h2>3. Constats détaillés <span id="spec-findings-count" class="muted"></span></h2>
+        <div class="filter-bar" id="spec-filter-bar">
+          <button class="filter-btn active" data-sfilter="ALL" onclick="setSpecFilter('ALL')">Problèmes</button>
+          <button class="filter-btn" data-sfilter="error" onclick="setSpecFilter('error')">❌ Erreurs</button>
+          <button class="filter-btn" data-sfilter="warning" onclick="setSpecFilter('warning')">⚠️ Avertissements</button>
+          <button class="filter-btn" data-sfilter="pass" onclick="setSpecFilter('pass')">✅ Conformes</button>
+        </div>
+        <div id="spec-findings-list"></div>
+      </div>
+    </div>
+  </div>
 
 </div>
 
 <div class="toast" id="toast"></div>
 
 <script>
-const API = ''; // same origin
-let currentFile = null;
-let uploadedFiles = []; // {name, size}
+// Same UI runs in two contexts:
+//   - local server  (page served at "/", API at /api/*)
+//   - Azure Function (page served at "/api/conformity-ui", API at /api/*)
+// All calls go to the same-origin /api/conformity-excel endpoint (anonymous
+// on Azure); an optional ?code= in the page URL is forwarded to API calls.
+const FUNC_CODE = new URLSearchParams(window.location.search).get('code');
+function apiUrl(path) {
+  return '/api' + path + (FUNC_CODE ? '?code=' + encodeURIComponent(FUNC_CODE) : '');
+}
+let currentFiles = []; // File[] — one or many conformity matrices
 let analysisData = null;
 let allItems = [];
 let currentFilter = 'ALL';
+let lastExcel = null; // {name, b64} cached from a single-file analyze call
+let lastBatchExcel = null; // b64 of the combined report from a batch analyze call
+
+// Back-compat alias: several helpers (downloadExcel, doReport) were written
+// for a single currentFile — keep that name meaning "the one file" when
+// exactly one is selected.
+function _singleFile() { return currentFiles.length === 1 ? currentFiles[0] : null; }
 
 // ── Health check ──────────────────────────────────────────────
 async function checkHealth() {
   try {
-    const res = await fetch(API + '/health');
+    // Ping the page's own URL — works in both local and Azure contexts.
+    const res = await fetch(window.location.href, { method: 'GET', cache: 'no-store' });
     if (res.ok) {
       const badge = document.getElementById('health-badge');
       badge.textContent = '● Service en ligne';
@@ -560,10 +650,10 @@ checkHealth();
 
 // ── Tab switching ─────────────────────────────────────────────
 function switchTab(tab) {
-  // Only one tab exists now — always show analyze
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
   document.querySelector(`[data-tab="${tab}"]`).classList.add('active');
-  document.getElementById('tab-analyze').classList.remove('hidden');
+  document.getElementById('tab-analyze').classList.toggle('hidden', tab !== 'analyze');
+  document.getElementById('tab-validator').classList.toggle('hidden', tab !== 'validator');
 }
 
 // ── Toast ─────────────────────────────────────────────────────
@@ -579,7 +669,7 @@ const uploadZone = document.getElementById('upload-zone');
 const fileInput = document.getElementById('file-input');
 
 fileInput.addEventListener('change', () => {
-  if (fileInput.files.length) handleFile(fileInput.files[0]);
+  if (fileInput.files.length) addFiles(fileInput.files);
 });
 
 uploadZone.addEventListener('dragover', e => { e.preventDefault(); uploadZone.classList.add('dragover'); });
@@ -587,58 +677,92 @@ uploadZone.addEventListener('dragleave', () => uploadZone.classList.remove('drag
 uploadZone.addEventListener('drop', e => {
   e.preventDefault();
   uploadZone.classList.remove('dragover');
-  if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+  if (e.dataTransfer.files.length) addFiles(e.dataTransfer.files);
 });
 
-function handleFile(file) {
-  const ext = file.name.split('.').pop().toLowerCase();
-  if (!['ods','xlsx','xlsm'].includes(ext)) {
-    toast('Format non supporté. Utilisez .ods, .xlsx ou .xlsm', 'error');
-    return;
+function addFiles(fileList) {
+  const accepted = ['ods','xlsx','xlsm'];
+  let rejected = 0;
+  for (const file of fileList) {
+    const ext = file.name.split('.').pop().toLowerCase();
+    if (!accepted.includes(ext)) { rejected++; continue; }
+    if (currentFiles.some(f => f.name === file.name && f.size === file.size)) continue; // dedup
+    currentFiles.push(file);
   }
-  currentFile = file;
+  if (rejected) toast(`${rejected} fichier(s) ignoré(s) — formats acceptés: .ods, .xlsx, .xlsm`, 'error');
+  renderFileList();
+}
+
+function removeFile(index) {
+  currentFiles.splice(index, 1);
+  lastExcel = null;
+  lastBatchExcel = null;
+  renderFileList();
+}
+
+function clearFile() {
+  currentFiles = [];
+  lastExcel = null;
+  lastBatchExcel = null;
+  fileInput.value = '';
+  renderFileList();
+  document.getElementById('results-analyze').classList.remove('show');
+  document.getElementById('results-batch').classList.remove('show');
+}
+
+function renderFileList() {
   const container = document.getElementById('file-info-container');
-  container.innerHTML = `
+  container.innerHTML = currentFiles.map((file, i) => `
     <div class="file-info">
       <span>📄</span>
       <span class="name">${file.name}</span>
       <span class="size">${(file.size/1024).toFixed(0)} KB</span>
-      <button class="remove" onclick="clearFile()">×</button>
-    </div>`;
-  document.getElementById('analyze-btn').disabled = false;
-  document.getElementById('excel-btn').disabled = false;
-}
+      <button class="remove" onclick="removeFile(${i})">×</button>
+    </div>`).join('');
 
-function clearFile() {
-  currentFile = null;
-  fileInput.value = '';
-  document.getElementById('file-info-container').innerHTML = '';
-  document.getElementById('analyze-btn').disabled = true;
-  document.getElementById('excel-btn').disabled = true;
-  document.getElementById('results-analyze').classList.remove('show');
+  const n = currentFiles.length;
+  document.getElementById('analyze-btn').disabled = n === 0;
+  document.getElementById('excel-btn').disabled = n === 0;
+  document.getElementById('analyze-btn').textContent =
+    n > 1 ? `📊 Analyser les ${n} matrices` : '📊 Analyser la conformité';
+  document.getElementById('excel-btn').textContent =
+    n > 1 ? '📦 Rapport Excel combiné' : '📗 Rapport Excel';
+
+  if (n === 0) {
+    document.getElementById('results-analyze').classList.remove('show');
+    document.getElementById('results-batch').classList.remove('show');
+  }
 }
 
 // ── Analyze ───────────────────────────────────────────────────
+// 1 file  → /api/conformity-excel: full on-screen analysis + cached Excel.
+// 2+ files → /api/conformity-batch: compact per-file summary + ONE combined
+// Excel workbook (Overview + per-matrix sheets) covering every uploaded file.
 async function doAnalyze() {
-  if (!currentFile) return;
-  showLoading('loading-analyze', true);
+  if (currentFiles.length === 0) return;
+  if (currentFiles.length === 1) return doAnalyzeSingle(currentFiles[0]);
+  return doAnalyzeBatch();
+}
+
+async function doAnalyzeSingle(file) {
+  showLoading('loading-analyze', true, 'Analyse en cours…');
   document.getElementById('results-analyze').classList.remove('show');
+  document.getElementById('results-batch').classList.remove('show');
 
   const formData = new FormData();
-  formData.append('file', currentFile);
+  formData.append('file', file);
 
   try {
-    const res = await fetch(API + '/api/conformity-report', { method: 'POST', body: formData });
+    const res = await fetch(apiUrl('/conformity-excel'), { method: 'POST', body: formData });
     const data = await res.json();
 
-    if (!res.ok) {
-      toast('Erreur: ' + (data.detail || 'analyse échouée'), 'error');
+    if (!res.ok || !data.analysis) {
+      toast('Erreur: ' + (data.detail || data.answer || 'analyse échouée'), 'error');
       return;
     }
 
     analysisData = data.analysis;
-    uploadedFiles = uploadedFiles.filter(f => f.name !== currentFile.name);
-    uploadedFiles.push({ name: currentFile.name, size: currentFile.size });
+    if (data.reportExcel) lastExcel = { name: file.name, b64: data.reportExcel };
 
     renderStats(data.analysis);
     renderChart(data.analysis);
@@ -655,35 +779,120 @@ async function doAnalyze() {
   }
 }
 
-// ── Excel report ────────────────────────────────────────────
-async function doReport() {
-  if (!currentFile) return;
-  toast('Génération du rapport Excel…');
+async function doAnalyzeBatch() {
+  showLoading('loading-analyze', true, `Analyse de ${currentFiles.length} matrices en cours…`);
+  document.getElementById('results-analyze').classList.remove('show');
+  document.getElementById('results-batch').classList.remove('show');
+
+  const formData = new FormData();
+  for (const file of currentFiles) formData.append('files', file);
 
   try {
-    const res = await fetch(API + '/api/conformity-excel-byname', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ fileName: currentFile.name })
-    });
+    const res = await fetch(apiUrl('/conformity-batch'), { method: 'POST', body: formData });
     const data = await res.json();
-    if (!res.ok) { toast('Erreur: ' + (data.detail||''), 'error'); return; }
 
-    const b64 = data.reportExcel;
-    const bytes = atob(b64);
-    const arr = new Uint8Array(bytes.length);
-    for (let i=0; i<bytes.length; i++) arr[i] = bytes.charCodeAt(i);
-    const blob = new Blob([arr], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = currentFile.name.replace(/\.(ods|xlsx|xlsm)$/i, '') + '_report.xlsx';
-    a.click();
-    URL.revokeObjectURL(url);
-    toast('Rapport Excel téléchargé');
+    if (!res.ok || !data.reportExcel) {
+      toast('Erreur: ' + (data.detail || data.answer || 'analyse échouée'), 'error');
+      return;
+    }
+
+    lastBatchExcel = data.reportExcel;
+    renderBatchResults(data);
+    document.getElementById('results-batch').classList.add('show');
+    toast(`Analyse terminée — ${data.filesAnalyzed}/${data.filesAnalyzed + data.filesFailed} matrice(s) analysée(s)`);
+  } catch(e) {
+    toast('Erreur réseau: ' + e.message, 'error');
+  } finally {
+    showLoading('loading-analyze', false);
+  }
+}
+
+function renderBatchResults(data) {
+  document.getElementById('batch-count').textContent =
+    `${data.filesAnalyzed} matrice(s) analysée(s)` + (data.filesFailed ? `, ${data.filesFailed} échec(s)` : '');
+
+  const failedEl = document.getElementById('batch-failed');
+  failedEl.innerHTML = (data.failed || []).length
+    ? '⚠️ Non analysés : ' + data.failed.map(f => `${f.fileName} (${f.error})`).join(' · ')
+    : '';
+
+  document.getElementById('batch-tbody').innerHTML = (data.files || []).map(f => {
+    const s = f.summary || {};
+    return `<tr>
+      <td>${f.fileName}</td>
+      <td>${f.totalRows ?? s.total ?? 0}</td>
+      <td><span class="badge badge-OK">${s.ok ?? 0}</span></td>
+      <td><span class="badge badge-NOK">${s.nok ?? 0}</span></td>
+      <td><span class="badge badge-NA">${s.na ?? 0}</span></td>
+      <td>${f.okDeepFindingsCount ?? 0}</td>
+    </tr>`;
+  }).join('');
+
+  document.getElementById('batch-downloads').innerHTML =
+    `<a class="download-link" onclick="downloadBatchExcel()">📦 Télécharger le rapport combiné (Excel)</a>`;
+}
+
+function downloadBatchExcel() {
+  if (!lastBatchExcel) return;
+  const bytes = atob(lastBatchExcel);
+  const arr = new Uint8Array(bytes.length);
+  for (let i=0; i<bytes.length; i++) arr[i] = bytes.charCodeAt(i);
+  const blob = new Blob([arr], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `conformity_batch_report_${currentFiles.length}_matrices.xlsx`;
+  a.click();
+  URL.revokeObjectURL(url);
+  toast('Rapport combiné téléchargé');
+}
+
+// ── Excel report ────────────────────────────────────────────
+async function doReport() {
+  if (currentFiles.length === 0) return;
+
+  if (currentFiles.length > 1) {
+    if (lastBatchExcel) { downloadBatchExcel(); return; }
+    return doAnalyzeBatch().then(() => { if (lastBatchExcel) downloadBatchExcel(); });
+  }
+
+  const file = currentFiles[0];
+  // Reuse the Excel already produced by the analyze call
+  if (lastExcel && lastExcel.name === file.name && lastExcel.b64) {
+    downloadExcel(lastExcel.b64, file.name);
+    return;
+  }
+
+  toast('Génération du rapport Excel…');
+  const formData = new FormData();
+  formData.append('file', file);
+
+  try {
+    const res = await fetch(apiUrl('/conformity-excel'), { method: 'POST', body: formData });
+    const data = await res.json();
+    if (!res.ok || !data.reportExcel) {
+      toast('Erreur: ' + (data.detail || data.answer || 'génération échouée'), 'error');
+      return;
+    }
+    lastExcel = { name: file.name, b64: data.reportExcel };
+    downloadExcel(data.reportExcel, file.name);
   } catch(e) {
     toast('Erreur: ' + e.message, 'error');
   }
+}
+
+function downloadExcel(b64, fileName) {
+  const bytes = atob(b64);
+  const arr = new Uint8Array(bytes.length);
+  for (let i=0; i<bytes.length; i++) arr[i] = bytes.charCodeAt(i);
+  const blob = new Blob([arr], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = fileName.replace(/\.(ods|xlsx|xlsm)$/i, '') + '_report.xlsx';
+  a.click();
+  URL.revokeObjectURL(url);
+  toast('Rapport Excel téléchargé');
 }
 
 // ── Render functions ──────────────────────────────────────────
@@ -777,10 +986,14 @@ function renderOKDeepFindings(a) {
   const panel = document.getElementById('okdeep-panel');
   const h2 = panel.querySelector('h2');
   const okCount = document.getElementById('okdeep-count');
+  const method = a.okDeepMethod || '';
+  const methodLabel = method.startsWith('ia')
+    ? '<span class="muted" style="font-size:11px;font-weight:400">· analyse sémantique IA (GPT)</span>'
+    : '<span class="muted" style="font-size:11px;font-weight:400">· analyse par motifs</span>';
 
   if (findings.length === 0) {
     if (okCount) okCount.textContent = '(0)';
-    h2.innerHTML = '3. Analyse approfondie des réponses OK <span id="okdeep-count" class="muted">(0)</span> ✅ Aucun point d\'attention';
+    h2.innerHTML = '3. Analyse approfondie des réponses OK <span id="okdeep-count" class="muted">(0)</span> ✅ Aucun point d\'attention ' + methodLabel;
     document.getElementById('okdeep-list').innerHTML = '<p class="muted" style="padding:12px">✅ Tous les statuts OK sont cohérents avec leurs commentaires — aucun signal suspect détecté.</p>';
     return;
   }
@@ -794,7 +1007,7 @@ function renderOKDeepFindings(a) {
   if (warnings > 0) summaryHtml += `<span style="color:var(--warn);font-weight:600">${warnings} attention(s)</span> `;
   if (infos > 0) summaryHtml += `<span style="color:var(--ok);font-weight:600">${infos} info(s)</span>`;
 
-  h2.innerHTML = `3. Analyse approfondie des réponses OK <span id="okdeep-count" class="muted">(${findings.length})</span> ⚠️ ${summaryHtml}`;
+  h2.innerHTML = `3. Analyse approfondie des réponses OK <span id="okdeep-count" class="muted">(${findings.length})</span> ⚠️ ${summaryHtml} ${methodLabel}`;
   document.getElementById('okdeep-list').innerHTML = findings.slice(0, 50).map(f => {
     const sevClass = f.severity === 'error' ? 'inc-card' : f.severity === 'warning' ? 'inc-card warning' : 'inc-card';
     const sevBadge = f.severity === 'error' ? 'badge-NOK' : f.severity === 'warning' ? 'badge-STANDBY' : 'badge-NA';
@@ -814,10 +1027,220 @@ function renderOKDeepFindings(a) {
   `}).join('');
 }
 
+// ═══════════════════════════════════════════════════════════════
+// SPEC VALIDATOR TAB
+// ═══════════════════════════════════════════════════════════════
+let specFile = null;
+let specValidation = null;
+let specFilter = 'ALL';
+
+const specZone = document.getElementById('spec-upload-zone');
+const specInput = document.getElementById('spec-file-input');
+
+specInput.addEventListener('change', () => {
+  if (specInput.files.length) handleSpecFile(specInput.files[0]);
+});
+specZone.addEventListener('dragover', e => { e.preventDefault(); specZone.classList.add('dragover'); });
+specZone.addEventListener('dragleave', () => specZone.classList.remove('dragover'));
+specZone.addEventListener('drop', e => {
+  e.preventDefault();
+  specZone.classList.remove('dragover');
+  if (e.dataTransfer.files.length) handleSpecFile(e.dataTransfer.files[0]);
+});
+
+function handleSpecFile(file) {
+  const ext = file.name.split('.').pop().toLowerCase();
+  if (!['docx','pdf','txt'].includes(ext)) {
+    toast('Format non supporté. Utilisez .docx, .pdf ou .txt', 'error');
+    return;
+  }
+  specFile = file;
+  document.getElementById('spec-file-info-container').innerHTML = `
+    <div class="file-info">
+      <span>📄</span>
+      <span class="name">${file.name}</span>
+      <span class="size">${(file.size/1024).toFixed(0)} KB</span>
+      <button class="remove" onclick="clearSpecFile()">×</button>
+    </div>`;
+  document.getElementById('validate-btn').disabled = false;
+  document.getElementById('matrix-btn').disabled = false;
+}
+
+function clearSpecFile() {
+  specFile = null;
+  specValidation = null;
+  specInput.value = '';
+  document.getElementById('spec-file-info-container').innerHTML = '';
+  document.getElementById('validate-btn').disabled = true;
+  document.getElementById('matrix-btn').disabled = true;
+  document.getElementById('results-validate').classList.remove('show');
+}
+
+// ── Spec → Conformity Matrix ──────────────────────────────────
+async function doSpecToMatrix() {
+  if (!specFile) return;
+  toast('Génération de la matrice de conformité…');
+
+  const formData = new FormData();
+  formData.append('file', specFile);
+
+  try {
+    const res = await fetch(apiUrl('/spec-to-matrix'), { method: 'POST', body: formData });
+    const data = await res.json();
+    if (!res.ok || !data.matrixExcel) {
+      toast('Erreur: ' + (data.detail || data.answer || 'génération échouée'), 'error');
+      return;
+    }
+    _downloadB64(
+      data.matrixExcel,
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      specFile.name.replace(/\.(docx|pdf|txt)$/i, '') + '_Conformity_Matrix.xlsx'
+    );
+    toast(`Matrice téléchargée — ${data.requirementsCount} exigences (${data.withIdCount} avec ID)`);
+  } catch(e) {
+    toast('Erreur réseau: ' + e.message, 'error');
+  }
+}
+
+async function doValidate() {
+  if (!specFile) return;
+  showLoading('loading-validate', true);
+  document.getElementById('results-validate').classList.remove('show');
+
+  const formData = new FormData();
+  formData.append('file', specFile);
+
+  try {
+    const res = await fetch(apiUrl('/upload-and-validate'), { method: 'POST', body: formData });
+    const data = await res.json();
+
+    if (!res.ok || !data.validationReport) {
+      toast('Erreur: ' + (data.detail || data.answer || 'validation échouée'), 'error');
+      return;
+    }
+
+    specValidation = data;
+    renderValidation(data);
+    document.getElementById('results-validate').classList.add('show');
+    toast('Validation terminée — ' + (data.verdict || ''));
+  } catch(e) {
+    toast('Erreur réseau: ' + e.message, 'error');
+  } finally {
+    showLoading('loading-validate', false);
+  }
+}
+
+const VERDICT_STYLE = {
+  'GOOD':                  {color:'var(--ok)',   label:'GOOD — Spécification conforme'},
+  'ACCEPTABLE_WITH_FIXES': {color:'var(--warn)', label:'ACCEPTABLE — corrections à prévoir'},
+  'NOT_RELIABLE':          {color:'var(--warn)', label:'NOT RELIABLE — à retravailler'},
+  'NON_COMPLIANT':         {color:'var(--nok)',  label:'NON COMPLIANT — non conforme'},
+};
+
+function renderValidation(data) {
+  const r = data.validationReport;
+  const v = VERDICT_STYLE[r.verdict] || {color:'var(--muted)', label:r.verdict || '?'};
+  const scores = r.scores || {};
+  const counts = r.summaryCounts || {};
+
+  const cards = [
+    {val: Math.round((r.overallScore||0)*100)+'%', label:'Score global', color:v.color},
+    {val: Math.round((scores.structure||0)*100)+'%', label:'Structure'},
+    {val: Math.round((scores.requirements_quality||0)*100)+'%', label:'Exigences'},
+    {val: Math.round((scores.writing_guide_compliance||0)*100)+'%', label:'Guide de rédaction'},
+    {val: counts.errors||0, label:'Erreurs', color:'var(--nok)'},
+    {val: counts.warnings||0, label:'Avertissements', color:'var(--warn)'},
+  ];
+  document.getElementById('spec-stats-grid').innerHTML =
+    `<div class="stat-card" style="grid-column:1/-1">
+       <div class="value" style="color:${v.color};font-size:20px">${v.label}</div>
+       <div class="label">${r.fileName || ''}</div>
+     </div>` +
+    cards.map(c =>
+      `<div class="stat-card"><div class="value"${c.color ? ` style="color:${c.color}"` : ''}>${c.val}</div><div class="label">${c.label}</div></div>`
+    ).join('');
+
+  document.getElementById('spec-summary').textContent = r.summary || '';
+
+  let dl = '';
+  if (data.documentBase64) dl += `<a class="download-link" onclick="downloadSpecDoc()">📘 Rapport Word (modèle standardisé)</a>`;
+  if (data.pdfBase64) dl += `<a class="download-link" onclick="downloadSpecPdf()">📕 Rapport PDF</a>`;
+  document.getElementById('spec-downloads').innerHTML =
+    dl || '<span class="muted">Rapports non disponibles</span>';
+
+  setSpecFilter('ALL');
+}
+
+function setSpecFilter(f) {
+  specFilter = f;
+  document.querySelectorAll('#spec-filter-bar .filter-btn').forEach(b => b.classList.remove('active'));
+  document.querySelector(`#spec-filter-bar [data-sfilter="${f}"]`).classList.add('active');
+  renderSpecFindings();
+}
+
+function renderSpecFindings() {
+  if (!specValidation) return;
+  const all = specValidation.validationReport.findings || [];
+  const filtered = specFilter === 'ALL'
+    ? all.filter(f => f.severity === 'error' || f.severity === 'warning')
+    : all.filter(f => f.severity === specFilter);
+  const maxShow = 100;
+  const sevColor = {error:'var(--nok)', warning:'var(--warn)', info:'var(--accent)', pass:'var(--ok)'};
+
+  document.getElementById('spec-findings-count').textContent =
+    filtered.length > maxShow ? `(${filtered.length} — ${maxShow} affichés)` : `(${filtered.length})`;
+
+  document.getElementById('spec-findings-list').innerHTML = filtered.slice(0, maxShow).map(f => `
+    <div class="inc-card" style="border-left-color:${sevColor[f.severity]||'var(--muted)'}">
+      <div class="header">
+        <span class="badge" style="background:rgba(255,255,255,0.06);color:${sevColor[f.severity]||'var(--muted)'}">${(f.severity||'').toUpperCase()}</span>
+        <span class="req-id">${f.rule_id || ''}</span>
+        <span class="muted" style="font-size:11px">${f.section || ''}</span>
+      </div>
+      <div class="explanation">${f.message || ''}</div>
+      ${f.fix_suggestion ? `<div class="meta">💡 ${f.fix_suggestion}</div>` : ''}
+    </div>`).join('')
+    || '<p class="muted" style="padding:12px">Aucun constat pour ce filtre.</p>';
+}
+
+function _downloadB64(b64, mime, name) {
+  const bytes = atob(b64);
+  const arr = new Uint8Array(bytes.length);
+  for (let i=0; i<bytes.length; i++) arr[i] = bytes.charCodeAt(i);
+  const url = URL.createObjectURL(new Blob([arr], {type: mime}));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function downloadSpecDoc() {
+  _downloadB64(
+    specValidation.documentBase64,
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    (specValidation.fileName || 'spec').replace(/\.(docx|pdf|txt)$/i, '') + '_validation_report.docx'
+  );
+  toast('Rapport Word téléchargé');
+}
+
+function downloadSpecPdf() {
+  _downloadB64(
+    specValidation.pdfBase64,
+    'application/pdf',
+    (specValidation.fileName || 'spec').replace(/\.(docx|pdf|txt)$/i, '') + '_validation_report.pdf'
+  );
+  toast('Rapport PDF téléchargé');
+}
+
 // ── Utils ─────────────────────────────────────────────────────
-function showLoading(id, show) {
+function showLoading(id, show, text) {
   const el = document.getElementById(id);
   if (show) el.classList.add('show'); else el.classList.remove('show');
+  if (text) {
+    const textEl = document.getElementById(id + '-text');
+    if (textEl) textEl.textContent = text;
+  }
 }
 </script>
 </body>

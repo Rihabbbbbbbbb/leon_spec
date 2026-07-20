@@ -676,6 +676,143 @@ def validate_spec(req: ValidateRequest) -> dict:
     return report
 
 
+@router.post("/upload-and-validate")
+async def upload_and_validate(file: UploadFile = File(...)) -> dict:
+    """
+    Upload a specification file (.docx/.pdf/.txt) and validate it in one call.
+
+    Mirrors the Azure Function /api/upload-and-validate response:
+    - answer / verdict / overallScore / summary / validationReport
+    - documentBase64: standardized template DOCX report (per upload)
+    - pdfBase64: PDF report
+    """
+    import base64 as _b64
+    from pathlib import Path as _Path
+    from app.qa.retrieval import save_uploaded_file, extract_text_from_file
+    from app.qa.evidence_comparator import validate_with_evidence
+
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No file name provided")
+
+    suffix = _Path(file.filename).suffix.lower()
+    if suffix not in (".txt", ".docx", ".pdf"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"File type '{suffix}' not accepted. Use .txt, .docx, or .pdf.",
+        )
+
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Empty file")
+    if len(content) > 25 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="File too large. Maximum size is 25 MB.")
+
+    saved_path = save_uploaded_file(file.filename, content)
+
+    text = extract_text_from_file(saved_path)
+    if not text or not text.strip():
+        raise HTTPException(
+            status_code=422,
+            detail=f"Could not extract text from '{saved_path.name}'.",
+        )
+
+    report = validate_with_evidence(saved_path.name, text)
+
+    summary = (
+        f"Here is the evidence-based validation for **{saved_path.name}** — "
+        f"Verdict: **{report.get('verdict', 'UNKNOWN')}** "
+        f"({report.get('overallScore', 0):.0%}):\n\n"
+        f"{report.get('summary', '')}"
+    )
+
+    pdf_base64 = ""
+    try:
+        from app.qa.pdf_report import generate_validation_pdf
+        pdf_base64 = _b64.b64encode(generate_validation_pdf(report)).decode("ascii")
+    except Exception:
+        pass  # non-fatal — report JSON is still returned
+
+    docx_base64 = ""
+    try:
+        from app.qa.spec_report_docx import generate_spec_validation_document
+        docx_base64 = _b64.b64encode(
+            generate_spec_validation_document(report)
+        ).decode("ascii")
+    except Exception:
+        pass  # non-fatal
+
+    return {
+        "answer": summary,
+        "status": "answered",
+        "verdict": report.get("verdict", "UNKNOWN"),
+        "overallScore": report.get("overallScore", 0),
+        "summary": report.get("summary", ""),
+        "validationReport": report,
+        "fileName": saved_path.name,
+        "pdfBase64": pdf_base64,
+        "pdfAvailable": bool(pdf_base64),
+        "documentBase64": docx_base64,
+        "documentAvailable": bool(docx_base64),
+    }
+
+
+@router.post("/spec-to-matrix")
+async def spec_to_matrix_endpoint(file: UploadFile = File(...)) -> dict:
+    """
+    Upload a specification (.docx/.pdf/.txt) and get back the official CTS
+    conformity matrix pre-filled with every requirement found in the spec
+    (ID in 'Numéro de l'exigence', text in 'Libellé') — supplier columns
+    left empty. Macro-free XLSX based on the 'new version' template sheet.
+    """
+    import base64 as _b64
+    from pathlib import Path as _Path
+    from app.qa.retrieval import save_uploaded_file, extract_text_from_file
+    from app.qa.spec_to_matrix import spec_to_matrix
+
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No file name provided")
+
+    suffix = _Path(file.filename).suffix.lower()
+    if suffix not in (".txt", ".docx", ".pdf"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"File type '{suffix}' not accepted. Use .txt, .docx, or .pdf.",
+        )
+
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Empty file")
+
+    saved_path = save_uploaded_file(file.filename, content)
+    text = extract_text_from_file(saved_path)
+    if not text or not text.strip():
+        raise HTTPException(
+            status_code=422,
+            detail=f"Could not extract text from '{saved_path.name}'.",
+        )
+
+    try:
+        result = spec_to_matrix(text, saved_path.name)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Matrix generation failed: {str(exc)}")
+
+    return {
+        "status": "answered",
+        "fileName": saved_path.name,
+        "matrixExcel": _b64.b64encode(result["xlsxBytes"]).decode("ascii"),
+        "requirementsCount": result["requirementsCount"],
+        "withIdCount": result["withIdCount"],
+        "withoutIdCount": result["withoutIdCount"],
+        "sampleIds": result["sampleIds"],
+        "answer": (
+            f"Matrice de conformité générée depuis '{saved_path.name}' : "
+            f"{result['requirementsCount']} exigences extraites "
+            f"({result['withIdCount']} avec identifiant, "
+            f"{result['withoutIdCount']} sans identifiant)."
+        ),
+    }
+
+
 # ── Quality metrics endpoint ───────────────────────────────────────
 @router.get("/metrics")
 def get_metrics() -> dict:
@@ -895,6 +1032,86 @@ async def conformity_excel(file: UploadFile = File(...)) -> dict:
         }
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f"Analysis failed: {str(exc)}")
+
+
+# ── Conformity Batch (multiple matrices → one combined Excel report) ──
+@router.post("/conformity-batch")
+async def conformity_batch(files: List[UploadFile] = File(...)) -> dict:
+    """
+    Upload one or several conformity matrices (ODS/XLSX) and get back ONE
+    combined Excel report: an "Overview" sheet comparing all matrices plus
+    per-matrix item/deep-analysis sheets.
+
+    Files that fail to parse are skipped (reported in `failed`) rather than
+    aborting the whole batch.
+    """
+    from pathlib import Path as _Path
+    import base64 as _b64
+    from app.qa.conformity_analyzer import analyze_conformity_matrix, analysis_to_dict
+    from app.qa.conformity_report import generate_batch_conformity_excel
+
+    if not files:
+        raise HTTPException(status_code=400, detail="No files provided")
+
+    upload_dir = _Path("data/uploads")
+    upload_dir.mkdir(parents=True, exist_ok=True)
+
+    analyses = []
+    per_file = []
+    failed = []
+
+    for file in files:
+        if not file.filename:
+            failed.append({"fileName": "", "error": "No file name provided"})
+            continue
+        suffix = _Path(file.filename).suffix.lower()
+        if suffix not in (".ods", ".xlsx", ".xlsm", ".xls"):
+            failed.append({
+                "fileName": file.filename,
+                "error": f"Unsupported file type '{suffix}'. Accepted: .ods, .xlsx, .xlsm",
+            })
+            continue
+
+        content = await file.read()
+        if not content:
+            failed.append({"fileName": file.filename, "error": "Empty file"})
+            continue
+
+        saved_path = upload_dir / file.filename
+        saved_path.write_bytes(content)
+
+        try:
+            analysis = analyze_conformity_matrix(str(saved_path), file.filename)
+            analysis_dict = analysis_to_dict(analysis)
+            analyses.append(analysis_dict)
+            summary = analysis_dict.get("summary", {})
+            per_file.append({
+                "fileName": file.filename,
+                "totalRows": analysis_dict.get("totalRows", 0),
+                "summary": summary,
+                "okDeepFindingsCount": len(analysis_dict.get("okDeepFindings", [])),
+            })
+        except Exception as exc:
+            failed.append({"fileName": file.filename, "error": f"Analysis failed: {str(exc)}"})
+
+    if not analyses:
+        raise HTTPException(
+            status_code=422,
+            detail="None of the uploaded files could be analyzed. " + "; ".join(
+                f"{f['fileName']}: {f['error']}" for f in failed
+            ),
+        )
+
+    xlsx_bytes = generate_batch_conformity_excel(analyses)
+    xlsx_b64 = _b64.b64encode(xlsx_bytes).decode("utf-8")
+
+    return {
+        "reportExcel": xlsx_b64,
+        "filesAnalyzed": len(analyses),
+        "filesFailed": len(failed),
+        "files": per_file,
+        "failed": failed,
+    }
 
 
 # ── Conformity PDF/Excel by filename (no re-upload needed) ─────────

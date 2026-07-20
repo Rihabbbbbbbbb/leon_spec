@@ -293,7 +293,15 @@ def handle_validate(file_name: str) -> func.HttpResponse:
         )
 
     from app.qa.evidence_comparator import validate_with_evidence
-    report = validate_with_evidence(file_name, text)
+    try:
+        report = validate_with_evidence(file_name, text)
+    except Exception as val_exc:
+        import traceback
+        logging.error(f"Validation crashed: {val_exc}\n{traceback.format_exc()}")
+        return _response(
+            f"Validation engine error: {str(val_exc)[:300]}. The file was found but the validation engine encountered an internal error.",
+            status="error", status_code=500
+        )
 
     summary = (
         f"Here is the evidence-based validation for **{file_name}** — "
@@ -414,7 +422,15 @@ def handle_upload_and_validate(file_name: str, file_bytes: bytes) -> func.HttpRe
         )
 
     from app.qa.evidence_comparator import validate_with_evidence
-    report = validate_with_evidence(saved_path.name, text)
+    try:
+        report = validate_with_evidence(saved_path.name, text)
+    except Exception as val_exc:
+        import traceback
+        logging.error(f"Validation crashed: {val_exc}\n{traceback.format_exc()}")
+        return _response(
+            f"Validation engine error: {str(val_exc)[:300]}. The file was uploaded but the validation engine encountered an internal error.",
+            status="error", status_code=500
+        )
 
     summary = (
         f"Here is the evidence-based validation for **{saved_path.name}** — "
@@ -624,7 +640,30 @@ def handle_validate_url(file_url: str, file_name: str = "") -> func.HttpResponse
             )
 
     # ── Download the file server-side ────────────────────────
-    try:
+    # Handle data URIs (base64-encoded file content in the URL itself)
+    if file_url.startswith("data:"):
+        import base64 as _b64
+        try:
+            if ";base64," in file_url:
+                b64_part = file_url.split(";base64,", 1)[1]
+                file_bytes = _b64.b64decode(b64_part)
+            else:
+                # data:text/plain,raw text content
+                raw_part = file_url.split(",", 1)[1] if "," in file_url else file_url
+                file_bytes = raw_part.encode("utf-8")
+            logging.info(f"Decoded data URI: {len(file_bytes)} bytes")
+        except Exception as data_exc:
+            return func.HttpResponse(
+                body=json.dumps({
+                    "answer": f"Failed to decode data URI: {str(data_exc)[:300]}",
+                    "status": "error",
+                }, ensure_ascii=False),
+                status_code=422,
+                mimetype="application/json",
+                headers={"Content-Type": "application/json; charset=utf-8"},
+            )
+    else:
+      try:
         import urllib.request
         import ssl
 
@@ -651,7 +690,7 @@ def handle_validate_url(file_url: str, file_name: str = "") -> func.HttpResponse
 
         logging.info(f"Downloaded {len(file_bytes)} bytes from {file_url}")
 
-    except Exception as exc:
+      except Exception as exc:
         logging.error(f"File download failed: {exc}")
         return func.HttpResponse(
             body=json.dumps({
@@ -684,7 +723,7 @@ def handle_validate_url(file_url: str, file_name: str = "") -> func.HttpResponse
         logging.error(f"Save error: {e}")
         return func.HttpResponse(
             body=json.dumps({
-                "answer": f"Failed to save downloaded file: {str(exc)[:300]}",
+                "answer": f"Failed to save downloaded file: {str(e)[:300]}",
                 "status": "error",
             }, ensure_ascii=False),
             status_code=500,
@@ -719,7 +758,20 @@ def handle_validate_url(file_url: str, file_name: str = "") -> func.HttpResponse
         )
 
     from app.qa.evidence_comparator import validate_with_evidence
-    report = validate_with_evidence(saved_path.name, text)
+    try:
+        report = validate_with_evidence(saved_path.name, text)
+    except Exception as val_exc:
+        import traceback
+        logging.error(f"Validation crashed: {val_exc}\n{traceback.format_exc()}")
+        return func.HttpResponse(
+            body=json.dumps({
+                "answer": f"Validation engine error: {str(val_exc)[:300]}. The file was downloaded but the validation engine encountered an internal error.",
+                "status": "error",
+            }, ensure_ascii=False),
+            status_code=500,
+            mimetype="application/json",
+            headers={"Content-Type": "application/json; charset=utf-8"},
+        )
 
     summary = (
         f"Here is the evidence-based validation for **{saved_path.name}** — "
@@ -1168,6 +1220,77 @@ def _index_file_to_search(file_path) -> int:
 
 
 # ═══════════════════════════════════════════════════════════════════
+# Spec → Conformity Matrix Handler
+# ═══════════════════════════════════════════════════════════════════
+def handle_spec_to_matrix(file_name: str, file_bytes: bytes) -> func.HttpResponse:
+    """
+    Extract every requirement from an uploaded spec and return the official
+    CTS conformity matrix pre-filled (macro-free XLSX, 'new version' sheet).
+    """
+    import os
+    import base64
+
+    logging.info(f"handle_spec_to_matrix: {file_name}, {len(file_bytes)} bytes")
+
+    allowed_ext = {".txt", ".docx", ".pdf"}
+    suffix = Path(file_name).suffix.lower()
+    if suffix not in allowed_ext:
+        return _response(
+            f"File type '{suffix}' not accepted. Use .txt, .docx, or .pdf.",
+            status="error", status_code=400
+        )
+
+    from app.qa.retrieval import save_uploaded_file, extract_text_from_file
+    try:
+        saved_path = save_uploaded_file(file_name, file_bytes)
+        text = extract_text_from_file(saved_path)
+    except Exception as e:
+        return _response(f"Failed to read file: {e}", status="error", status_code=500)
+
+    if not text or not text.strip():
+        return _response(
+            f"Could not extract text from '{file_name}'.",
+            status="error", status_code=422
+        )
+
+    try:
+        from app.qa.spec_to_matrix import spec_to_matrix
+        result = spec_to_matrix(text, file_name)
+    except Exception as exc:
+        import traceback
+        logging.error(f"spec_to_matrix failed: {exc}\n{traceback.format_exc()}")
+        return _response(
+            f"Matrix generation failed: {str(exc)[:300]}",
+            status="error", status_code=500
+        )
+
+    xlsx_b64 = base64.b64encode(result["xlsxBytes"]).decode("ascii")
+    answer = (
+        f"Matrice de conformite generee depuis '{file_name}' : "
+        f"{result['requirementsCount']} exigences extraites "
+        f"({result['withIdCount']} avec identifiant, "
+        f"{result['withoutIdCount']} sans identifiant)."
+    )
+    body = {
+        "answer": answer,
+        "status": "answered",
+        "confidence": "HIGH",
+        "fileName": file_name,
+        "matrixExcel": xlsx_b64,
+        "requirementsCount": result["requirementsCount"],
+        "withIdCount": result["withIdCount"],
+        "withoutIdCount": result["withoutIdCount"],
+        "sampleIds": result["sampleIds"],
+    }
+    return func.HttpResponse(
+        body=json.dumps(body, ensure_ascii=False, default=str),
+        status_code=200,
+        mimetype="application/json",
+        headers={"Content-Type": "application/json; charset=utf-8"},
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════
 # Conformity Matrix Analysis Handler
 # ═══════════════════════════════════════════════════════════════════
 def handle_conformity(file_name: str, file_bytes: Optional[bytes]) -> func.HttpResponse:
@@ -1327,15 +1450,85 @@ def handle_conformity(file_name: str, file_bytes: Optional[bytes]) -> func.HttpR
 def _upload_to_blob_storage(file_bytes: bytes, file_name: str, content_type: str = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", blob_extension: str = "xlsx") -> str:
     """
     Upload a report file to Azure Blob Storage and return a download URL.
-    Uses the Azure Blob Storage REST API directly (no SDK dependency).
+    Uses the Azure Blob Storage SDK (azure-storage-blob) for reliable SAS token generation.
     Returns empty string if Blob Storage is not configured or upload fails.
-    Falls back to AzureWebJobsStorage if AZURE_STORAGE_CONNECTION_STRING not set.
 
     Args:
         file_bytes: The file content as bytes.
         file_name: Original file name (used for blob naming).
         content_type: MIME type for the blob (default: Excel XLSX).
         blob_extension: File extension for the blob name (default: xlsx).
+    """
+    import os
+    import datetime
+
+    try:
+        conn_str = (os.getenv("AZURE_STORAGE_CONNECTION_STRING", "") or
+                    os.getenv("AzureWebJobsStorage", "") or
+                    os.getenv("DEPLOYMENT_STORAGE_CONNECTION_STRING", ""))
+        if not conn_str:
+            logging.info("No storage connection string found — skipping blob upload")
+            return ""
+
+        from azure.storage.blob import BlobServiceClient, generate_blob_sas, BlobSasPermissions
+
+        blob_service = BlobServiceClient.from_connection_string(conn_str)
+        container_name = "leon-reports"
+        
+        # Ensure container exists with public read access
+        try:
+            container_client = blob_service.get_container_client(container_name)
+            if not container_client.exists():
+                from azure.storage.blob import PublicAccess
+                container_client = blob_service.create_container(
+                    container_name, public_access=PublicAccess.BLOB
+                )
+                logging.info(f"Created container {container_name} with public read access")
+        except Exception as container_exc:
+            logging.warning(f"Container setup (non-fatal): {container_exc}")
+
+        # Generate unique blob name
+        timestamp = datetime.datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        base_name = os.path.splitext(os.path.basename(file_name))[0]
+        if blob_extension == "xlsx":
+            blob_name = f"conformity_report_{base_name}_{timestamp}.{blob_extension}"
+        else:
+            blob_name = f"spec_{base_name}_{timestamp}.{blob_extension}"
+
+        logging.info(f"Uploading to blob: {container_name}/{blob_name} ({len(file_bytes)} bytes)")
+
+        # Upload blob
+        blob_client = blob_service.get_blob_client(container=container_name, blob=blob_name)
+        blob_client.upload_blob(file_bytes, overwrite=True, content_settings=None)
+        logging.info(f"Blob uploaded: {blob_name}")
+
+        # Generate SAS token for public download (7-day expiry)
+        sas_token = generate_blob_sas(
+            account_name=blob_service.account_name,
+            container_name=container_name,
+            blob_name=blob_name,
+            account_key=blob_service.credential.account_key,
+            permission=BlobSasPermissions(read=True),
+            expiry=datetime.datetime.utcnow() + datetime.timedelta(days=7),
+            start=datetime.datetime.utcnow(),
+        )
+
+        download_url = f"{blob_client.url}?{sas_token}"
+        logging.info(f"Download URL (with SAS): {download_url[:120]}...")
+        return download_url
+
+    except ImportError:
+        logging.warning("azure-storage-blob not installed — falling back to REST API")
+        return _upload_to_blob_storage_rest(file_bytes, file_name, content_type, blob_extension)
+    except Exception as exc:
+        logging.warning(f"Blob upload failed (non-fatal): {exc}")
+        return ""
+
+
+def _upload_to_blob_storage_rest(file_bytes: bytes, file_name: str, content_type: str = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", blob_extension: str = "xlsx") -> str:
+    """
+    Fallback: Upload using Azure Blob Storage REST API (no SDK).
+    Used when azure-storage-blob is not installed.
     """
     import os
     import datetime
@@ -1446,10 +1639,26 @@ def _upload_to_blob_storage(file_bytes: bytes, file_name: str, content_type: str
         with urllib.request.urlopen(req, timeout=30, context=ctx) as resp:
             logging.info(f"Blob upload response: {resp.status}")
 
-        # ── Step 3: Return public download URL (container has public read access) ──
-        download_url = blob_url
+        # ── Step 3: Generate SAS token for public download URL ──
+        # The container may not have public read access, so we generate
+        # a Shared Access Signature (SAS) token with read permission for 7 days.
+        sas_expiry = (datetime.datetime.utcnow() + datetime.timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        sas_start = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+        
+        # Build SAS string to sign — canonical resource must NOT be URL-encoded
+        # Format for version 2020-04-08: signedPermissions\nsignedStart\nsignedExpiry\n
+        # canonicalResource\nsignedIdentifier\nsignedIP\nsignedProtocol\nsignedVersion\n
+        # signedResource\nsignedSnapshotTime\nsignedEncryptionScope\n
+        # cacheControl\ncontentDisposition\ncontentEncoding\ncontentLanguage\ncontentType
+        raw_blob_name = blob_name  # NOT URL-encoded for SAS signing
+        sas_canonical_resource = f"/{account_name}/{container_name}/{raw_blob_name}"
+        sas_string = f"r\n{sas_start}\n{sas_expiry}\n{sas_canonical_resource}\n\n\n\n2020-04-08\nb\n\n\n\n\n\n\n"
+        sas_signature = base64.b64encode(hmac.new(account_key_bytes, sas_string.encode("utf-8"), hashlib.sha256).digest()).decode("utf-8")
+        sas_token = f"?sv=2020-04-08&st={urllib.parse.quote(sas_start)}&se={urllib.parse.quote(sas_expiry)}&sr=b&sp=r&sig={urllib.parse.quote(sas_signature)}"
+        
+        download_url = blob_url + sas_token
         logging.info(f"Uploaded report to blob: {blob_name}")
-        logging.info(f"Download URL: {download_url}")
+        logging.info(f"Download URL (with SAS): {download_url[:120]}...")
         return download_url
 
     except Exception as exc:
@@ -1616,6 +1825,118 @@ def handle_conformity_excel(file_name: str, file_bytes: bytes) -> func.HttpRespo
             mimetype="application/json",
             headers={"Content-Type": "application/json; charset=utf-8"},
         )
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Conformity Batch Handler (multiple matrices → one combined Excel report)
+# ═══════════════════════════════════════════════════════════════════
+def handle_conformity_batch(files: list) -> func.HttpResponse:
+    """
+    Analyze one or several conformity matrices and return ONE combined
+    Excel report (Overview sheet + per-matrix item/deep-analysis sheets).
+
+    Args:
+        files: list of (file_name, file_bytes) tuples.
+    """
+    import os
+    import base64
+
+    logging.info(f"handle_conformity_batch: {len(files)} file(s)")
+
+    from app.config import UPLOADS_DIR
+    from app.qa.conformity_analyzer import analyze_conformity_matrix, analysis_to_dict
+    from app.qa.conformity_report import generate_batch_conformity_excel
+
+    UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+    analyses = []
+    per_file = []
+    failed = []
+
+    for file_name, file_bytes in files:
+        safe_name = os.path.basename(file_name) if file_name else "conformity_matrix.xlsx"
+        ext = os.path.splitext(safe_name)[1].lower()
+        if ext not in (".ods", ".xlsx", ".xlsm", ".xls"):
+            failed.append({"fileName": safe_name, "error": f"Unsupported file type '{ext}'"})
+            continue
+        if not file_bytes:
+            failed.append({"fileName": safe_name, "error": "Empty file"})
+            continue
+
+        file_path = UPLOADS_DIR / safe_name
+        try:
+            file_path.write_bytes(file_bytes)
+            analysis = analyze_conformity_matrix(str(file_path), safe_name)
+            analysis_dict = analysis_to_dict(analysis)
+            analyses.append(analysis_dict)
+            per_file.append({
+                "fileName": safe_name,
+                "totalRows": analysis_dict.get("totalRows", 0),
+                "summary": analysis_dict.get("summary", {}),
+                "okDeepFindingsCount": len(analysis_dict.get("okDeepFindings", [])),
+            })
+        except Exception as exc:
+            logging.warning(f"Batch analysis failed for {safe_name}: {exc}")
+            failed.append({"fileName": safe_name, "error": str(exc)[:300]})
+
+    if not analyses:
+        return func.HttpResponse(
+            body=json.dumps({
+                "answer": "Aucun des fichiers envoyes n'a pu etre analyse.",
+                "status": "error",
+                "failed": failed,
+            }, ensure_ascii=False),
+            status_code=422,
+            mimetype="application/json",
+            headers={"Content-Type": "application/json; charset=utf-8"},
+        )
+
+    try:
+        xlsx_bytes = generate_batch_conformity_excel(analyses)
+    except Exception as exc:
+        import traceback
+        logging.error(f"Batch excel generation failed: {exc}\n{traceback.format_exc()}")
+        return func.HttpResponse(
+            body=json.dumps({
+                "answer": f"Erreur lors de la generation du rapport combine: {str(exc)[:300]}",
+                "status": "error",
+            }, ensure_ascii=False),
+            status_code=500,
+            mimetype="application/json",
+            headers={"Content-Type": "application/json; charset=utf-8"},
+        )
+
+    xlsx_b64 = base64.b64encode(xlsx_bytes).decode("utf-8")
+    download_url = _upload_to_blob_storage(file_bytes=xlsx_bytes, file_name="conformity_batch_report.xlsx")
+
+    answer_lines = [
+        f"Rapport combine genere pour {len(analyses)} matrice(s) de conformite.",
+    ]
+    if failed:
+        answer_lines.append(f"{len(failed)} fichier(s) n'ont pas pu etre analyses (voir 'failed').")
+    for pf in per_file:
+        s = pf.get("summary", {})
+        answer_lines.append(
+            f"  - {pf['fileName']}: {s.get('total', 0)} exigences "
+            f"(OK {s.get('ok', 0)}, NOK {s.get('nok', 0)}, NA {s.get('na', 0)})"
+        )
+
+    body = {
+        "answer": "\n".join(answer_lines),
+        "status": "answered",
+        "confidence": "HIGH",
+        "filesAnalyzed": len(analyses),
+        "filesFailed": len(failed),
+        "files": per_file,
+        "failed": failed,
+        "reportExcel": xlsx_b64,
+        "downloadUrl": download_url or f"data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,{xlsx_b64}",
+    }
+    return func.HttpResponse(
+        body=json.dumps(body, ensure_ascii=False, default=str),
+        status_code=200,
+        mimetype="application/json",
+        headers={"Content-Type": "application/json; charset=utf-8"},
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════

@@ -1,0 +1,412 @@
+{
+  "swagger": "2.0",
+  "info": {
+    "title": "LEON Spec Validator",
+    "description": "Enterprise custom connector for LEON specification validation. Validates DOCX/PDF/TXT specification files against the Stellantis CTS template. fileContent is a STRING (JSON from Power Fx JSON(...,IncludeBinaryData) or plain base64) — NOT a File type. All endpoints are anonymous — no API key required.",
+    "version": "3.1.0"
+  },
+  "host": "leon-spec-gbexcnefdmakfpdg.francecentral-01.azurewebsites.net",
+  "basePath": "/api",
+  "schemes": ["https"],
+  "consumes": ["application/json"],
+  "produces": ["application/json"],
+  "paths": {
+    "/upload-and-validate": {
+      "post": {
+        "summary": "Upload and validate a specification file",
+        "description": "Validates a .docx, .txt, or .pdf specification file against the CTS template. fileContent MUST be a STRING — bind it to =JSON(First(System.Activity.Attachments).Content, JSONFormat.IncludeBinaryData) which produces a JSON string like {\"$content-type\":\"...\",\"$content\":\"UEsDBBQ...\"}. Bind fileName to =First(System.Activity.Attachments).Name. The backend parses the JSON string and decodes the base64 $content field. Do NOT bind a File/Blob/Record directly — that causes 'incorrect type: Record' errors.",
+        "operationId": "UploadAndValidate",
+        "x-ms-summary": "Validate spec file",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "x-ms-summary": "File data",
+            "description": "JSON with fileName (string) and fileContent (string — JSON from Power Fx JSON(...,IncludeBinaryData) or plain base64). Bind fileContent to =JSON(First(System.Activity.Attachments).Content, JSONFormat.IncludeBinaryData) and fileName to =First(System.Activity.Attachments).Name.",
+            "schema": {
+              "$ref": "#/definitions/UploadAndValidateInput"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "File downloaded and validated successfully",
+            "schema": {
+              "$ref": "#/definitions/ValidationResponse"
+            }
+          },
+          "400": {
+            "description": "Invalid file type or download failed"
+          },
+          "422": {
+            "description": "Missing fileUrl or could not extract text"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        }
+      }
+    },
+    "/validate-url": {
+      "post": {
+        "summary": "Validate a specification file from a URL",
+        "description": "Downloads a specification file from a public URL and validates it against the CTS template. Only a URL string is needed — no file content. Use this when the user provides a SharePoint, OneDrive, or Blob Storage link as text (not a file attachment).",
+        "operationId": "ValidateFromUrl",
+        "x-ms-summary": "Validate spec from URL",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "x-ms-summary": "URL data",
+            "description": "JSON object with fileUrl (public URL to the spec file).",
+            "schema": {
+              "$ref": "#/definitions/ValidateUrlInput"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "File downloaded and validated",
+            "schema": {
+              "$ref": "#/definitions/ValidationResponse"
+            }
+          },
+          "400": {
+            "description": "Failed to download file from URL"
+          },
+          "422": {
+            "description": "Missing fileUrl in request body"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        }
+      }
+    },
+    "/ask": {
+      "post": {
+        "summary": "Ask a question about specifications",
+        "description": "Asks a natural-language question about uploaded specification documents. Returns an AI-generated answer synthesized from the spec files with source citations and confidence level.",
+        "operationId": "AskQuestion",
+        "x-ms-summary": "Ask question",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "x-ms-summary": "Question",
+            "description": "JSON object with the question string.",
+            "schema": {
+              "$ref": "#/definitions/AskInput"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Answer returned successfully",
+            "schema": {
+              "$ref": "#/definitions/AskResponse"
+            }
+          },
+          "400": {
+            "description": "Missing question"
+          }
+        }
+      }
+    },
+    "/validate": {
+      "post": {
+        "summary": "Validate an already uploaded file",
+        "description": "Validates a specification file that has already been uploaded. Provide the fileName returned by a previous upload call.",
+        "operationId": "ValidateSpec",
+        "x-ms-summary": "Validate uploaded file",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "x-ms-summary": "File name",
+            "description": "JSON object with the fileName to validate.",
+            "schema": {
+              "$ref": "#/definitions/ValidateInput"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validation report generated",
+            "schema": {
+              "$ref": "#/definitions/ValidationResponse"
+            }
+          },
+          "404": {
+            "description": "File not found"
+          },
+          "422": {
+            "description": "Missing fileName"
+          }
+        }
+      }
+    },
+    "/conformity-excel": {
+      "post": {
+        "summary": "Analyze conformity matrix and generate Excel report",
+        "description": "Uploads a conformity matrix spreadsheet (ODS or XLSX) from a URL, analyzes OK/NOK/NA items, and returns a color-coded Excel report. Uses fileUrl for file transfer.",
+        "operationId": "ConformityExcel",
+        "x-ms-summary": "Conformity Excel report",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "x-ms-summary": "File URL",
+            "description": "JSON object with fileUrl and fileName for the conformity matrix.",
+            "schema": {
+              "$ref": "#/definitions/ValidateUrlInput"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Excel report generated",
+            "schema": {
+              "$ref": "#/definitions/ConformityResponse"
+            }
+          },
+          "400": {
+            "description": "Invalid file or download failed"
+          },
+          "422": {
+            "description": "Missing file URL or file content"
+          }
+        }
+      }
+    },
+    "/upload-and-get-url": {
+      "post": {
+        "summary": "Upload a file and get a public URL",
+        "description": "Uploads a file to Azure Blob Storage and returns a public URL. The URL can then be used with the validate-url endpoint. Useful for the two-step upload-then-validate flow.",
+        "operationId": "UploadAndGetUrl",
+        "x-ms-summary": "Upload file and get URL",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "x-ms-summary": "File data",
+            "description": "JSON object with fileName and fileContent (base64-encoded file bytes).",
+            "schema": {
+              "$ref": "#/definitions/UploadAndValidateInput"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "File uploaded, URL returned",
+            "schema": {
+              "$ref": "#/definitions/UploadUrlResponse"
+            }
+          },
+          "400": {
+            "description": "No file content found"
+          }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "ValidateUrlInput": {
+      "type": "object",
+      "required": ["fileUrl"],
+      "properties": {
+        "fileUrl": {
+          "type": "string",
+          "x-ms-summary": "File URL",
+          "description": "Public URL to the specification file. In Copilot Studio, bind this to Topic.Var1.ContentUrl (StringDataType, no type mismatch). The Azure Function downloads the file server-side.",
+          "x-ms-visibility": "important"
+        },
+        "fileName": {
+          "type": "string",
+          "x-ms-summary": "File name",
+          "description": "Optional file name. In Copilot Studio, bind this to Topic.Var1.Name. If omitted, extracted from the URL.",
+          "x-ms-visibility": "important"
+        }
+      }
+    },
+    "UploadAndValidateInput": {
+      "type": "object",
+      "required": ["fileName", "fileContent"],
+      "properties": {
+        "fileName": {
+          "type": "string",
+          "x-ms-summary": "File name",
+          "description": "The name of the file including extension (e.g., 'ASU_Spec.docx'). Bind to =First(System.Activity.Attachments).Name",
+          "x-ms-visibility": "important"
+        },
+        "fileContent": {
+          "type": "string",
+          "x-ms-summary": "File content (JSON string)",
+          "description": "MUST be a STRING. Bind to =JSON(First(System.Activity.Attachments).Content, JSONFormat.IncludeBinaryData). This produces a JSON string like {\"$content-type\":\"...\",\"$content\":\"UEsDBBQ...\"}. The backend parses it and decodes the base64 $content. Do NOT bind a File/Blob/Record directly — type: string only.",
+          "x-ms-visibility": "important"
+        }
+      }
+    },
+    "AskInput": {
+      "type": "object",
+      "required": ["question"],
+      "properties": {
+        "question": {
+          "type": "string",
+          "x-ms-summary": "Question",
+          "description": "A natural-language question about the specification files.",
+          "x-ms-visibility": "important",
+          "minLength": 1,
+          "maxLength": 2000
+        }
+      }
+    },
+    "ValidateInput": {
+      "type": "object",
+      "required": ["fileName"],
+      "properties": {
+        "fileName": {
+          "type": "string",
+          "x-ms-summary": "File name",
+          "description": "The name of the specification file to validate (must have been previously uploaded).",
+          "x-ms-visibility": "important"
+        }
+      }
+    },
+    "ValidationResponse": {
+      "type": "object",
+      "properties": {
+        "answer": {
+          "type": "string",
+          "x-ms-summary": "Answer",
+          "description": "Human-readable validation summary with verdict and score."
+        },
+        "status": {
+          "type": "string",
+          "x-ms-summary": "Status",
+          "description": "Always 'answered' for successful validations."
+        },
+        "verdict": {
+          "type": "string",
+          "x-ms-summary": "Verdict",
+          "description": "Validation verdict: GOOD, ACCEPTABLE_WITH_FIXES, NOT_RELIABLE, or NON_COMPLIANT."
+        },
+        "overallScore": {
+          "type": "number",
+          "format": "float",
+          "x-ms-summary": "Overall score",
+          "description": "Score from 0.0 to 1.0"
+        },
+        "summary": {
+          "type": "string",
+          "x-ms-summary": "Summary",
+          "description": "Evidence-backed validation summary."
+        },
+        "fileName": {
+          "type": "string",
+          "x-ms-summary": "File name",
+          "description": "Name of the validated file."
+        },
+        "validationReport": {
+          "type": "object",
+          "x-ms-summary": "Validation report",
+          "description": "Full evidence-backed validation report object with findings, scores, and rules used."
+        },
+        "documentUrl": {
+          "type": "string",
+          "x-ms-summary": "Document download URL",
+          "description": "Download URL for the unified validation document (DOCX)."
+        },
+        "documentAvailable": {
+          "type": "boolean",
+          "x-ms-summary": "Document available",
+          "description": "True if a validation document is available for download."
+        }
+      }
+    },
+    "AskResponse": {
+      "type": "object",
+      "properties": {
+        "answer": {
+          "type": "string",
+          "x-ms-summary": "Answer",
+          "description": "The AI-generated answer synthesized from specification documents."
+        },
+        "status": {
+          "type": "string",
+          "x-ms-summary": "Status",
+          "description": "Status of the answer: answered, clarify, not_found, refusal, or partial."
+        },
+        "confidence": {
+          "type": "string",
+          "x-ms-summary": "Confidence",
+          "description": "Confidence level: HIGH, MEDIUM, LOW, or empty."
+        },
+        "sources": {
+          "type": "array",
+          "x-ms-summary": "Sources",
+          "items": {
+            "type": "object"
+          },
+          "description": "Source documents and excerpts used to generate the answer."
+        }
+      }
+    },
+    "ConformityResponse": {
+      "type": "object",
+      "properties": {
+        "answer": {
+          "type": "string",
+          "x-ms-summary": "Answer",
+          "description": "Human-readable conformity analysis summary."
+        },
+        "status": {
+          "type": "string",
+          "x-ms-summary": "Status",
+          "description": "Always 'answered' for successful analysis."
+        },
+        "fileName": {
+          "type": "string",
+          "x-ms-summary": "File name",
+          "description": "Name of the analyzed file."
+        },
+        "downloadUrl": {
+          "type": "string",
+          "x-ms-summary": "Download URL",
+          "description": "Download URL for the Excel report."
+        },
+        "reportAvailable": {
+          "type": "boolean",
+          "x-ms-summary": "Report available",
+          "description": "True if an Excel report is available for download."
+        }
+      }
+    },
+    "UploadUrlResponse": {
+      "type": "object",
+      "properties": {
+        "fileUrl": {
+          "type": "string",
+          "x-ms-summary": "File URL",
+          "description": "Public URL to the uploaded file in Azure Blob Storage."
+        },
+        "fileName": {
+          "type": "string",
+          "x-ms-summary": "File name",
+          "description": "Name of the uploaded file."
+        },
+        "fileSize": {
+          "type": "integer",
+          "x-ms-summary": "File size",
+          "description": "Size of the uploaded file in bytes."
+        }
+      }
+    }
+  }
+}

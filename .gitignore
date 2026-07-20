@@ -14,6 +14,7 @@ publish_profile.xml
 
 # Deployment package
 LEON_Deploy.zip
+LEON_Deploy_remotebuild.zip
 
 # Index de référence (généré, volumineux)
 data/reference_index.json
@@ -41,6 +42,7 @@ _*.py
 _*.xlsx
 _*.zip
 _*.ps1
+_*.docx
 _deploy_*/
 _azure_blob_packages/
 _lxml_packages/

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import base64
 import io
-from typing import Dict
+from typing import Dict, List
 
 try:
     from fpdf import FPDF
@@ -595,6 +595,278 @@ def generate_conformity_excel(analysis_dict: dict) -> bytes:
         ws_ok.auto_filter.ref = f"A1:G{len(ok_findings) + 1}"
 
     # ── Save to bytes ───────────────────────────────────────
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf.read()
+
+
+# ═══════════════════════════════════════════════════════════════════
+# BATCH EXCEL REPORT (multiple conformity matrices in one workbook)
+# ═══════════════════════════════════════════════════════════════════
+
+def _safe_sheet_name(name: str, max_len: int = 31) -> str:
+    """Sanitize a string into a valid, unique-enough Excel sheet name."""
+    for ch in ["\\", "/", "*", "[", "]", ":", "?"]:
+        name = name.replace(ch, "")
+    name = name.strip() or "Sheet"
+    return name[:max_len]
+
+
+def _write_items_sheet(ws, items: list, header_fill, header_font, thin_border, wrap_align):
+    """Write the color-coded 'All Items' table into an existing worksheet."""
+    from openpyxl.utils import get_column_letter
+
+    headers = ["Row", "Req ID", "Reference", "Description",
+               "Category", "Comment", "Version Applicable"]
+    for ci, header in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=ci, value=header)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.border = thin_border
+
+    for ri, item in enumerate(items, 2):
+        row_data = [
+            item.get("rowIndex", 0),
+            item.get("reqId", ""),
+            item.get("reference", ""),
+            item.get("description", ""),
+            item.get("conformityCategory", ""),
+            item.get("comment", ""),
+            item.get("version", ""),
+        ]
+        category = item.get("conformityCategory", "EMPTY")
+        fill = _category_fill(category)
+        font = _category_font(category)
+        for ci, val in enumerate(row_data, 1):
+            cell = ws.cell(row=ri, column=ci, value=val)
+            cell.fill = fill
+            cell.font = font
+            cell.border = thin_border
+            if ci == 4:
+                cell.alignment = wrap_align
+
+    col_widths = [8, 20, 30, 50, 15, 50, 20]
+    for ci, width in enumerate(col_widths, 1):
+        ws.column_dimensions[get_column_letter(ci)].width = width
+    ws.freeze_panes = "A2"
+    ws.auto_filter.ref = f"A1:G{len(items) + 1}"
+
+
+def _write_deepok_sheet(ws, findings: list, header_fill, header_font, thin_border, wrap_align):
+    """Write the 'Analyse approfondie OK' findings table into a worksheet."""
+    from openpyxl.styles import Font, PatternFill
+    from openpyxl.utils import get_column_letter
+
+    ok_headers = ["Severity", "Req ID", "Reference", "Conformity",
+                  "Signals", "Comment", "AI Analysis"]
+    for ci, header in enumerate(ok_headers, 1):
+        cell = ws.cell(row=1, column=ci, value=header)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.border = thin_border
+
+    for ri, finding in enumerate(findings, 2):
+        sev = finding.get("severity", "warning")
+        sev_fill = PatternFill(
+            start_color="FFC7CE" if sev == "error" else "FFEB9C" if sev == "warning" else "C6EFCE",
+            end_color="FFC7CE" if sev == "error" else "FFEB9C" if sev == "warning" else "C6EFCE",
+            fill_type="solid",
+        )
+        sev_font = Font(
+            color="9C0006" if sev == "error" else "9C6500" if sev == "warning" else "006100",
+            bold=sev == "error",
+        )
+        row_data = [
+            sev.upper(),
+            finding.get("reqId", ""),
+            finding.get("reference", ""),
+            finding.get("conformity", ""),
+            ", ".join(finding.get("signals", [])),
+            finding.get("comment", ""),
+            finding.get("aiComment", ""),
+        ]
+        for ci, val in enumerate(row_data, 1):
+            cell = ws.cell(row=ri, column=ci, value=val)
+            cell.fill = sev_fill
+            cell.font = sev_font
+            cell.border = thin_border
+            if ci in (6, 7):
+                cell.alignment = wrap_align
+
+    ok_widths = [12, 20, 20, 20, 20, 50, 60]
+    for ci, width in enumerate(ok_widths, 1):
+        ws.column_dimensions[get_column_letter(ci)].width = width
+    ws.freeze_panes = "A2"
+    ws.auto_filter.ref = f"A1:G{len(findings) + 1}"
+
+
+def generate_batch_conformity_excel(analyses: List[Dict]) -> bytes:
+    """
+    Generate ONE Excel workbook combining the analysis of several conformity
+    matrices — for when a user uploads multiple supplier files at once.
+
+    Sheets:
+    1. "Overview" — one row per matrix (file, OK/NOK/NA/Empty, points
+       d'attention) plus an INDEPENDENT camembert (pie chart) for EACH
+       matrix (its own status distribution, not one chart summed across
+       all files), laid out in a grid below the table.
+    2. "{idx:02d} Items" — per-matrix color-coded item table (one per file).
+    3. "{idx:02d} DeepOK" — per-matrix deep-OK findings (only if any exist).
+
+    Args:
+        analyses: list of analysis dicts (from analysis_to_dict()), one per
+            uploaded matrix, in upload order.
+
+    Returns:
+        XLSX file as bytes.
+    """
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+    from openpyxl.chart import PieChart, Reference
+    from openpyxl.chart.series import DataPoint
+
+    if not analyses:
+        raise ValueError("At least one analysis is required to build a batch report")
+
+    wb = Workbook()
+
+    header_fill = PatternFill(start_color="003366", end_color="003366", fill_type="solid")
+    header_font = Font(color="FFFFFF", bold=True, size=11)
+    title_font = Font(color="003366", bold=True, size=14)
+    thin_border = Border(
+        left=Side(style="thin"), right=Side(style="thin"),
+        top=Side(style="thin"), bottom=Side(style="thin"),
+    )
+    wrap_align = Alignment(wrap_text=True, vertical="top")
+
+    # ── Sheet 1: Overview ───────────────────────────────────
+    ws_ov = wb.active
+    ws_ov.title = "Overview"
+    ws_ov["A1"] = f"LEON — Analyse combinée de {len(analyses)} matrice(s) de conformité"
+    ws_ov["A1"].font = title_font
+    ws_ov.merge_cells("A1:H1")
+
+    ov_headers = ["#", "Fichier", "Feuille", "Total", "OK", "NOK", "NA",
+                  "Points d'attention"]
+    for ci, header in enumerate(ov_headers, 1):
+        cell = ws_ov.cell(row=3, column=ci, value=header)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.border = thin_border
+
+    used_sheet_names = {"Overview"}
+    row = 4
+    for idx, analysis in enumerate(analyses, 1):
+        stats = analysis.get("stats", {})
+        row_data = [
+            idx,
+            analysis.get("fileName", f"Matrix {idx}"),
+            analysis.get("sheetName", ""),
+            analysis.get("totalRows", 0),
+            stats.get("OK", 0),
+            stats.get("NOK", 0),
+            stats.get("NA", 0),
+            len(analysis.get("okDeepFindings", [])),
+        ]
+        for ci, val in enumerate(row_data, 1):
+            cell = ws_ov.cell(row=row, column=ci, value=val)
+            cell.border = thin_border
+        row += 1
+
+    col_widths_ov = [4, 45, 20, 10, 8, 8, 8, 18]
+    for ci, width in enumerate(col_widths_ov, 1):
+        ws_ov.column_dimensions[get_column_letter(ci)].width = width
+    ws_ov.freeze_panes = "A4"
+    last_row = row - 1
+    ws_ov.auto_filter.ref = f"A3:H{last_row}"
+
+    # ── Camembert (pie chart) PER FILE — one independent chart per matrix,
+    # not a single chart aggregating all of them. Each chart's own source
+    # data lives in a small hidden-ish table off to the right (columns
+    # starting at DATA_COL); the charts themselves are laid out in a grid
+    # below the main table so they stay readable with many files.
+    DATA_COL = 11  # column K onward — out of the way of the visible table
+    CHARTS_PER_ROW = 3
+    CHART_COL_SPAN = 9
+    CHART_ROW_SPAN = 16
+
+    grid_start_row = last_row + 3
+    ws_ov.cell(row=grid_start_row - 1, column=1,
+              value="Répartition des statuts — un camembert par matrice").font = Font(bold=True, size=11, color="003366")
+
+    for idx, analysis in enumerate(analyses):
+        file_name = analysis.get("fileName", f"Matrix {idx + 1}")
+        stats = analysis.get("stats", {})
+
+        data_row0 = 3 + idx * 6  # 1 header + up to 4 categories + 1 blank, per file
+        ws_ov.cell(row=data_row0, column=DATA_COL, value="Statut").font = Font(bold=True, size=8)
+        ws_ov.cell(row=data_row0, column=DATA_COL + 1, value="Total").font = Font(bold=True, size=8)
+        data_row = data_row0 + 1
+        for cat in ("OK", "NOK", "NA", "EMPTY"):
+            count = stats.get(cat, 0)
+            if count <= 0:
+                continue
+            ws_ov.cell(row=data_row, column=DATA_COL, value=cat).fill = _category_fill(cat)
+            ws_ov.cell(row=data_row, column=DATA_COL + 1, value=count).fill = _category_fill(cat)
+            ws_ov.cell(row=data_row, column=DATA_COL).font = _category_font(cat)
+            ws_ov.cell(row=data_row, column=DATA_COL + 1).font = _category_font(cat)
+            data_row += 1
+
+        if data_row == data_row0 + 1:
+            continue  # this file has no non-zero categories — nothing to chart
+
+        pie_chart = PieChart()
+        pie_chart.title = file_name if len(file_name) <= 40 else file_name[:37] + "…"
+        pie_chart.width = 10
+        pie_chart.height = 7.5
+        data_ref = Reference(ws_ov, min_col=DATA_COL + 1, min_row=data_row0, max_row=data_row - 1)
+        cats_ref = Reference(ws_ov, min_col=DATA_COL, min_row=data_row0 + 1, max_row=data_row - 1)
+        pie_chart.add_data(data_ref, titles_from_data=True)
+        pie_chart.set_categories(cats_ref)
+
+        chart_colors = {"OK": "28a745", "NOK": "dc3545", "NA": "6c757d", "EMPTY": "e9ecef"}
+        cats_in_order = [c for c in ("OK", "NOK", "NA", "EMPTY") if stats.get(c, 0) > 0]
+        for i, cat in enumerate(cats_in_order):
+            pt = DataPoint(idx=i)
+            pt.graphicalProperties.solidFill = chart_colors[cat]
+            pie_chart.series[0].data_points.append(pt)
+
+        anchor_col = 1 + (idx % CHARTS_PER_ROW) * CHART_COL_SPAN
+        anchor_row = grid_start_row + (idx // CHARTS_PER_ROW) * CHART_ROW_SPAN
+        anchor = f"{get_column_letter(anchor_col)}{anchor_row}"
+        ws_ov.add_chart(pie_chart, anchor)
+
+    # ── Per-matrix sheets ───────────────────────────────────
+    # Reserve room for the longest suffix (" DeepOK" = 7 chars) so neither
+    # sheet name is truncated mid-word.
+    for idx, analysis in enumerate(analyses, 1):
+        file_name = analysis.get("fileName", f"Matrix {idx}")
+        base_name = _safe_sheet_name(f"{idx:02d} {file_name}", max_len=24)
+        items_name = _safe_sheet_name(f"{base_name} Items")
+        n = 1
+        while items_name in used_sheet_names:
+            n += 1
+            items_name = _safe_sheet_name(f"{base_name} Items{n}")
+        used_sheet_names.add(items_name)
+
+        ws_items = wb.create_sheet(items_name)
+        _write_items_sheet(ws_items, analysis.get("items", []),
+                           header_fill, header_font, thin_border, wrap_align)
+
+        ok_findings = analysis.get("okDeepFindings", [])
+        if ok_findings:
+            deepok_name = _safe_sheet_name(f"{base_name} DeepOK")
+            n = 1
+            while deepok_name in used_sheet_names:
+                n += 1
+                deepok_name = _safe_sheet_name(f"{base_name} DeepOK{n}")
+            used_sheet_names.add(deepok_name)
+            ws_ok = wb.create_sheet(deepok_name)
+            _write_deepok_sheet(ws_ok, ok_findings,
+                                header_fill, header_font, thin_border, wrap_align)
+
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)

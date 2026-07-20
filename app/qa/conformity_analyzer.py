@@ -631,6 +631,8 @@ class ConformityAnalysis:
     inconsistencies: List[Dict] = field(default_factory=list)
     # AI deep analysis of OK responses (FNR says OK but comment is suspicious)
     ok_deep_findings: List[Dict] = field(default_factory=list)
+    # How the deep analysis was performed: "ia", "ia+motifs" or "motifs"
+    ok_deep_method: str = ""
     # Column mapping
     column_mapping: Dict[str, List[int]] = field(default_factory=dict)
     # Debug info
@@ -1768,93 +1770,272 @@ def _generate_ai_comment_ok(
     return ""
 
 
+def _pattern_finding_for_item(item: ConformityItem) -> Optional[Dict]:
+    """
+    Pattern-based (regex) suspicion check for a single OK item.
+    Returns a finding dict, or None if the comment raises no signal.
+    """
+    comment = item.comment.strip()
+    conf_raw = item.conformity_raw.strip()
+
+    cnorm = _normalize(comment)
+    matches: List[tuple] = []
+    for pattern, label, weight in _OK_SUSPICION_PATTERNS:
+        m = re.search(pattern, cnorm)
+        if m:
+            matches.append((label, weight, m.group()))
+
+    if not matches:
+        return None
+
+    score = sum(w for _, w, _ in matches)
+    ai_comment = _generate_ai_comment_ok(comment, matches, conf_raw)
+
+    return {
+        "reqId": item.req_id,
+        "reference": item.reference,
+        "conformity": conf_raw,
+        "comment": comment[:300],
+        "score": score,
+        "signals": sorted(set(l for l, _, _ in matches)),
+        "matched": [t for _, _, t in matches],
+        "aiComment": ai_comment,
+        "severity": "error" if score >= 4 else "warning" if score >= 2 else "info",
+        "source": "motifs",
+    }
+
+
+# ── LLM semantic deep analysis of OK responses ─────────────────────
+
+_LLM_BATCH_SIZE = 25       # items per LLM call
+_LLM_MAX_ITEMS = 150       # beyond this, remaining items fall back to patterns
+_LLM_COMMENT_MAX_CHARS = 600
+
+_LLM_SYSTEM_PROMPT = """Tu es un auditeur qualité senior spécialisé dans les matrices de conformité fournisseur (FNR) de l'industrie automobile.
+
+Pour chaque exigence fournie, le fournisseur a déclaré le statut OK (conforme). Ta mission : juger si le COMMENTAIRE du fournisseur justifie réellement ce statut OK, ou s'il révèle en réalité un problème caché.
+
+Rends un verdict pour CHAQUE exigence :
+- "CONTRADICTION" : le commentaire décrit en réalité une non-conformité (refus, impossibilité, fonction absente ou non supportée, non applicable, hors périmètre, défaut connu...) → gravite "error"
+- "PARTIEL" : conformité partielle, limitée, conditionnelle, avec déviation ou solution alternative non validée → gravite "warning"
+- "EN_ATTENTE" : conformité non encore acquise (en cours, à confirmer, TBD, dépend d'une action, d'une livraison ou d'un essai futur...) → gravite "warning"
+- "AMBIGU" : commentaire trop vague ou sans rapport pour justifier un OK → gravite "info"
+- "COHERENT" : le commentaire confirme ou est compatible avec la conformité → gravite "none"
+
+Règles :
+- Les commentaires peuvent être en français ou en anglais.
+- Un commentaire technique décrivant COMMENT l'exigence est satisfaite est COHERENT.
+- Les commentaires du type « <domaine>: ok » (ex. « EE: ok », « SW: ok », « Touch: ok », « EE: ok SW: ok »), éventuellement accompagnés d'une date, sont des confirmations de conformité domaine par domaine : verdict COHERENT, jamais AMBIGU.
+- De simples références (numéros de document, versions, dates, codes domaine) ne sont pas des problèmes.
+- Ne signale AMBIGU que si le commentaire empêche réellement de comprendre pourquoi l'exigence serait conforme.
+- "citation" : recopie exactement le fragment du commentaire (15 mots max) qui fonde ton verdict ; "" si COHERENT.
+- "explication" : 1 à 2 phrases en français, précises et professionnelles.
+
+Réponds UNIQUEMENT en JSON strict, sans texte autour :
+{"resultats": [{"id": <int>, "verdict": "...", "gravite": "error|warning|info|none", "explication": "...", "citation": "..."}]}"""
+
+_LLM_SEVERITY_SCORE = {"error": 5, "warning": 3, "info": 1}
+
+
+def _llm_finding(item: ConformityItem, verdict: str, severity: str,
+                 explication: str, citation: str) -> Dict:
+    """Map one LLM verdict onto the standard finding schema."""
+    icon = "ℹ️" if severity == "info" else "⚠️"
+    ai_comment = f"{icon} {explication.strip()}"
+    if citation:
+        ai_comment += f" (extrait : « {citation.strip()} »)"
+    return {
+        "reqId": item.req_id,
+        "reference": item.reference,
+        "conformity": item.conformity_raw.strip(),
+        "comment": item.comment.strip()[:300],
+        "score": _LLM_SEVERITY_SCORE.get(severity, 1),
+        "signals": ["analyse_ia", verdict.lower()],
+        "matched": [citation] if citation else [],
+        "aiComment": ai_comment,
+        "severity": severity,
+        "source": "ia",
+    }
+
+
+def _analyze_ok_deep_llm(items: List[ConformityItem]) -> Tuple[List[Dict], set]:
+    """
+    Semantic deep analysis of OK comments via the Azure OpenAI LLM.
+
+    Sends the OK items (batched) to GPT and collects a verdict per item:
+    CONTRADICTION / PARTIEL / EN_ATTENTE / AMBIGU / COHERENT.
+
+    Returns (findings, analyzed_indices). Items whose batch failed are NOT
+    in analyzed_indices — the caller falls back to pattern analysis for them.
+    Returns ([], set()) when the LLM is not configured or unreachable.
+    """
+    import json as _json
+    import logging as _logging
+
+    if not items:
+        return [], set()
+
+    try:
+        from app.config import (
+            AZURE_OPENAI_API_KEY,
+            AZURE_OPENAI_ENDPOINT,
+            AZURE_OPENAI_LLM_DEPLOYMENT,
+        )
+        if not AZURE_OPENAI_API_KEY or not AZURE_OPENAI_ENDPOINT:
+            return [], set()
+        from app.embeddings import _get_client
+        client = _get_client()
+    except Exception as exc:
+        _logging.warning(f"Deep-OK LLM unavailable (config/import): {exc}")
+        return [], set()
+
+    findings: List[Dict] = []
+    analyzed: set = set()
+    capped = items[:_LLM_MAX_ITEMS]
+
+    for start in range(0, len(capped), _LLM_BATCH_SIZE):
+        batch = capped[start:start + _LLM_BATCH_SIZE]
+        lines = []
+        for offset, item in enumerate(batch):
+            idx = start + offset
+            comment = item.comment.strip()[:_LLM_COMMENT_MAX_CHARS]
+            conf = item.conformity_raw.strip() or "OK"
+            lines.append(
+                f"[{idx}] Exigence {item.req_id or '(sans id)'} — "
+                f"statut déclaré : {conf}\nCommentaire : {comment}"
+            )
+        user_msg = (
+            f"Analyse les {len(batch)} exigences suivantes "
+            f"(toutes déclarées OK par le fournisseur) :\n\n"
+            + "\n\n".join(lines)
+        )
+
+        try:
+            response = client.chat.completions.create(
+                model=AZURE_OPENAI_LLM_DEPLOYMENT,
+                messages=[
+                    {"role": "system", "content": _LLM_SYSTEM_PROMPT},
+                    {"role": "user", "content": user_msg},
+                ],
+                temperature=0.0,
+                max_tokens=4000,
+                timeout=90,
+            )
+            text = (response.choices[0].message.content or "").strip()
+            text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text)
+            data = _json.loads(text)
+            results = data.get("resultats", [])
+        except Exception as exc:
+            _logging.warning(
+                f"Deep-OK LLM batch {start}-{start+len(batch)-1} failed: {exc}"
+            )
+            continue  # this batch falls back to patterns
+
+        by_id = {r.get("id"): r for r in results if isinstance(r, dict)}
+        for offset, item in enumerate(batch):
+            idx = start + offset
+            r = by_id.get(idx)
+            if r is None:
+                continue  # missing from response → pattern fallback
+            analyzed.add(idx)
+            verdict = str(r.get("verdict", "")).upper()
+            severity = str(r.get("gravite", "none")).lower()
+            if verdict == "COHERENT" or severity in ("none", ""):
+                continue  # confirmed OK — no finding
+            if severity not in ("error", "warning", "info"):
+                severity = {
+                    "CONTRADICTION": "error",
+                    "PARTIEL": "warning",
+                    "EN_ATTENTE": "warning",
+                }.get(verdict, "info")
+            if severity == "info":
+                continue  # only real problems (error/warning) are reported
+            findings.append(_llm_finding(
+                item, verdict, severity,
+                str(r.get("explication", "")).strip()
+                or "Le commentaire ne justifie pas clairement le statut OK.",
+                str(r.get("citation", "")).strip()[:120],
+            ))
+
+    return findings, analyzed
+
+
 def analyze_ok_deep(analysis: ConformityAnalysis) -> List[Dict]:
     """
     Deep-analyze OK conformity items to detect hidden non-conformity signals.
 
-    Unified analysis combining:
-    - Suspicion pattern detection (20+ categories: pending, cannot, N/A language,
-      rejected, alternative approach, partial, temporary, missing, defect, etc.)
-    - OK_NO_COMMENT detection (OK without justifying comment)
-    - Negative signal scoring from comprehensive pattern library
+    Two-stage analysis:
+    1. Semantic LLM analysis (GPT via Azure OpenAI) — each OK comment is
+       judged for real coherence with the declared OK status: contradiction,
+       partial conformity, pending confirmation, ambiguity, or coherent.
+    2. Pattern fallback — the proven regex suspicion library covers items
+       the LLM could not analyze (not configured, unreachable, batch error,
+       or beyond the per-run cap).
 
-    For each OK item, checks if the comment language suggests the requirement
-    may NOT actually be fully conform, despite the supplier marking it OK.
-    Generates an AI-style analysis comment explaining the concern.
-
-    Replaces the old separate detect_inconsistencies() + analyze_ok_deep()
-    (which were analyzing the same OK items with overlapping patterns).
+    Also flags OK items with no justifying comment (local check, no LLM).
+    Sets analysis.ok_deep_method to "ia", "ia+motifs" or "motifs".
     """
     findings: List[Dict] = []
 
+    # ── Local checks + collect items eligible for deep analysis ──
+    deep_items: List[ConformityItem] = []
     for item in analysis.items:
         if item.conformity_category != "OK":
             continue
 
         comment = item.comment.strip()
-        conf_raw = item.conformity_raw.strip()
 
-        # ── Check 0: OK status but no comment provided ──
-        # Warning only — OK without explanation is not a logical contradiction
-        # but reduces auditability. Only flag if conformity_raw is just "/"
-        # (undocumented OK), not when raw contains explicit OK signals.
+        # OK without comment: nothing to analyze (info-level findings
+        # are not reported — only real problems).
         if not comment:
-            if not re.search(r"\bok\b", _normalize(conf_raw)):
-                findings.append({
-                    "reqId": item.req_id,
-                    "reference": item.reference,
-                    "conformity": conf_raw,
-                    "comment": "",
-                    "score": 1,
-                    "signals": ["ok_no_comment"],
-                    "matched": ["no_comment"],
-                    "aiComment": (
-                        f"ℹ️ Le fournisseur a marqué '{conf_raw}' (OK) sans "
-                        f"commentaire justificatif. Un commentaire expliquant "
-                        f"la conformité est recommandé pour l'auditabilité."
-                    ),
-                    "severity": "info",
-                })
             continue
 
-        # Skip pure domain code comments (these are just domain assignments, not real comments)
-        # Domain codes: SYS, SW, VE, EE, ME, OD, OPT, CG, TP, HW, MECH, DQ, FUSA, IPM, ALL
-        # Also skip multi-domain combos like ME/VE, EE/SW, etc.
+        cnorm = _normalize(comment)
+
+        # Skip pure domain code comments (domain assignments, not real comments)
         if re.match(
             r"^(sys|sw|ve|ee|me|od|opt|cg|tp|hw|mech|dq|fusa|ipm|all)"
             r"(\s*/\s*(sys|sw|ve|ee|me|od|opt|cg|tp|hw|mech|dq|fusa|ipm|all))*\s*$",
-            _normalize(comment),
+            cnorm,
         ):
             continue
 
-        # Score the comment against ALL suspicion patterns
-        cnorm = _normalize(comment)
-        matches: List[tuple] = []
-        for pattern, label, weight in _OK_SUSPICION_PATTERNS:
-            m = re.search(pattern, cnorm)
-            if m:
-                matches.append((label, weight, m.group()))
-
-        if not matches:
+        # Skip per-domain OK confirmations (e.g. "EE: ok", "Touch: ok",
+        # "EE: ok SW: ok", "20260410 ME: ok") — these confirm conformity
+        # domain by domain and are fully consistent with the OK status.
+        if re.fullmatch(
+            r"(?:[a-z0-9_.&/-]{1,15}\s*:\s*ok(?:ay)?|ok(?:ay)?|\d{2,8}|[\s,;/&+.-])+",
+            cnorm,
+        ):
             continue
 
-        score = sum(w for _, w, _ in matches)
-        ai_comment = _generate_ai_comment_ok(comment, matches, conf_raw)
+        deep_items.append(item)
 
-        findings.append({
-            "reqId": item.req_id,
-            "reference": item.reference,
-            "conformity": conf_raw,
-            "comment": comment[:300],
-            "score": score,
-            "signals": sorted(set(l for l, _, _ in matches)),
-            "matched": [t for _, _, t in matches],
-            "aiComment": ai_comment,
-            "severity": "error" if score >= 4 else "warning" if score >= 2 else "info",
-        })
+    # ── Stage 1: semantic LLM analysis ──
+    llm_findings, analyzed_idx = _analyze_ok_deep_llm(deep_items)
+    findings.extend(llm_findings)
 
-    # Sort by score descending (most suspicious first)
-    findings.sort(key=lambda f: f["score"], reverse=True)
+    # ── Stage 2: pattern fallback for items the LLM did not cover ──
+    remaining = [it for i, it in enumerate(deep_items) if i not in analyzed_idx]
+    for item in remaining:
+        f = _pattern_finding_for_item(item)
+        if f:
+            findings.append(f)
+
+    if analyzed_idx and not remaining:
+        analysis.ok_deep_method = "ia"
+    elif analyzed_idx:
+        analysis.ok_deep_method = "ia+motifs"
+    else:
+        analysis.ok_deep_method = "motifs"
+
+    # Only real problems are reported — drop info-level findings
+    # (whatever their source: LLM or pattern fallback).
+    findings = [f for f in findings if f.get("severity") in ("error", "warning")]
+
+    # Sort: most severe first, then score descending
+    _sev_rank = {"error": 0, "warning": 1}
+    findings.sort(key=lambda f: (_sev_rank.get(f.get("severity"), 2), -f.get("score", 0)))
 
     analysis.ok_deep_findings = findings
     # Backward compat: populate inconsistencies with the same unified findings
@@ -2216,6 +2397,7 @@ def analysis_to_dict(analysis: ConformityAnalysis) -> dict:
         ],
         "inconsistencies": analysis.inconsistencies,
         "okDeepFindings": analysis.ok_deep_findings,
+        "okDeepMethod": analysis.ok_deep_method,
         "chartBase64": analysis.chart_base64,
         "reportText": analysis.report_text,
         "summary": {

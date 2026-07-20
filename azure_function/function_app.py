@@ -87,14 +87,27 @@ def _decode_file_content(content_str) -> bytes:
     
     # Case 6: Dict/object with content key (Copilot Studio file object)
     if isinstance(content_str, dict):
+        # Try contentUrl first (download from URL — bypasses RAI filter)
+        content_url = (content_str.get("contentUrl", "") or
+                      content_str.get("ContentUrl", "") or
+                      content_str.get("url", "") or
+                      content_str.get("Url", ""))
+        if content_url:
+            logging.info(f"Downloading file from contentUrl: {str(content_url)[:120]}...")
+            try:
+                return _download_file_from_url(content_url)
+            except Exception as e:
+                logging.warning(f"Failed to download from contentUrl: {e}, falling back to content")
+        # Fall back to content/base64
         b64 = (content_str.get("content", "") or
                content_str.get("contentBytes", "") or
                content_str.get("Content", "") or
                content_str.get("data", "") or
-               content_str.get("$base64", ""))
+               content_str.get("$base64", "") or
+               content_str.get("$content", ""))
         if b64:
             return _decode_file_content(b64)
-        raise ValueError("Dict content has no 'content' or 'contentBytes' key")
+        raise ValueError("Dict content has no 'content' or 'contentBytes' or 'contentUrl' key")
     
     if not isinstance(content_str, str):
         raise ValueError(f"Invalid content type: {type(content_str)}")
@@ -108,12 +121,23 @@ def _decode_file_content(content_str) -> bytes:
         try:
             obj = _json.loads(s)
             if isinstance(obj, dict):
+                # Try contentUrl first (download from URL — bypasses RAI filter)
+                content_url = (obj.get("contentUrl", "") or
+                              obj.get("ContentUrl", "") or
+                              obj.get("url", ""))
+                if content_url:
+                    logging.info(f"Downloading file from JSON contentUrl: {str(content_url)[:120]}...")
+                    try:
+                        return _download_file_from_url(content_url)
+                    except Exception as e:
+                        logging.warning(f"Failed to download from JSON contentUrl: {e}, falling back to content")
                 # Try to extract file content from the JSON object
                 b64 = (obj.get("content", "") or
                        obj.get("contentBytes", "") or
                        obj.get("Content", "") or
                        obj.get("data", "") or
-                       obj.get("$base64", ""))
+                       obj.get("$base64", "") or
+                       obj.get("$content", ""))
                 if b64:
                     logging.info(f"Decoded JSON file object, content length: {len(b64)}")
                     return _decode_file_content(b64)
@@ -130,7 +154,24 @@ def _decode_file_content(content_str) -> bytes:
                         except Exception:
                             pass
         except (_json.JSONDecodeError, ValueError):
-            pass  # Not valid JSON, try other cases
+            # Case 8b: Python dict string representation (single quotes)
+            # Copilot Studio may send File type as str(dict) when schema says type=string
+            # e.g., {'$content': 'UEsDBBQ...', '$content-type': 'application/octet-stream'}
+            try:
+                import ast
+                obj = ast.literal_eval(s)
+                if isinstance(obj, dict):
+                    b64 = (obj.get("content", "") or
+                           obj.get("contentBytes", "") or
+                           obj.get("Content", "") or
+                           obj.get("data", "") or
+                           obj.get("$base64", "") or
+                           obj.get("$content", ""))
+                    if b64:
+                        logging.info(f"Decoded Python dict string, content length: {len(b64)}")
+                        return _decode_file_content(b64)
+            except Exception:
+                pass  # Not a valid Python literal either, try other cases
     
     # Case 1: Data URI  (data:application/...;base64,UEsDBBQ...)
     if s.startswith("data:") and ";base64," in s:
@@ -480,7 +521,7 @@ def validate(req: func.HttpRequest) -> func.HttpResponse:
 # ═══════════════════════════════════════════════════════════════════
 # ENDPOINT 2b: /api/upload-and-validate — Upload + Validate in one call
 # ═══════════════════════════════════════════════════════════════════
-@app.route(route="upload-and-validate", methods=["POST"])
+@app.route(route="upload-and-validate", methods=["POST"], auth_level=func.AuthLevel.ANONYMOUS)
 def upload_and_validate(req: func.HttpRequest) -> func.HttpResponse:
     """
     Upload a file AND validate it in one call.
@@ -547,8 +588,32 @@ def upload_and_validate(req: func.HttpRequest) -> func.HttpResponse:
             logging.info(f"JSON body keys: {list(body.keys()) if body else 'EMPTY'}")
 
             if body and "fileContent" in body:
-                file_bytes = _decode_file_content(body["fileContent"])
-                file_name = body.get("fileName", "uploaded_spec.docx")
+                fc = body["fileContent"]
+                # If fileContent is a dict (Copilot Studio file object with includeFileMetadata),
+                # extract fileName from the dict, then decode content (tries contentUrl first)
+                if isinstance(fc, dict):
+                    file_name = (fc.get("name", "") or fc.get("Name", "") or
+                                 fc.get("fileName", "") or
+                                 body.get("fileName", "uploaded_spec.docx"))
+                elif isinstance(fc, str) and not body.get("fileName"):
+                    # fileContent is a JSON string from JSON(..., IncludeBinaryData)
+                    # Try to extract name from the JSON string
+                    try:
+                        import json as _j2
+                        if fc.strip().startswith('{') and fc.strip().endswith('}'):
+                            _obj = _j2.loads(fc)
+                            if isinstance(_obj, dict):
+                                file_name = (_obj.get("name", "") or _obj.get("Name", "") or
+                                             _obj.get("fileName", "") or "uploaded_spec.docx")
+                            else:
+                                file_name = "uploaded_spec.docx"
+                        else:
+                            file_name = body.get("fileName", "uploaded_spec.docx")
+                    except Exception:
+                        file_name = body.get("fileName", "uploaded_spec.docx")
+                else:
+                    file_name = body.get("fileName", "uploaded_spec.docx")
+                file_bytes = _decode_file_content(fc)
             elif body and "file" in body:
                 if isinstance(body["file"], str):
                     # file is a data URI or base64 string
@@ -561,15 +626,13 @@ def upload_and_validate(req: func.HttpRequest) -> func.HttpResponse:
                     if b64_content:
                         file_bytes = _decode_file_content(b64_content)
             elif body and "fileUrl" in body:
-                import requests as req_lib
                 url = body["fileUrl"]
                 file_name = body.get("fileName", url.split("/")[-1] if "/" in url else "uploaded_spec.docx")
                 logging.info(f"Downloading file from URL: {url[:100]}...")
-                resp = req_lib.get(url, timeout=60, allow_redirects=True)
-                if resp.status_code == 200:
-                    file_bytes = resp.content
-                else:
-                    return _error_response(f"Failed to download file (HTTP {resp.status_code})", 400)
+                try:
+                    file_bytes = _download_file_from_url(url)
+                except Exception as dl_exc:
+                    return _error_response(f"Failed to download file from URL: {str(dl_exc)[:200]}", 400)
         except Exception as exc:
             logging.error(f"JSON parse error: {exc}")
 
@@ -660,6 +723,55 @@ def _parse_multipart(body: bytes, content_type: str):
         return filename, content
 
     raise ValueError("No file field found in multipart body")
+
+
+def _parse_multipart_multi(body: bytes, content_type: str) -> list:
+    """
+    Parse a multipart/form-data body and extract ALL file parts (unlike
+    _parse_multipart, which returns only the first). Used by batch
+    endpoints that accept multiple files in one request.
+
+    Returns a list of (filename, file_bytes) tuples, in submission order.
+    """
+    import re
+
+    boundary_match = re.search(r'boundary=("?)([^";\s]+)\1', content_type)
+    if not boundary_match:
+        raise ValueError("Could not find multipart boundary in Content-Type")
+
+    boundary = boundary_match.group(2).encode()
+    delimiter = b"--" + boundary
+    files = []
+
+    for part in body.split(delimiter):
+        if not part or part.strip() in (b"", b"--", b"--\r\n"):
+            continue
+        if part.startswith(b"\r\n"):
+            part = part[2:]
+
+        header_end = part.find(b"\r\n\r\n")
+        if header_end == -1:
+            continue
+
+        header_bytes = part[:header_end].decode("utf-8", errors="replace")
+        content = part[header_end + 4:]
+        if content.endswith(b"\r\n"):
+            content = content[:-2]
+
+        filename_match = re.search(r'filename="([^"]*)"', header_bytes)
+        if not filename_match:
+            filename_match = re.search(r"filename\*=[^']*''([^;\r\n]+)", header_bytes)
+        if not filename_match:
+            filename_match = re.search(r'filename=([^;\r\n]+)', header_bytes)
+        if not filename_match:
+            continue  # non-file form field — skip
+
+        filename = filename_match.group(1).strip().strip('"')
+        if not filename or not content:
+            continue
+        files.append((filename, content))
+
+    return files
 @app.route(route="upload", methods=["POST"])
 def upload(req: func.HttpRequest) -> func.HttpResponse:
     """
@@ -716,21 +828,14 @@ def upload(req: func.HttpRequest) -> func.HttpResponse:
 
             # C2: fileUrl — Copilot Studio sends file as URL (Dataverse/SharePoint)
             elif body and "fileUrl" in body:
-                import requests as req_lib
                 url = body["fileUrl"]
                 file_name = body.get("fileName", url.split("/")[-1] if "/" in url else "uploaded_spec.docx")
                 logging.info(f"Downloading file from URL: {url[:100]}...")
-                resp = req_lib.get(url, timeout=60, allow_redirects=True)
-                if resp.status_code == 200:
-                    file_bytes = resp.content
-                    import re
-                    cd = resp.headers.get("Content-Disposition", "")
-                    fn_match = re.search(r'filename="?([^";\s]+)"?', cd)
-                    if fn_match and fn_match.group(1):
-                        file_name = fn_match.group(1)
-                else:
-                    logging.error(f"File URL returned {resp.status_code}")
-                    return _error_response(f"Failed to download file from URL (HTTP {resp.status_code})", 400)
+                try:
+                    file_bytes = _download_file_from_url(url)
+                except Exception as dl_exc:
+                    logging.error(f"File URL download failed: {dl_exc}")
+                    return _error_response(f"Failed to download file from URL: {str(dl_exc)[:200]}", 400)
 
             # C3: Try to find base64/data-URI content in any field of the JSON body
             elif body:
@@ -1113,7 +1218,7 @@ def validation_pdf(req: func.HttpRequest) -> func.HttpResponse:
 # ═══════════════════════════════════════════════════════════════════
 # ENDPOINT 10b: /api/validate-url — Validate from URL (bypasses content filter)
 # ═══════════════════════════════════════════════════════════════════
-@app.route(route="validate-url", methods=["POST"])
+@app.route(route="validate-url", methods=["POST"], auth_level=func.AuthLevel.ANONYMOUS)
 def validate_url(req: func.HttpRequest) -> func.HttpResponse:
     """
     Download a file from a URL and validate it against the CTS template.
@@ -1509,7 +1614,7 @@ function copyUrl() {
 # ═══════════════════════════════════════════════════════════════════
 # ENDPOINT 16: /api/upload-and-get-url — Upload file to Blob Storage, return URL
 # ═══════════════════════════════════════════════════════════════════
-@app.route(route="upload-and-get-url", methods=["POST"])
+@app.route(route="upload-and-get-url", methods=["POST"], auth_level=func.AuthLevel.ANONYMOUS)
 def upload_and_get_url(req: func.HttpRequest) -> func.HttpResponse:
     """
     Upload a specification file to Azure Blob Storage and return a public URL.
@@ -1609,4 +1714,126 @@ def upload_and_get_url(req: func.HttpRequest) -> func.HttpResponse:
         status_code=200,
         mimetype="application/json",
         headers={"Content-Type": "application/json; charset=utf-8"},
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════
+# ENDPOINT 19: /api/conformity-batch — Multiple matrices → one combined report
+# ═══════════════════════════════════════════════════════════════════
+@app.route(route="conformity-batch", methods=["POST"], auth_level=func.AuthLevel.ANONYMOUS)
+def conformity_batch_route(req: func.HttpRequest) -> func.HttpResponse:
+    """
+    Upload one or several conformity matrices in a single multipart request
+    (multiple 'file' fields) and receive ONE combined Excel report (Overview
+    sheet + per-matrix item/deep-analysis sheets). Anonymous — same access
+    model as /api/conformity-excel.
+    """
+    logging.info("=== /api/conformity-batch called ===")
+
+    content_type = req.headers.get("Content-Type", "")
+    body_bytes = req.get_body()
+    files = []
+
+    if "multipart/form-data" in content_type:
+        try:
+            files = _parse_multipart_multi(body_bytes, content_type)
+        except Exception as exc:
+            logging.warning(f"Multipart multi-parse failed: {exc}")
+
+    if not files:
+        # JSON fallback: { "files": [{"fileName": "...", "fileContent": "<base64>"}, ...] }
+        body = _get_body(req)
+        if body and isinstance(body.get("files"), list):
+            for item in body["files"]:
+                try:
+                    fname = item.get("fileName", "conformity_matrix.xlsx")
+                    fbytes = _decode_file_content(item.get("fileContent", ""))
+                    if fbytes:
+                        files.append((fname, fbytes))
+                except Exception as exc:
+                    logging.warning(f"JSON file entry decode failed: {exc}")
+
+    if not files:
+        return _error_response(
+            "No files found. Provide multipart form-data with one or more 'file' "
+            "fields, or JSON { \"files\": [{\"fileName\":..,\"fileContent\":..}] }.",
+            422,
+        )
+
+    from azure_handler import handle_conformity_batch
+    return _safe_handler(handle_conformity_batch, files)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# ENDPOINT 18: /api/spec-to-matrix — Pre-filled conformity matrix from spec
+# ═══════════════════════════════════════════════════════════════════
+@app.route(route="spec-to-matrix", methods=["POST"], auth_level=func.AuthLevel.ANONYMOUS)
+def spec_to_matrix_route(req: func.HttpRequest) -> func.HttpResponse:
+    """
+    Upload a specification (.docx/.pdf/.txt) and receive the official CTS
+    conformity matrix pre-filled with every requirement found in the spec.
+    Same input formats as /api/upload-and-validate (multipart, raw binary,
+    JSON base64/fileUrl).
+    """
+    logging.info("=== /api/spec-to-matrix called ===")
+
+    content_type = req.headers.get("Content-Type", "")
+    body_bytes = req.get_body()
+    body_len = len(body_bytes) if body_bytes else 0
+    file_name = None
+    file_bytes = None
+
+    if "multipart/form-data" in content_type:
+        try:
+            file_name, file_bytes = _parse_multipart(body_bytes, content_type)
+        except Exception as exc:
+            logging.warning(f"Multipart parse failed: {exc}")
+
+    if not file_bytes:
+        body = _get_body(req)
+        if body:
+            try:
+                file_name, file_bytes = _extract_file_from_body(body, req)
+            except Exception as exc:
+                logging.warning(f"JSON body extraction failed: {exc}")
+
+    if not file_bytes and body_len > 0 and "application/json" not in content_type:
+        file_bytes = body_bytes
+        file_name = req.headers.get("X-File-Name", "uploaded_spec.docx")
+
+    if not file_name or not file_bytes:
+        return _error_response("Missing file content. Provide multipart 'file', fileContent (base64), or fileUrl.", 422)
+
+    from azure_handler import handle_spec_to_matrix
+    return _safe_handler(handle_spec_to_matrix, file_name, file_bytes)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# ENDPOINT 17: /api/conformity-ui — Conformity Matrix web interface
+# ═══════════════════════════════════════════════════════════════════
+@app.route(route="conformity-ui", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
+def conformity_ui(req: func.HttpRequest) -> func.HttpResponse:
+    """
+    Serve the Conformity Matrix Analyzer web interface (same UI as the
+    local conformity_server). The page calls the anonymous
+    /api/conformity-excel endpoint, so no function key is required.
+    """
+    # Deployed package layout: app/ sits next to function_app.py.
+    # Local repo layout: app/ sits one level up from azure_function/.
+    here = Path(__file__).resolve().parent
+    for candidate in (
+        here / "app" / "conformity_ui" / "index.html",
+        here.parent / "app" / "conformity_ui" / "index.html",
+    ):
+        if candidate.exists():
+            return func.HttpResponse(
+                body=candidate.read_text(encoding="utf-8"),
+                status_code=200,
+                mimetype="text/html",
+                headers={"Content-Type": "text/html; charset=utf-8"},
+            )
+    return func.HttpResponse(
+        body="Conformity UI not found in deployment package.",
+        status_code=404,
+        mimetype="text/plain",
     )
