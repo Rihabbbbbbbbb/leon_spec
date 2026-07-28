@@ -5,12 +5,12 @@ This is the STANDARDIZED TEMPLATE that LEON always uses to deliver
 specification validation reports to the user as a downloadable document.
 
 Designed to be COMPACT and ENGINEER-FOCUSED (target: 3-6 pages):
-  1. Synthèse       — verdict banner, key metadata, scores per axis, counts
-  2. Problèmes à corriger — errors then warnings, each with location,
-                      evidence excerpt and suggested fix (the actionable core)
-  3. Couverture des sections — missing sections highlighted, found inline
-  4. Recommandations — top prioritized actions
-  5. Périmètre de l'analyse — rules checked, sources, method (audit trail)
+  1. Summary          — verdict banner, key metadata, scores per axis, counts
+  2. Issues to Fix    — errors then warnings, each with location,
+                         evidence excerpt and suggested fix (the actionable core)
+  3. Requirements Traceability — every requirement missing an upstream reference
+  4. Semantic Analysis (AI) — meaning-based findings, human review required
+  5. Analysis Scope   — rules checked, sources, method (audit trail)
 
 Uses python-docx (already in requirements.txt) for Azure Function compatibility.
 """
@@ -43,7 +43,7 @@ def _add_page_number_footer(section):
     footer.is_linked_to_previous = False
     p = footer.paragraphs[0] if footer.paragraphs else footer.add_paragraph()
     p.alignment = 1  # CENTER
-    run = p.add_run("LEON — Rapport de validation | Page ")
+    run = p.add_run("LEON — Validation Report | Page ")
     fldChar1 = OxmlElement("w:fldChar")
     fldChar1.set(qn("w:fldCharType"), "begin")
     instrText = OxmlElement("w:instrText")
@@ -57,10 +57,10 @@ def _add_page_number_footer(section):
 
 
 _VERDICT_LABELS = {
-    "GOOD": "GOOD — Spécification conforme",
-    "ACCEPTABLE_WITH_FIXES": "ACCEPTABLE — corrections à prévoir",
-    "NOT_RELIABLE": "NOT RELIABLE — révision approfondie nécessaire",
-    "NON_COMPLIANT": "NON COMPLIANT — non conforme au template CTS",
+    "GOOD": "GOOD — Specification is compliant",
+    "ACCEPTABLE_WITH_FIXES": "ACCEPTABLE — fixes needed before use",
+    "NOT_RELIABLE": "NOT RELIABLE — thorough revision required",
+    "NON_COMPLIANT": "NON-COMPLIANT — does not follow the CTS template",
 }
 
 
@@ -117,42 +117,201 @@ def _score_hex(score: float) -> str:
 
 
 # ═══════════════════════════════════════════════════════════════════
+# PLAIN-LANGUAGE EXPLANATIONS
+# ═══════════════════════════════════════════════════════════════════
+# Translates a finding's technical message into a short, jargon-free
+# sentence an engineer can understand without knowing the rule catalogue
+# by heart. Matched by (check, rule_id) or check alone; falls back to the
+# finding's own message when no specific phrasing is defined below.
+
+import re as _re_plain
+
+
+def _plain_language_explanation(f: Dict) -> str:
+    check = f.get("check", "")
+    rule_id = f.get("rule_id", "")
+    message = f.get("message", "") or ""
+
+    if check == "A_SECTION_COVERAGE":
+        section = f.get("section", "")
+        if f.get("severity") == "error":
+            return (
+                f"The section “{section}” does not exist anywhere in the document. "
+                f"The CTS template requires it — even if there is nothing to say, the "
+                f"section must be present (write “Not applicable” if needed)."
+            )
+        return (
+            f"The recommended section “{section}” is missing. It is not "
+            f"mandatory, but leaving it out makes the specification less complete."
+        )
+
+    if check == "B_SECTION_ORDER":
+        return "The order of the sections does not follow the standard CTS template layout."
+
+    if check == "C_PLACEHOLDER_RESIDUE":
+        m = _re_plain.match(r"(\d+)\s+template placeholders", message)
+        if m:
+            return (
+                f"{m.group(1)} template placeholder(s) of the form “<<...>>” "
+                f"are still present and have not been replaced with real text."
+            )
+        m = _re_plain.match(r"(\d+)\s+unfilled template variable", message)
+        if m:
+            return (
+                f"{m.group(1)} template variable(s), such as "
+                f"“<component name>”, have not been filled in."
+            )
+        m = _re_plain.match(r"(\d+)\s+TBD", message)
+        if m:
+            return (
+                f"{m.group(1)} “TBD/TBC/TODO/XXX” mention(s) remain — "
+                f"values that are still waiting on a decision."
+            )
+        return message
+
+    if check == "E_REQUIREMENT_LANGUAGE":
+        if "No 'shall'" in message:
+            return (
+                "No requirement uses the word “shall”, the only word recognized "
+                "as mandatory in a specification. Without it, there is no way to tell "
+                "what is required from what is merely described."
+            )
+        m = _re_plain.search(r"Subjective words found.*?\['([^']+)'\]", message)
+        if m:
+            return (
+                f"The word “{m.group(1)}” is too vague for a requirement "
+                f"(not measurable, not testable) — a precise value is needed instead."
+            )
+        return message
+
+    if check == "F_REQUIREMENT_IDS":
+        return (
+            "One or more requirements have no unique identifier "
+            "(e.g. REF-PSP-XXX-001) — without one, they cannot be referenced "
+            "elsewhere (tests, reviews, tracking)."
+        )
+
+    if check == "J_STANDARDS_CONSISTENCY":
+        m = _re_plain.search(r"Standard/norm '([^']+)'.*?never cited", message)
+        if m:
+            return (
+                f"The standard “{m.group(1)}” is declared as applicable, but "
+                f"no requirement actually refers to it — the declaration is probably "
+                f"outdated, or a requirement is missing."
+            )
+        m = _re_plain.search(r"Standard/norm '([^']+)'.*?NOT declared", message)
+        if m:
+            return (
+                f"The standard “{m.group(1)}” is used by a requirement, but "
+                f"it does not appear in the list of applicable documents — the "
+                f"document's dependency list is therefore incomplete."
+            )
+        m = _re_plain.search(r"Standard/norm '([^']+)'.*?reference field is empty", message)
+        if m:
+            return (
+                f"The standard “{m.group(1)}” is declared, but its "
+                f"“Reference” field (the document/drawing number) is empty — "
+                f"the actual document cannot be located."
+            )
+        m = _re_plain.search(r"Standard/norm '([^']+)'.*?unfilled placeholder", message)
+        if m:
+            return (
+                f"The standard “{m.group(1)}” is declared, but its "
+                f"“Reference” field still contains an unfilled template "
+                f"placeholder (“<<...>>”) — the document number or revision "
+                f"index was never entered."
+            )
+        return message
+
+    if rule_id == "R02":
+        return (
+            "A requirement refers to a color (e.g. “red circle”) to convey "
+            "meaning — but that information is lost if the document is printed in "
+            "black and white."
+        )
+
+    if rule_id == "R13":
+        return (
+            "The Diversity section exists, but it does not present its variants as "
+            "a table (possible values per criterion), as required by the writing guide."
+        )
+
+    if rule_id == "R15":
+        return (
+            "No “Design file” (the drawing or design record this component "
+            "derives from) is cited among the reference documents. This document is "
+            "what lets someone trace the component's technical choices back to their "
+            "origin — without it, traceability to the upstream design is broken."
+        )
+
+    return message
+
+
+# ═══════════════════════════════════════════════════════════════════
 # MAIN DOCUMENT GENERATOR
 # ═══════════════════════════════════════════════════════════════════
 
 # Caps to keep the report short — the full machine-readable detail
 # stays available in the JSON validationReport.
 _MAX_PROBLEM_BLOCKS = 40      # detailed error/warning blocks
-_MAX_RECOMMENDATIONS = 6
 _EXCERPT_MAX = 180
 _MSG_MAX = 300
 
-# Correction examples per rule — shown in the per-problem detail blocks.
-# Keyed by rule_id first, then by check category as fallback.
-_RULE_EXAMPLES = {
-    "TEMPLATE": 'Avant : « Response time shall be <<x>> ms » → Après : « Response time shall be 50 ms ».',
-    "R20": "Format d'identifiant attendu : REF-PSP-ASU-0001 (préfixe REF-/APP-/GEN- + composant + numéro unique).",
-    "R22": 'Tableau d\'exigence à 3 colonnes : « REF-ASU-CD-X-001 | The unit shall … | REQ-0508543 » (ou « N/A » si pas d\'exigence amont).',
-    "R23": "Avant : « The system shall respond quickly » → Après : « The system shall respond within 100 ms ».",
-    "R05": "Titre attendu : « Requirements Document of the Alarm Siren Unit (ASU) Module ».",
-    "R07": "Ajouter en en-tête un tableau « Written by / Checked by / Approved by » avec noms et dates.",
-    "R09": "Ajouter une « Table of updates » : Version | Date | Auteur | Nature de la modification.",
-    "WRITING_GUIDE": "Ajouter la section recommandée, même brève — indiquer « Not applicable » si elle est sans objet.",
-    "A_SECTION_COVERAGE": "Ajouter le titre de section manquant à sa place dans le plan standard du template, puis rédiger son contenu.",
-    "E_REQUIREMENT_LANGUAGE": "Avant : « The system should log errors » → Après : « The system shall log errors ».",
-    "F_REQUIREMENT_IDS": "Attribuer un identifiant unique à chaque exigence : REF-PSP-<COMPOSANT>-001, -002, …",
-    "G_TRACEABILITY": "Renseigner l'exigence amont pour chaque exigence (colonne « Input requirement ») ou « N/A ».",
-    "R17": "Vérifier la section APPLICABLE DOCUMENTS / STANDARDS : chaque norme citée dans une exigence (ex. [STA20], ISO 26262) doit y figurer, et chaque norme déclarée doit être réellement utilisée par au moins une exigence.",
-    "J_STANDARDS_CONSISTENCY": "Vérifier la section APPLICABLE DOCUMENTS / STANDARDS : chaque norme citée dans une exigence (ex. [STA20], ISO 26262) doit y figurer, et chaque norme déclarée doit être réellement utilisée par au moins une exigence.",
-}
+# Findings are split into separate, clearly labeled tables by category —
+# easier to scan than one long undifferentiated table. G_TRACEABILITY is
+# deliberately excluded: it already gets its own full dedicated section
+# ("Requirements Traceability") with a complete itemized list.
+_PROBLEM_CATEGORIES = [
+    (
+        "Document Structure",
+        ("A_SECTION_COVERAGE", "B_SECTION_ORDER"),
+        "Mandatory sections that are missing, or sections that do not appear "
+        "in the order expected by the CTS template.",
+    ),
+    (
+        "Template Content Not Finalized",
+        ("C_PLACEHOLDER_RESIDUE",),
+        "Placeholders or “to be defined” markers left over from the CTS "
+        "template that have not yet been replaced with real content.",
+    ),
+    (
+        "Requirement Wording",
+        ("D_REQUIREMENT_FORMAT", "E_REQUIREMENT_LANGUAGE", "F_REQUIREMENT_IDS"),
+        "How the requirements are written: the verb used, their unique "
+        "identifier, and how they are presented in a table.",
+    ),
+    (
+        "Standards Cited",
+        ("J_STANDARDS_CONSISTENCY",),
+        "Consistency between the standards cited in requirements and the list "
+        "of applicable documents: every standard used must be declared, and "
+        "every standard declared must actually be used.",
+    ),
+    (
+        "Other Writing Guide Rules",
+        ("H_WRITING_GUIDE_RULES", "I_EXTENDED_WG_RULES"),
+        "Specific points from the Stellantis writing guide: presentation, "
+        "content expected per section, documentary consistency.",
+    ),
+]
 
-
-def _example_for(finding: Dict) -> str:
-    """Return a correction example for a finding, if one is defined."""
-    return (
-        _RULE_EXAMPLES.get(finding.get("rule_id", ""))
-        or _RULE_EXAMPLES.get(finding.get("check", ""))
-        or ""
+def _add_annotated_spec_note(doc, _add_para) -> None:
+    """
+    Tell the reader which highlight colour marks the findings in the
+    companion "highlighted spec" document, and why it is not yellow.
+    """
+    try:
+        from app.qa.spec_annotator import HIGHLIGHT_COLOR_LABEL as colour
+    except Exception:
+        colour = "violet"
+    _add_para(
+        f"Note — “highlighted spec” document: every passage that needs "
+        f"correction is highlighted there in {colour.upper()}. This color is "
+        f"reserved for LEON: it is not used anywhere in the original specification "
+        f"(which already uses yellow, pink, turquoise and green). Any {colour} "
+        f"highlight therefore corresponds to a point raised in this report, and to "
+        f"nothing else.",
+        italic=True, size=9, color=(112, 48, 160)
     )
 
 
@@ -216,7 +375,6 @@ def generate_spec_validation_document(report: Dict) -> bytes:
     detailed = report.get("detailed", {})
     errors = detailed.get("errors") or [f for f in findings if f.get("severity") == "error"]
     warnings = detailed.get("warnings") or [f for f in findings if f.get("severity") == "warning"]
-    sections_found = report.get("sectionsFound", [])
     sections_missing = report.get("sectionsMissing", [])
     rules_used = report.get("rulesUsed", {})
 
@@ -225,7 +383,7 @@ def generate_spec_validation_document(report: Dict) -> bytes:
     # ═══════════════════════════════════════════════════════
     title = doc.add_paragraph()
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    run = title.add_run("LEON — Rapport de Validation de Spécification")
+    run = title.add_run("LEON — Specification Validation Report")
     run.font.size = Pt(18)
     run.bold = True
     run.font.color.rgb = RGBColor(0, 51, 102)
@@ -241,17 +399,33 @@ def generate_spec_validation_document(report: Dict) -> bytes:
     run.font.color.rgb = RGBColor(108, 117, 125)
     doc.add_paragraph()
 
+    # ── How to read this report (orientation for first-time readers) ──
+    _add_para(
+        "How to read this report — Section 1 gives the overall verdict and "
+        "scores. Section 2 lists every issue to fix, grouped by theme, each "
+        "with its exact location, a plain-language explanation and how to fix "
+        "it: this is the actionable core of the report. Section 3 (when "
+        "present) lists requirements with no traceability to an upstream "
+        "requirement or standard. Section 4 (when present) contains "
+        "AI-assisted findings on meaning, which must be verified by a human "
+        "reviewer before acting on them. Section 5 documents exactly what was "
+        "checked, for audit purposes. Colors are consistent throughout: red = "
+        "error, yellow = warning, green = passed/good.",
+        italic=True, size=9, color=(90, 98, 108)
+    )
+    doc.add_paragraph()
+
     # ═══════════════════════════════════════════════════════
-    # 1. SYNTHÈSE — verdict banner + scores + counts
+    # 1. SUMMARY — verdict banner + scores + counts
     # ═══════════════════════════════════════════════════════
-    _add_heading("1. Synthèse", level=2)
+    _add_heading("1. Summary", level=2)
 
     # Verdict banner (single shaded cell)
     banner = doc.add_table(rows=1, cols=1)
     banner.style = "Table Grid"
     cell = banner.cell(0, 0)
     score_txt = f"{overall_score:.0%}" if isinstance(overall_score, (int, float)) else str(overall_score)
-    cell.text = f"{_VERDICT_LABELS.get(verdict, verdict)}   —   Score global : {score_txt}"
+    cell.text = f"{_VERDICT_LABELS.get(verdict, verdict)}   —   Overall score: {score_txt}"
     for run in cell.paragraphs[0].runs:
         run.bold = True
         run.font.size = Pt(13)
@@ -262,10 +436,10 @@ def generate_spec_validation_document(report: Dict) -> bytes:
 
     # Counts (one horizontal row)
     count_data = [
-        ("Erreurs", counts.get("errors", 0), "FFC7CE"),
-        ("Avertissements", counts.get("warnings", 0), "FFEB9C"),
-        ("Vérifications conformes", counts.get("pass", 0), "C6EFCE"),
-        ("Sections manquantes", len(sections_missing), "FFC7CE" if sections_missing else "C6EFCE"),
+        ("Errors", counts.get("errors", 0), "FFC7CE"),
+        ("Warnings", counts.get("warnings", 0), "FFEB9C"),
+        ("Passed Checks", counts.get("pass", 0), "C6EFCE"),
+        ("Missing Sections", len(sections_missing), "FFC7CE" if sections_missing else "C6EFCE"),
     ]
     counts_table = doc.add_table(rows=2, cols=len(count_data))
     counts_table.style = "Table Grid"
@@ -285,16 +459,16 @@ def generate_spec_validation_document(report: Dict) -> bytes:
 
     # Scores per axis (compact)
     score_rows = [
-        ("structure", "Structure (sections du template)", 0.25),
-        ("section_order", "Ordre des sections", 0.05),
-        ("template_cleanliness", "Propreté du template", 0.10),
-        ("requirements_quality", "Qualité des exigences", 0.35),
-        ("writing_guide_compliance", "Conformité au guide d'écriture", 0.25),
+        ("structure", "Structure (template sections)", 0.25),
+        ("section_order", "Section Order", 0.05),
+        ("template_cleanliness", "Template Cleanliness", 0.10),
+        ("requirements_quality", "Requirements Quality", 0.35),
+        ("writing_guide_compliance", "Writing Guide Compliance", 0.25),
     ]
     score_table = doc.add_table(rows=len(score_rows) + 1, cols=3)
     score_table.style = "Table Grid"
     score_table.alignment = WD_TABLE_ALIGNMENT.CENTER
-    for ci, header in enumerate(["Axe d'évaluation", "Poids", "Score"]):
+    for ci, header in enumerate(["Evaluation Axis", "Weight", "Score"]):
         _style_header_cell(score_table.cell(0, ci))
         score_table.cell(0, ci).text = header
         _style_header_cell(score_table.cell(0, ci))
@@ -312,171 +486,237 @@ def generate_spec_validation_document(report: Dict) -> bytes:
     doc.add_paragraph()
 
     # ═══════════════════════════════════════════════════════
-    # 2. PROBLÈMES À CORRIGER — the actionable core
+    # 2. ISSUES TO FIX — grouped by category for clarity
     # ═══════════════════════════════════════════════════════
-    n_problems = len(errors) + len(warnings)
-    _add_heading(f"2. Problèmes à Corriger ({n_problems})", level=2)
+    all_problems = [("ERROR", f) for f in errors] + [("WARNING", f) for f in warnings]
+    # G_TRACEABILITY has its own dedicated section further down — never
+    # repeat it here. K_SEMANTIC_ANALYSIS (AI-assisted, requires human
+    # verification) also gets its own clearly-separate section — mixing
+    # it into these deterministic tables would blur the trust boundary
+    # between "a pattern was matched" and "an AI judged this".
+    all_problems = [
+        (lbl, f) for lbl, f in all_problems
+        if f.get("check") not in ("G_TRACEABILITY", "K_SEMANTIC_ANALYSIS")
+    ]
+    n_problems = len(all_problems)
+    _add_heading(f"2. Issues to Fix ({n_problems})", level=2)
 
     if n_problems == 0:
         _add_para(
-            "✅ Aucun problème détecté — le document est conforme au template "
-            "CTS et au guide d'écriture.",
+            "✅ No issues found — the document complies with the CTS "
+            "template and the writing guide.",
             bold=True, size=11, color=(40, 167, 69)
         )
     else:
         _add_para(
-            "Erreurs critiques d'abord, puis avertissements. Pour chaque "
-            "problème : où il se trouve, ce qui ne va pas, et comment le corriger.",
+            "Issues are grouped by theme below. For each one: where it is, a "
+            "plain-language explanation, and how to fix it.",
             italic=True, size=9, color=(108, 117, 125)
         )
+        _add_annotated_spec_note(doc, _add_para)
+        doc.add_paragraph()
 
-        problem_list = (
-            [("ERREUR", f) for f in errors]
-            + [("AVERTISSEMENT", f) for f in warnings]
+        col_widths = [Cm(0.9), Cm(2.2), Cm(3.2), Cm(6.2), Cm(4.4)]
+        p_headers = ["#", "Severity", "Where (section / location)",
+                     "Issue (plain language)", "How to Fix"]
+
+        remaining_budget = _MAX_PROBLEM_BLOCKS
+
+        def _render_problem_table(rows):
+            """rows: list of (sev_label, finding) → renders one table, returns count shown."""
+            nonlocal remaining_budget
+            take = rows[:max(remaining_budget, 0)]
+            if not take:
+                return 0
+            tbl = doc.add_table(rows=len(take) + 1, cols=5)
+            tbl.style = "Table Grid"
+            for ci, header in enumerate(p_headers):
+                cell = tbl.cell(0, ci)
+                cell.text = header
+                _style_header_cell(cell)
+                cell.width = col_widths[ci]
+            for ri, (sev_label, f) in enumerate(take, 1):
+                sev = f.get("severity", "warning")
+                hex_c = _severity_hex(sev)
+                where = f.get("section", "") or f.get("user_location", "") or "Entire document"
+                explanation = _plain_language_explanation(f)[:_MSG_MAX]
+                excerpt = (f.get("user_excerpt", "") or "")[:_EXCERPT_MAX]
+                problem_txt = explanation + (f'\n“{excerpt}”' if excerpt else "")
+                fix = f.get("fix_suggestion", "") or (f.get("why", "") or "")[:_MSG_MAX]
+                rule_id = f.get("rule_id", "")
+                sev_txt = sev_label + (f"\n{rule_id}" if rule_id else "")
+                row_data = [str(ri), sev_txt, where, problem_txt, fix or "—"]
+                for ci, val in enumerate(row_data):
+                    cell = tbl.cell(ri, ci)
+                    cell.text = str(val)
+                    cell.width = col_widths[ci]
+                    for para in cell.paragraphs:
+                        for run in para.runs:
+                            run.font.size = Pt(8)
+                            if ci == 1:
+                                run.bold = True
+                                run.font.color.rgb = RGBColor(*_severity_rgb(sev))
+                    _set_cell_shading(cell, hex_c)
+            remaining_budget -= len(take)
+            return len(take)
+
+        for cat_idx, (cat_title, cat_checks, cat_intro) in enumerate(_PROBLEM_CATEGORIES, 1):
+            cat_rows = [(lbl, f) for lbl, f in all_problems if f.get("check") in cat_checks]
+            if not cat_rows:
+                continue
+            _add_heading(f"2.{cat_idx} {cat_title} ({len(cat_rows)})", level=3)
+            _add_para(cat_intro, italic=True, size=8, color=(108, 117, 125))
+            n_shown = _render_problem_table(cat_rows)
+            if n_shown < len(cat_rows):
+                _add_para(
+                    f"({len(cat_rows) - n_shown} additional finding(s) in this "
+                    f"category not detailed here — full list available in the "
+                    f"online analysis.)",
+                    italic=True, size=8, color=(108, 117, 125)
+                )
+            doc.add_paragraph()
+
+        # Anything not covered by a known category (safety net for future check types)
+        uncategorized = [
+            (lbl, f) for lbl, f in all_problems
+            if not any(f.get("check") in checks for _, checks, _ in _PROBLEM_CATEGORIES)
+        ]
+        if uncategorized:
+            _add_heading(f"2.{len(_PROBLEM_CATEGORIES) + 1} Other Findings ({len(uncategorized)})", level=3)
+            _render_problem_table(uncategorized)
+            doc.add_paragraph()
+    doc.add_paragraph()
+
+    # NOTE: the former "3. Template Section Coverage" section was removed on
+    # request — missing mandatory sections are already reported, with their
+    # fix, in "2.1 Document Structure", so the standalone section only
+    # repeated the same information.
+
+    # ═══════════════════════════════════════════════════════
+    # 3. REQUIREMENTS TRACEABILITY — every requirement with no input/
+    # upstream reference, with its exact placement in the document.
+    # Shown whenever ANY such requirement exists, even if the overall
+    # traceability ratio is good enough to "pass" — a good overall score
+    # must never hide the individual requirements that still lack one.
+    # ═══════════════════════════════════════════════════════
+    trace_findings = [f for f in findings if f.get("check") == "G_TRACEABILITY"]
+    untraced_items = next((f.get("items") for f in trace_findings if f.get("items")), [])
+    trace_finding = trace_findings[0] if trace_findings else {}
+
+    if untraced_items:
+        _add_heading(
+            f"3. Requirements Traceability ({len(untraced_items)} with no upstream reference)",
+            level=2,
         )
-        shown = problem_list[:_MAX_PROBLEM_BLOCKS]
+        _add_para(
+            "“Upstream reference” (or “Input requirement”) means the "
+            "requirement, standard or document a requirement derives from — allowing "
+            "its origin to be traced. Each row below is a requirement that has none, "
+            "nor the mention “N/A” (the correct way to state that it "
+            "deliberately has none). Without this, it is impossible to know where the "
+            "requirement comes from or to assess the impact of an upstream change.",
+            italic=True, size=9, color=(108, 117, 125)
+        )
+        if trace_finding.get("message"):
+            _add_para(
+                f"Overall summary: {trace_finding['message']}",
+                italic=True, size=9, color=(108, 117, 125)
+            )
+        doc.add_paragraph()
 
-        prob_table = doc.add_table(rows=len(shown) + 1, cols=5)
-        prob_table.style = "Table Grid"
-
-        p_headers = ["#", "Sévérité", "Où (section / localisation)",
-                     "Problème constaté", "Comment corriger"]
-        for ci, header in enumerate(p_headers):
-            cell = prob_table.cell(0, ci)
+        # Generous cap: on a real CTS spec the structural check can legitimately
+        # find 150+ requirements with an empty "Input requirement" cell, and
+        # truncating that list would hide real gaps the engineer has to fix.
+        _MAX_TRACE_ROWS = 300
+        shown_items = untraced_items[:_MAX_TRACE_ROWS]
+        trace_table = doc.add_table(rows=len(shown_items) + 1, cols=4)
+        trace_table.style = "Table Grid"
+        trace_headers = ["Requirement", "Location", "Excerpt", "How to Fix"]
+        for ci, header in enumerate(trace_headers):
+            cell = trace_table.cell(0, ci)
             cell.text = header
             _style_header_cell(cell)
-
-        # Column widths (A4 usable ≈ 17 cm)
-        col_widths = [Cm(0.9), Cm(2.2), Cm(3.4), Cm(6.0), Cm(4.5)]
-
-        for ri, (sev_label, f) in enumerate(shown, 1):
-            sev = f.get("severity", "warning")
-            hex_c = _severity_hex(sev)
-            where = f.get("section", "") or f.get("user_location", "") or "Document entier"
-            message = (f.get("message", "") or "")[:_MSG_MAX]
-            excerpt = (f.get("user_excerpt", "") or "")[:_EXCERPT_MAX]
-            problem_txt = message + (f'\n« {excerpt} »' if excerpt else "")
-            fix = f.get("fix_suggestion", "") or (f.get("why", "") or "")[:_MSG_MAX]
-
-            rule_id = f.get("rule_id", "")
-            sev_txt = sev_label + (f"\n{rule_id}" if rule_id else "")
-            row_data = [str(ri), sev_txt, where, problem_txt, fix or "—"]
+        col_widths_trace = [Cm(2.6), Cm(3.6), Cm(6.8), Cm(4.0)]
+        fix_text = "Add a reference to the upstream requirement/document, or write “N/A” if this requirement deliberately derives from none."
+        for ri, item in enumerate(shown_items, 1):
+            row_data = [item.get("id", ""), item.get("location", ""), item.get("excerpt", ""), fix_text]
             for ci, val in enumerate(row_data):
-                cell = prob_table.cell(ri, ci)
+                cell = trace_table.cell(ri, ci)
                 cell.text = str(val)
-                cell.width = col_widths[ci]
+                cell.width = col_widths_trace[ci]
+                for run in cell.paragraphs[0].runs:
+                    run.font.size = Pt(8)
+        for ci in range(4):
+            trace_table.cell(0, ci).width = col_widths_trace[ci]
+
+        if len(untraced_items) > _MAX_TRACE_ROWS:
+            doc.add_paragraph()
+            _add_para(
+                f"({len(untraced_items) - _MAX_TRACE_ROWS} additional requirement(s) "
+                f"not listed here — full list available in the online analysis.)",
+                italic=True, size=8, color=(108, 117, 125)
+            )
+        doc.add_paragraph()
+
+    # NOTE: the former "5. Recommendations" section was removed on request —
+    # it only restated counts already shown in the Summary and repeated the
+    # per-issue "How to Fix" column of section 2.
+
+    # ═══════════════════════════════════════════════════════
+    # 4. SEMANTIC ANALYSIS (AI) — only rendered when
+    # include_semantic_analysis actually produced findings. Kept
+    # STRICTLY separate from section 2's deterministic tables: every row
+    # here is an AI judgment on MEANING, not a pattern match, and must
+    # never be mistaken for the same level of certainty.
+    # ═══════════════════════════════════════════════════════
+    semantic_findings = [f for f in findings if f.get("check") == "K_SEMANTIC_ANALYSIS"]
+    if semantic_findings:
+        _add_heading(f"4. Semantic Analysis — AI ({len(semantic_findings)})", level=2)
+        _add_para(
+            "These findings come from an AI-assisted analysis, for writing-guide "
+            "rules that require judging the MEANING of a text (not just whether it "
+            "is present) — something a deterministic analysis cannot do reliably. "
+            "Unlike the rest of this report, they are NOT guaranteed to be accurate: "
+            "every row must be verified by a human reviewer before any action is taken.",
+            italic=True, size=9, color=(155, 89, 24)
+        )
+        doc.add_paragraph()
+
+        sem_table = doc.add_table(rows=len(semantic_findings) + 1, cols=4)
+        sem_table.style = "Table Grid"
+        sem_headers = ["Rule", "AI Verdict", "Explanation", "Excerpt Cited by the AI"]
+        for ci, header in enumerate(sem_headers):
+            cell = sem_table.cell(0, ci)
+            cell.text = header
+            _style_header_cell(cell)
+        sem_col_widths = [Cm(1.8), Cm(2.6), Cm(7.6), Cm(4.9)]
+        sem_verdict_labels = {
+            "pass": "Compliant", "warning": "Possible Issue",
+            "info": "Not Applicable / To Verify",
+        }
+        for ri, f in enumerate(semantic_findings, 1):
+            sev = f.get("severity", "info")
+            hex_c = _severity_hex(sev)
+            verdict_label = sem_verdict_labels.get(sev, sev)
+            explanation = (f.get("message", "") or "").replace("[AI analysis — to verify] ", "")[:_MSG_MAX]
+            excerpt = (f.get("user_excerpt", "") or "")[:_EXCERPT_MAX]
+            row_data = [f.get("rule_id", ""), verdict_label, explanation, excerpt or "—"]
+            for ci, val in enumerate(row_data):
+                cell = sem_table.cell(ri, ci)
+                cell.text = str(val)
+                cell.width = sem_col_widths[ci]
                 for para in cell.paragraphs:
                     for run in para.runs:
                         run.font.size = Pt(8)
-                        if ci == 1:
-                            run.bold = True
-                            run.font.color.rgb = RGBColor(*_severity_rgb(sev))
                 _set_cell_shading(cell, hex_c)
-        # Fix header column widths too
-        for ci in range(5):
-            prob_table.cell(0, ci).width = col_widths[ci]
-
-        if len(problem_list) > _MAX_PROBLEM_BLOCKS:
-            doc.add_paragraph()
-            _add_para(
-                f"({len(problem_list) - _MAX_PROBLEM_BLOCKS} constat(s) "
-                f"supplémentaires non détaillés ici — liste complète disponible "
-                f"dans l'analyse en ligne.)",
-                italic=True, size=8, color=(108, 117, 125)
-            )
-
-        # ── Per-problem resolution detail ──────────────────
-        doc.add_paragraph()
-        _add_heading("Détail et résolution de chaque problème", level=3)
-        _add_para(
-            "Pour chaque problème du tableau : sa localisation exacte, la "
-            "nature précise du problème, la marche à suivre pour le corriger, "
-            "et un exemple lorsque pertinent.",
-            italic=True, size=9, color=(108, 117, 125)
-        )
+        for ci in range(4):
+            sem_table.cell(0, ci).width = sem_col_widths[ci]
         doc.add_paragraph()
 
-        for idx, (sev_label, f) in enumerate(shown, 1):
-            sev = f.get("severity", "warning")
-            sev_rgb = _severity_rgb(sev)
-            rule_id = f.get("rule_id", "")
-            sec = f.get("section", "")
-            location = f.get("user_location", "")
-            message = (f.get("message", "") or "")[:_MSG_MAX]
-            excerpt = (f.get("user_excerpt", "") or "")[:_EXCERPT_MAX]
-            why = (f.get("why", "") or "")[:_MSG_MAX]
-            fix = f.get("fix_suggestion", "")
-            example = _example_for(f)
-
-            head = f"{idx}. [{sev_label}] {rule_id}" + (f" — {sec}" if sec else "")
-            _add_para(head, bold=True, size=10, color=sev_rgb)
-
-            where_parts = []
-            if sec:
-                where_parts.append(f"section « {sec} »")
-            if location:
-                where_parts.append(location)
-            if where_parts:
-                _add_para("Où : " + " — ".join(where_parts), size=9)
-            if excerpt:
-                _add_para(f"Extrait concerné : « {excerpt} »",
-                          italic=True, size=8, color=(90, 90, 90))
-            if message:
-                _add_para(f"Problème : {message}", size=9)
-            if why:
-                _add_para(f"Pourquoi : {why}", size=9, color=(80, 80, 80))
-            if fix:
-                _add_para(f"→ Correction : {fix}", size=9, color=(0, 100, 0))
-            if example:
-                _add_para(f"Exemple : {example}", italic=True, size=8.5,
-                          color=(0, 51, 102))
-            doc.add_paragraph()
-    doc.add_paragraph()
-
     # ═══════════════════════════════════════════════════════
-    # 3. COUVERTURE DES SECTIONS
+    # 5. ANALYSIS SCOPE (audit trail, compact)
     # ═══════════════════════════════════════════════════════
-    _add_heading("3. Couverture des Sections du Template", level=2)
-
-    if sections_missing:
-        _add_para(
-            f"❌ {len(sections_missing)} section(s) obligatoire(s) manquante(s) :",
-            bold=True, size=10, color=(220, 53, 69)
-        )
-        for s in sections_missing:
-            p = doc.add_paragraph(style="List Bullet")
-            run = p.add_run(str(s))
-            run.font.size = Pt(9)
-            run.bold = True
-            run.font.color.rgb = RGBColor(220, 53, 69)
-    else:
-        _add_para(
-            "✅ Toutes les sections obligatoires du template sont présentes.",
-            bold=True, size=10, color=(40, 167, 69)
-        )
-
-    if sections_found:
-        _add_para(
-            f"{len(sections_found)} sections détectées dans le document.",
-            size=8, color=(108, 117, 125)
-        )
-    doc.add_paragraph()
-
-    # ═══════════════════════════════════════════════════════
-    # 4. RECOMMANDATIONS
-    # ═══════════════════════════════════════════════════════
-    _add_heading("4. Recommandations", level=2)
-
-    for rec in _generate_recommendations(report)[:_MAX_RECOMMENDATIONS]:
-        p = doc.add_paragraph(style="List Number")
-        run = p.add_run(rec)
-        run.font.size = Pt(9.5)
-    doc.add_paragraph()
-
-    # ═══════════════════════════════════════════════════════
-    # 5. PÉRIMÈTRE DE L'ANALYSE (audit trail, compact)
-    # ═══════════════════════════════════════════════════════
-    _add_heading("5. Périmètre de l'Analyse", level=2)
+    _add_heading("5. Analysis Scope", level=2)
 
     wg_count = rules_used.get("writing_guide_rules_count", 0)
     wg_checked = rules_used.get("writing_guide_rules_checked", 0)
@@ -487,37 +727,37 @@ def generate_spec_validation_document(report: Dict) -> bytes:
     text_length = report.get("textLength", 0)
 
     _add_para(
-        f"Document analysé en intégralité ({text_length:,} caractères extraits). "
-        f"Vérifications : {mandatory_count} sections obligatoires du template + "
-        f"{wg_checked}/{wg_count} règles du guide d'écriture "
-        f"({counts.get('pass', 0)} vérifications conformes). "
-        f"Extraction des règles : {'réussie' if extraction_ok else 'AVEC ERREURS'}.",
+        f"Document analyzed in full ({text_length:,} characters extracted). "
+        f"Checks: {mandatory_count} mandatory template sections + "
+        f"{wg_checked}/{wg_count} writing guide rules "
+        f"({counts.get('pass', 0)} passed checks). "
+        f"Rule extraction: {'successful' if extraction_ok else 'WITH ERRORS'}.",
         size=9
     )
     if checked_ids:
-        _add_para("Règles vérifiées : " + ", ".join(checked_ids),
+        _add_para("Rules checked: " + ", ".join(checked_ids),
                   size=8, color=(108, 117, 125))
     unchecked_ids = rules_used.get("unchecked_rule_ids", [])
     if unchecked_ids:
         _add_para(
-            f"Règles du guide non couvertes par l'analyse automatique "
-            f"({len(unchecked_ids)}) : " + ", ".join(unchecked_ids)
-            + " — à vérifier manuellement.",
+            f"Writing guide rules not covered by the automated analysis "
+            f"({len(unchecked_ids)}): " + ", ".join(unchecked_ids)
+            + " — to be checked manually.",
             size=8, color=(176, 122, 0)
         )
     if source_docs:
-        _add_para("Documents de référence : " + " ; ".join(source_docs),
+        _add_para("Reference documents: " + " ; ".join(source_docs),
                   size=8, color=(108, 117, 125))
     _add_para(
-        "Méthode : analyse déterministe basée sur des preuves — chaque constat "
-        "cite la règle source et l'extrait exact du document (double preuve). "
-        "Détail complet disponible dans l'analyse en ligne (interface LEON).",
+        "Method: deterministic evidence-based analysis — every finding cites "
+        "the source rule and the exact excerpt from the document (double "
+        "evidence). Full detail available in the online analysis (LEON interface).",
         italic=True, size=8, color=(108, 117, 125)
     )
 
     extraction_errors = rules_used.get("errors", [])
     if extraction_errors:
-        _add_para("Erreurs d'extraction des règles :", bold=True, size=8, color=(220, 53, 69))
+        _add_para("Rule extraction errors:", bold=True, size=8, color=(220, 53, 69))
         for err in extraction_errors:
             p = doc.add_paragraph(style="List Bullet")
             run = p.add_run(str(err))
@@ -534,71 +774,6 @@ def generate_spec_validation_document(report: Dict) -> bytes:
     return buf.read()
 
 
-# ═══════════════════════════════════════════════════════════════════
-# RECOMMENDATION GENERATOR
-# ═══════════════════════════════════════════════════════════════════
-
-def _generate_recommendations(report: Dict) -> List[str]:
-    """Generate actionable, prioritized recommendations from the report."""
-    recs: List[str] = []
-
-    verdict = report.get("verdict", "UNKNOWN")
-    counts = report.get("summaryCounts", {})
-    errors = counts.get("errors", 0)
-    warnings = counts.get("warnings", 0)
-    scores = report.get("scores", {})
-    sections_missing = report.get("sectionsMissing", [])
-
-    # Verdict-based recommendation
-    if verdict == "GOOD":
-        recs.append(
-            "Le document est globalement conforme. Traiter les avertissements "
-            "restants pour la prochaine révision."
-            if warnings else
-            "Le document est conforme. Aucune action corrective nécessaire."
-        )
-    elif verdict == "ACCEPTABLE_WITH_FIXES":
-        recs.append(
-            f"Corriger les {errors} erreur(s) pour atteindre le verdict GOOD ; "
-            f"traiter ensuite les {warnings} avertissement(s)."
-        )
-    elif verdict == "NOT_RELIABLE":
-        recs.append(
-            f"Révision approfondie nécessaire avant soumission "
-            f"({errors} erreurs, {warnings} avertissements)."
-        )
-    else:  # NON_COMPLIANT
-        recs.append(
-            f"Réécriture significative nécessaire en suivant le template CTS "
-            f"et le guide d'écriture ({errors} erreurs critiques)."
-        )
-
-    if sections_missing:
-        recs.append(
-            f"Ajouter les {len(sections_missing)} section(s) obligatoire(s) "
-            "manquante(s) : "
-            + ", ".join(str(s) for s in sections_missing[:8])
-            + ("…" if len(sections_missing) > 8 else "")
-            + "."
-        )
-
-    if scores.get("template_cleanliness", 1) < 0.80:
-        recs.append(
-            "Supprimer les placeholders restants (<<…>>, TBD, XXX) "
-            f"(propreté du template : {scores.get('template_cleanliness', 0):.0%})."
-        )
-
-    if scores.get("requirements_quality", 1) < 0.60:
-        recs.append(
-            "Renforcer les exigences : 'shall' pour chaque exigence obligatoire, "
-            "ID unique par exigence, traçabilité vers les exigences amont "
-            f"(score actuel : {scores.get('requirements_quality', 0):.0%})."
-        )
-
-    if scores.get("writing_guide_compliance", 1) < 0.60:
-        recs.append(
-            "Consulter le guide d'écriture CTS pour les règles de rédaction "
-            f"(conformité actuelle : {scores.get('writing_guide_compliance', 0):.0%})."
-        )
-
-    return recs
+# NOTE: the recommendation generator was removed together with the
+# "5. Recommendations" report section — it only restated counts already
+# shown in the Summary and the per-issue "How to Fix" column.

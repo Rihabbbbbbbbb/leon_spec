@@ -81,15 +81,15 @@ def generate_conformity_pdf(analysis_dict: dict) -> bytes:
     # ── Header ──────────────────────────────────────────────
     pdf.set_font("Helvetica", "B", 16)
     pdf.set_text_color(0, 51, 102)
-    pdf.cell(0, 10, _clean("LEON - Rapport d'Analyse de Conformite FNR"),
+    pdf.cell(0, 10, _clean("LEON - FNR Conformity Analysis Report"),
              new_x="LMARGIN", new_y="NEXT")
     pdf.ln(2)
 
     pdf.set_font("Helvetica", "", 9)
     pdf.set_text_color(80, 80, 80)
-    pdf.cell(0, 5, _clean(f"Fichier: {analysis_dict.get('fileName', 'N/A')}"),
+    pdf.cell(0, 5, _clean(f"File: {analysis_dict.get('fileName', 'N/A')}"),
              new_x="LMARGIN", new_y="NEXT")
-    pdf.cell(0, 5, _clean(f"Feuille: {analysis_dict.get('sheetName', 'N/A')}"),
+    pdf.cell(0, 5, _clean(f"Sheet: {analysis_dict.get('sheetName', 'N/A')}"),
              new_x="LMARGIN", new_y="NEXT")
     pdf.ln(3)
 
@@ -99,7 +99,7 @@ def generate_conformity_pdf(analysis_dict: dict) -> bytes:
 
     pdf.set_font("Helvetica", "B", 12)
     pdf.set_text_color(0, 51, 102)
-    pdf.cell(0, 8, _clean("RESUME"), new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(0, 8, _clean("SUMMARY"), new_x="LMARGIN", new_y="NEXT")
     pdf.ln(1)
 
     pdf.set_font("Helvetica", "", 10)
@@ -119,10 +119,10 @@ def generate_conformity_pdf(analysis_dict: dict) -> bytes:
     pdf.set_fill_color(0, 51, 102)
     pdf.set_text_color(255, 255, 255)
     pdf.set_font("Helvetica", "B", 9)
-    pdf.cell(col_w, row_h, "Statut", border=1, fill=True, align="C")
-    pdf.cell(col_w, row_h, "Nombre", border=1, fill=True, align="C")
-    pdf.cell(col_w, row_h, "Pourcentage", border=1, fill=True, align="C")
-    pdf.cell(col_w, row_h, "Couleur", border=1, fill=True, align="C")
+    pdf.cell(col_w, row_h, "Engagement", border=1, fill=True, align="C")
+    pdf.cell(col_w, row_h, "Count", border=1, fill=True, align="C")
+    pdf.cell(col_w, row_h, "Percentage", border=1, fill=True, align="C")
+    pdf.cell(col_w, row_h, "Color", border=1, fill=True, align="C")
     pdf.ln(row_h)
 
     # Data rows
@@ -162,7 +162,7 @@ def generate_conformity_pdf(analysis_dict: dict) -> bytes:
             chart_io = io.BytesIO(chart_bytes)
             pdf.set_font("Helvetica", "B", 11)
             pdf.set_text_color(0, 51, 102)
-            pdf.cell(0, 8, _clean("CAMEMBERT - Repartition des statuts de conformite"),
+            pdf.cell(0, 8, _clean("PIE CHART - Conformity Engagement Distribution"),
                      new_x="LMARGIN", new_y="NEXT")
             pdf.ln(1)
             pdf.image(chart_io, x=30, w=130)
@@ -170,13 +170,13 @@ def generate_conformity_pdf(analysis_dict: dict) -> bytes:
         except Exception:
             pdf.set_font("Helvetica", "I", 9)
             pdf.set_text_color(150, 150, 150)
-            pdf.cell(0, 5, _clean("(Graphique non disponible)"),
+            pdf.cell(0, 5, _clean("(Chart not available)"),
                      new_x="LMARGIN", new_y="NEXT")
             pdf.ln(3)
     else:
         pdf.set_font("Helvetica", "I", 9)
         pdf.set_text_color(150, 150, 150)
-        pdf.cell(0, 5, _clean("(Graphique camembert non disponible)"),
+        pdf.cell(0, 5, _clean("(Pie chart not available)"),
                  new_x="LMARGIN", new_y="NEXT")
         pdf.ln(3)
 
@@ -187,14 +187,14 @@ def generate_conformity_pdf(analysis_dict: dict) -> bytes:
     pdf.set_font("Helvetica", "B", 10)
     if ok_findings:
         parts = []
-        if err_count: parts.append(f"{err_count} critique(s)")
-        if warn_count: parts.append(f"{warn_count} attention(s)")
+        if err_count: parts.append(f"{err_count} critical issue(s)")
+        if warn_count: parts.append(f"{warn_count} warning(s)")
         pdf.set_text_color(220 if err_count else 255, 140 if not err_count else 53, 0 if not err_count else 69)
-        pdf.cell(0, 6, _clean(f"ANALYSE APPROFONDIE DES OK — {len(ok_findings)} point(s) d'attention ({', '.join(parts)})"),
+        pdf.cell(0, 6, _clean(f"DEEP-DIVE ANALYSIS OF OK ITEMS — {len(ok_findings)} flagged item(s) ({', '.join(parts)})"),
                  new_x="LMARGIN", new_y="NEXT")
     else:
         pdf.set_text_color(40, 167, 69)
-        pdf.cell(0, 6, _clean("ANALYSE APPROFONDIE DES OK — Aucun point d'attention"),
+        pdf.cell(0, 6, _clean("DEEP-DIVE ANALYSIS OF OK ITEMS — No flagged items"),
                  new_x="LMARGIN", new_y="NEXT")
 
     # ── OK deep findings detail ─────────────────────────────
@@ -202,13 +202,13 @@ def generate_conformity_pdf(analysis_dict: dict) -> bytes:
         pdf.ln(3)
         pdf.set_font("Helvetica", "B", 10)
         pdf.set_text_color(255, 140, 0)
-        pdf.cell(0, 6, _clean(f"Points d'attention détaillés ({len(ok_findings)})"),
+        pdf.cell(0, 6, _clean(f"Detailed Flagged Items ({len(ok_findings)})"),
                  new_x="LMARGIN", new_y="NEXT")
         pdf.ln(1)
         for finding in ok_findings[:40]:
             severity = finding.get("severity", "warning")
             sev_color = (220, 53, 69) if severity == "error" else (255, 140, 0) if severity == "warning" else (108, 117, 125)
-            sev_label = "ERREUR" if severity == "error" else "AVERTISSEMENT" if severity == "warning" else "INFO"
+            sev_label = "ERROR" if severity == "error" else "WARNING" if severity == "warning" else "INFO"
 
             pdf.set_font("Helvetica", "B", 8)
             pdf.set_text_color(*sev_color)
@@ -221,36 +221,36 @@ def generate_conformity_pdf(analysis_dict: dict) -> bytes:
             analysis_text = finding.get("aiComment", "")
             signals = finding.get("signals", [])
             if conf:
-                pdf.cell(0, 4, _clean(f"     Conformite: {conf}"),
+                pdf.cell(0, 4, _clean(f"     Conformity: {conf}"),
                          new_x="LMARGIN", new_y="NEXT")
             if signals:
-                pdf.cell(0, 4, _clean(f"     Signaux: {', '.join(signals)}"),
+                pdf.cell(0, 4, _clean(f"     Signals: {', '.join(signals)}"),
                          new_x="LMARGIN", new_y="NEXT")
             if comment:
                 pdf.set_x(pdf.l_margin)
                 try:
-                    pdf.multi_cell(0, 4, _clean(f"     Commentaire: {comment}"),
+                    pdf.multi_cell(0, 4, _clean(f"     Comment: {comment}"),
                                  new_x="LMARGIN", new_y="NEXT")
                 except Exception:
                     pdf.set_x(pdf.l_margin)
-                    pdf.cell(0, 4, _clean(f"     Commentaire: {comment[:100]}..."),
+                    pdf.cell(0, 4, _clean(f"     Comment: {comment[:100]}..."),
                              new_x="LMARGIN", new_y="NEXT")
             if analysis_text:
                 pdf.set_text_color(*sev_color)
                 pdf.set_x(pdf.l_margin)
                 try:
-                    pdf.multi_cell(0, 4, _clean(f"     Analyse: {analysis_text}"),
+                    pdf.multi_cell(0, 4, _clean(f"     Analysis: {analysis_text}"),
                                  new_x="LMARGIN", new_y="NEXT")
                 except Exception:
                     pdf.set_x(pdf.l_margin)
-                    pdf.cell(0, 4, _clean(f"     Analyse: {analysis_text[:100]}..."),
+                    pdf.cell(0, 4, _clean(f"     Analysis: {analysis_text[:100]}..."),
                              new_x="LMARGIN", new_y="NEXT")
             pdf.ln(1)
     else:
         pdf.ln(1)
         pdf.set_font("Helvetica", "I", 9)
         pdf.set_text_color(40, 167, 69)
-        pdf.cell(0, 6, _clean("Tous les statuts OK sont coherents avec leurs commentaires."),
+        pdf.cell(0, 6, _clean("All OK items are consistent with their comments."),
                  new_x="LMARGIN", new_y="NEXT")
 
     pdf.ln(3)
@@ -259,9 +259,9 @@ def generate_conformity_pdf(analysis_dict: dict) -> bytes:
     items = analysis_dict.get("items", [])
 
     for category, label, icon in [
-        ("OK", "EXIGENCES CONFORMES (OK)", "OK"),
-        ("NOK", "EXIGENCES NON CONFORMES (NOK)", "NOK"),
-        ("NA", "EXIGENCES NON APPLICABLES (NA)", "NA"),
+        ("OK", "CONFORMING REQUIREMENTS (OK)", "OK"),
+        ("NOK", "NON-CONFORMING REQUIREMENTS (NOK)", "NOK"),
+        ("NA", "NOT APPLICABLE REQUIREMENTS (NA)", "NA"),
     ]:
         cat_items = [item for item in items if item.get("conformityCategory") == category]
         if not cat_items:
@@ -271,7 +271,7 @@ def generate_conformity_pdf(analysis_dict: dict) -> bytes:
         pdf.set_font("Helvetica", "B", 12)
         color = _status_color(category)
         pdf.set_text_color(*color)
-        pdf.cell(0, 8, _clean(f"{label} - {len(cat_items)} exigences"),
+        pdf.cell(0, 8, _clean(f"{label} - {len(cat_items)} requirement(s)"),
                  new_x="LMARGIN", new_y="NEXT")
         pdf.ln(2)
 
@@ -292,27 +292,27 @@ def generate_conformity_pdf(analysis_dict: dict) -> bytes:
 
             pdf.set_font("Helvetica", "", 8)
             pdf.set_text_color(60, 60, 60)
-            pdf.cell(0, 4, _clean(f"     Conformite: {conf}"), new_x="LMARGIN", new_y="NEXT")
+            pdf.cell(0, 4, _clean(f"     Conformity: {conf}"), new_x="LMARGIN", new_y="NEXT")
             if ref:
                 pdf.cell(0, 4, _clean(f"     Reference: {ref}"), new_x="LMARGIN", new_y="NEXT")
             if version:
-                pdf.cell(0, 4, _clean(f"     Version applicable: {version}"), new_x="LMARGIN", new_y="NEXT")
+                pdf.cell(0, 4, _clean(f"     Applicable Version: {version}"), new_x="LMARGIN", new_y="NEXT")
             if comment:
                 # Wrap long comments — reset X to left margin and handle errors
                 pdf.set_text_color(0, 0, 0)
                 comment_clean = _clean(comment)
                 pdf.set_x(pdf.l_margin)
                 try:
-                    pdf.multi_cell(0, 4, f"     Commentaire: {comment_clean}",
+                    pdf.multi_cell(0, 4, f"     Comment: {comment_clean}",
                                  new_x="LMARGIN", new_y="NEXT")
                 except Exception:
                     # Fallback: truncate to avoid rendering issues
                     pdf.set_x(pdf.l_margin)
-                    pdf.cell(0, 4, _clean(f"     Commentaire: {comment_clean[:100]}..."),
+                    pdf.cell(0, 4, _clean(f"     Comment: {comment_clean[:100]}..."),
                              new_x="LMARGIN", new_y="NEXT")
             else:
                 pdf.set_text_color(150, 150, 150)
-                pdf.cell(0, 4, _clean("     Commentaire: (aucun)"),
+                pdf.cell(0, 4, _clean("     Comment: (none)"),
                          new_x="LMARGIN", new_y="NEXT")
             pdf.ln(1)
 
@@ -320,7 +320,7 @@ def generate_conformity_pdf(analysis_dict: dict) -> bytes:
     pdf.ln(5)
     pdf.set_font("Helvetica", "I", 8)
     pdf.set_text_color(150, 150, 150)
-    pdf.cell(0, 5, _clean("Genere par LEON - Conformity Matrix Analyzer"),
+    pdf.cell(0, 5, _clean("Generated by LEON - Conformity Matrix Analyzer"),
              new_x="LMARGIN", new_y="NEXT")
 
     # Output to bytes
@@ -359,9 +359,9 @@ def generate_conformity_excel(analysis_dict: dict) -> bytes:
     Generate a color-coded Excel report from the conformity analysis.
 
     Sheets:
-    1. "Summary" — statistics table + points d'attention count
+    1. "Summary" — statistics table + flagged items count
     2. "All Items" — every requirement with color-coded rows by status
-    3. "Analyse approfondie des OK" — deep analysis findings with severity
+    3. "Deep-Dive Analysis of OK Items" — deep analysis findings with severity
 
     Returns XLSX file as bytes.
     """
@@ -395,11 +395,11 @@ def generate_conformity_excel(analysis_dict: dict) -> bytes:
     ws_summary["B4"] = analysis_dict.get("sheetName", "N/A")
     ws_summary["A5"] = "Total Requirements:"
     ws_summary["B5"] = analysis_dict.get("totalRows", 0)
-    ws_summary["A6"] = "Points d'attention:"
+    ws_summary["A6"] = "Flagged Items:"
     ws_summary["B6"] = len(analysis_dict.get("okDeepFindings", []))
 
     # Statistics table
-    ws_summary["A8"] = "Status"
+    ws_summary["A8"] = "Engagement"
     ws_summary["B8"] = "Count"
     ws_summary["C8"] = "Percentage"
     ws_summary["D8"] = "Color"
@@ -450,7 +450,7 @@ def generate_conformity_excel(analysis_dict: dict) -> bytes:
     chart_data_start = row_idx + 2
     pie_labels_col = "A"
     pie_values_col = "B"
-    ws_summary[f"A{chart_data_start}"] = "Category"
+    ws_summary[f"A{chart_data_start}"] = "Engagement"
     ws_summary[f"B{chart_data_start}"] = "Count"
     ws_summary[f"A{chart_data_start}"].font = Font(bold=True, size=9)
     ws_summary[f"B{chart_data_start}"].font = Font(bold=True, size=9)
@@ -472,7 +472,7 @@ def generate_conformity_excel(analysis_dict: dict) -> bytes:
         from openpyxl.chart import PieChart, Reference
         from openpyxl.chart.series import DataPoint
         pie_chart = PieChart()
-        pie_chart.title = "Répartition des statuts de conformité"
+        pie_chart.title = "Conformity Engagement Distribution"
         pie_chart.width = 18
         pie_chart.height = 12
 
@@ -495,14 +495,14 @@ def generate_conformity_excel(analysis_dict: dict) -> bytes:
 
         ws_summary.add_chart(pie_chart, "F2")
     else:
-        ws_summary["A" + str(chart_data_start + 1)] = "Aucune donnée pour le camembert"
+        ws_summary["A" + str(chart_data_start + 1)] = "No data available for the pie chart"
         ws_summary["A" + str(chart_data_start + 1)].font = Font(italic=True, color="808080")
 
     # ── Sheet 2: All Items ──────────────────────────────────
     ws_items = wb.create_sheet("All Items")
 
     headers = ["Row", "Req ID", "Reference", "Description",
-               "Category", "Comment", "Version Applicable"]
+               "Engagement", "Comment", "Version Applicable"]
     for ci, header in enumerate(headers, 1):
         cell = ws_items.cell(row=1, column=ci, value=header)
         cell.fill = header_fill
@@ -543,10 +543,10 @@ def generate_conformity_excel(analysis_dict: dict) -> bytes:
     # Auto-filter
     ws_items.auto_filter.ref = f"A1:G{len(items) + 1}"
 
-    # ── Sheet 3: Analyse approfondie des OK ──────────────────
+    # ── Sheet 3: Deep-Dive Analysis of OK Items ──────────────
     ok_findings = analysis_dict.get("okDeepFindings", [])
     if ok_findings:
-        ws_ok = wb.create_sheet("Analyse approfondie OK")
+        ws_ok = wb.create_sheet("Deep-Dive OK Analysis")
 
         ok_headers = ["Severity", "Req ID", "Reference", "Conformity",
                        "Signals", "Comment",
@@ -618,7 +618,7 @@ def _write_items_sheet(ws, items: list, header_fill, header_font, thin_border, w
     from openpyxl.utils import get_column_letter
 
     headers = ["Row", "Req ID", "Reference", "Description",
-               "Category", "Comment", "Version Applicable"]
+               "Engagement", "Comment", "Version Applicable"]
     for ci, header in enumerate(headers, 1):
         cell = ws.cell(row=1, column=ci, value=header)
         cell.fill = header_fill
@@ -654,7 +654,7 @@ def _write_items_sheet(ws, items: list, header_fill, header_font, thin_border, w
 
 
 def _write_deepok_sheet(ws, findings: list, header_fill, header_font, thin_border, wrap_align):
-    """Write the 'Analyse approfondie OK' findings table into a worksheet."""
+    """Write the 'Deep-Dive OK Analysis' findings table into a worksheet."""
     from openpyxl.styles import Font, PatternFill
     from openpyxl.utils import get_column_letter
 
@@ -707,8 +707,8 @@ def generate_batch_conformity_excel(analyses: List[Dict]) -> bytes:
     matrices — for when a user uploads multiple supplier files at once.
 
     Sheets:
-    1. "Overview" — one row per matrix (file, OK/NOK/NA/Empty, points
-       d'attention) plus an INDEPENDENT camembert (pie chart) for EACH
+    1. "Overview" — one row per matrix (file, OK/NOK/NA/Empty, flagged
+       items) plus an INDEPENDENT pie chart for EACH
        matrix (its own status distribution, not one chart summed across
        all files), laid out in a grid below the table.
     2. "{idx:02d} Items" — per-matrix color-coded item table (one per file).
@@ -744,12 +744,12 @@ def generate_batch_conformity_excel(analyses: List[Dict]) -> bytes:
     # ── Sheet 1: Overview ───────────────────────────────────
     ws_ov = wb.active
     ws_ov.title = "Overview"
-    ws_ov["A1"] = f"LEON — Analyse combinée de {len(analyses)} matrice(s) de conformité"
+    ws_ov["A1"] = f"LEON — Combined Analysis of {len(analyses)} Conformity Matrix(es)"
     ws_ov["A1"].font = title_font
     ws_ov.merge_cells("A1:H1")
 
-    ov_headers = ["#", "Fichier", "Feuille", "Total", "OK", "NOK", "NA",
-                  "Points d'attention"]
+    ov_headers = ["#", "File", "Sheet", "Total", "OK", "NOK", "NA",
+                  "Flagged Items"]
     for ci, header in enumerate(ov_headers, 1):
         cell = ws_ov.cell(row=3, column=ci, value=header)
         cell.fill = header_fill
@@ -794,14 +794,14 @@ def generate_batch_conformity_excel(analyses: List[Dict]) -> bytes:
 
     grid_start_row = last_row + 3
     ws_ov.cell(row=grid_start_row - 1, column=1,
-              value="Répartition des statuts — un camembert par matrice").font = Font(bold=True, size=11, color="003366")
+              value="Conformity Engagement Distribution — one pie chart per matrix").font = Font(bold=True, size=11, color="003366")
 
     for idx, analysis in enumerate(analyses):
         file_name = analysis.get("fileName", f"Matrix {idx + 1}")
         stats = analysis.get("stats", {})
 
         data_row0 = 3 + idx * 6  # 1 header + up to 4 categories + 1 blank, per file
-        ws_ov.cell(row=data_row0, column=DATA_COL, value="Statut").font = Font(bold=True, size=8)
+        ws_ov.cell(row=data_row0, column=DATA_COL, value="Engagement").font = Font(bold=True, size=8)
         ws_ov.cell(row=data_row0, column=DATA_COL + 1, value="Total").font = Font(bold=True, size=8)
         data_row = data_row0 + 1
         for cat in ("OK", "NOK", "NA", "EMPTY"):
@@ -927,7 +927,7 @@ def generate_powerbi_dataset(analysis_dict: dict) -> dict:
             "SheetName": analysis_dict.get("sheetName", ""),
         })
 
-    # Table 3: Analyse approfondie OK (for alert visual)
+    # Table 3: Deep-Dive OK Analysis (for alert visual)
     inc_table = []
     for inc in inconsistencies:
         inc_table.append({

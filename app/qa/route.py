@@ -405,7 +405,7 @@ def ask(req: AskRequest) -> AskResponse:
                 answer=f"Could not extract text from '{val_file}' for validation.",
                 sources=[],
             )
-        report = validate_with_evidence(val_file, text)
+        report = validate_with_evidence(val_file, text, source_path=file_path)
         val_dict = report
         return AskResponse(
             answer=f"Here is the evidence-based validation for "
@@ -672,7 +672,7 @@ def validate_spec(req: ValidateRequest) -> dict:
             detail="Could not extract text from the file for validation.",
         )
 
-    report = validate_with_evidence(req.fileName, text)
+    report = validate_with_evidence(req.fileName, text, source_path=file_path)
     return report
 
 
@@ -716,7 +716,9 @@ async def upload_and_validate(file: UploadFile = File(...)) -> dict:
             detail=f"Could not extract text from '{saved_path.name}'.",
         )
 
-    report = validate_with_evidence(saved_path.name, text)
+    report = validate_with_evidence(
+        saved_path.name, text, source_path=saved_path, include_semantic_analysis=True
+    )
 
     summary = (
         f"Here is the evidence-based validation for **{saved_path.name}** — "
@@ -725,12 +727,11 @@ async def upload_and_validate(file: UploadFile = File(...)) -> dict:
         f"{report.get('summary', '')}"
     )
 
+    # The spec validator ships the Word report only — the PDF variant was
+    # dropped on request. pdfBase64/pdfAvailable stay in the response as
+    # empty/False so existing API consumers keep parsing without error;
+    # the dedicated /api/validation-pdf endpoints are unaffected.
     pdf_base64 = ""
-    try:
-        from app.qa.pdf_report import generate_validation_pdf
-        pdf_base64 = _b64.b64encode(generate_validation_pdf(report)).decode("ascii")
-    except Exception:
-        pass  # non-fatal — report JSON is still returned
 
     docx_base64 = ""
     try:
@@ -740,6 +741,17 @@ async def upload_and_validate(file: UploadFile = File(...)) -> dict:
         ).decode("ascii")
     except Exception:
         pass  # non-fatal
+
+    annotated_base64 = ""
+    annotated_highlight_count = 0
+    try:
+        from app.qa.spec_annotator import generate_annotated_spec
+        annotated_result = generate_annotated_spec(content, suffix, report)
+        if annotated_result:
+            annotated_bytes, annotated_highlight_count = annotated_result
+            annotated_base64 = _b64.b64encode(annotated_bytes).decode("ascii")
+    except Exception:
+        pass  # non-fatal — original file format may not support highlighting
 
     return {
         "answer": summary,
@@ -753,6 +765,9 @@ async def upload_and_validate(file: UploadFile = File(...)) -> dict:
         "pdfAvailable": bool(pdf_base64),
         "documentBase64": docx_base64,
         "documentAvailable": bool(docx_base64),
+        "annotatedSpecBase64": annotated_base64,
+        "annotatedSpecAvailable": bool(annotated_base64),
+        "annotatedSpecHighlightCount": annotated_highlight_count,
     }
 
 

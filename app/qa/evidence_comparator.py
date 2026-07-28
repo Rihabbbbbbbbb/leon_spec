@@ -27,6 +27,7 @@ Check categories (all deterministic, no LLM):
 """
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
@@ -53,6 +54,273 @@ class EvidenceFinding:
     user_location: str      # where in the user doc (section/line context)
     why: str                # WHY this matters (rationale for the engineer)
     fix_suggestion: str = ""  # actionable fix
+    # Optional structured breakdown for findings that aggregate many items
+    # (e.g. every untraced requirement) — each dict has "id"/"location"/"excerpt".
+    items: List[Dict] = field(default_factory=list)
+
+
+# ── Structural requirement-table extraction (DOCX only) ───────────
+#
+# The CTS requirement tables have an explicit 3-column shape:
+#   "Requirement Number (v)" | "Description of the requirement" | "Input requirement (v)"
+# The third column IS the traceability answer — filled means traced, empty
+# means untraced, "N/A" means "deliberately no upstream" (which R22 states
+# is the correct way to declare that, so it counts as traced).
+#
+# Reading that cell directly is exact. The flattened-text fallback used for
+# PDF/TXT can only guess, because extract_text_from_file() drops empty
+# cells — so "REF-X | description" is indistinguishable from a row whose
+# upstream column was blank, and a neighbouring requirement's reference
+# can bleed into the guess. Whenever the original .docx is available we
+# therefore use the structural reading and never the guess.
+
+@dataclass
+class RequirementRow:
+    """One requirement row read structurally from a CTS requirement table."""
+    req_id: str
+    description: str
+    upstream: str
+    section: str
+    traced: bool          # the "Input requirement" cell is filled (R22-compliant)
+    table_index: int
+    row_index: int
+    explicit_na: bool = False   # filled, but with "N/A" rather than a reference
+
+
+_UPSTREAM_HEADER_RE = re.compile(r"input\s+requirement|exigence\s+amont", re.IGNORECASE)
+# R22: "When there is no input requirement, the field is filled with N/A."
+# So an explicit N/A is a COMPLIANT declaration, not a gap.
+_NA_UPSTREAM_RE = re.compile(
+    r"^(?:n\s*/?\s*a|none|null|sans\s+objet|n[ée]ant|-{1,3}|_{1,3})$",
+    re.IGNORECASE,
+)
+_STRUCT_HEADING_RE = re.compile(r"^[A-Z][A-Z0-9 /()\-&,:;.–—]{3,}$")
+
+
+def _docx_table_sections(doc) -> List[str]:
+    """
+    Return the nearest heading above each top-level table, positionally:
+    result[i] is the section for doc.tables[i].
+
+    Indexed by position rather than keyed on element identity on purpose —
+    lxml creates throwaway proxy objects for elements, so id() values are
+    recycled by the garbage collector and an id-keyed dict silently returns
+    ANOTHER table's heading. Body order and doc.tables order agree for
+    top-level tables, so the running counter is exact.
+    """
+    from docx.oxml.ns import qn
+    from docx.text.paragraph import Paragraph
+
+    sections: List[str] = []
+    current = ""
+    for child in doc.element.body.iterchildren():
+        if child.tag == qn("w:p"):
+            para = Paragraph(child, doc)
+            text = para.text.strip()
+            if text and len(text) < 120:
+                style = (para.style.name or "") if para.style is not None else ""
+                if style.startswith("Heading") or _STRUCT_HEADING_RE.match(text):
+                    current = text
+        elif child.tag == qn("w:tbl"):
+            sections.append(current)
+    return sections
+
+
+def extract_requirement_rows(source_path) -> List[RequirementRow]:
+    """
+    Read every CTS requirement row directly from the .docx tables.
+
+    Only tables that actually declare an "Input requirement" / "Exigence
+    amont" column are considered, and only rows whose first cell holds a
+    real requirement ID — so descriptive/aggregate tables never pollute
+    the traceability statistics.
+
+    Returns [] for non-DOCX inputs or if the file cannot be parsed, which
+    makes the caller fall back to the text heuristic.
+    """
+    try:
+        from docx import Document
+        from app.qa.retrieval import extract_cell_text
+    except Exception:
+        return []
+
+    path_str = str(source_path)
+    if not path_str.lower().endswith(".docx"):
+        return []
+
+    try:
+        doc = Document(path_str)
+    except Exception:
+        return []
+
+    table_sections = _docx_table_sections(doc)
+    rows: List[RequirementRow] = []
+
+    for ti, table in enumerate(doc.tables):
+        if not table.rows:
+            continue
+        header = [_normalize_ws_lower(c.text) for c in table.rows[0].cells]
+        upstream_idx = None
+        for ci, head in enumerate(header):
+            if _UPSTREAM_HEADER_RE.search(head):
+                upstream_idx = ci
+        if upstream_idx is None:
+            continue
+
+        section = table_sections[ti] if ti < len(table_sections) else ""
+
+        for ri, row in enumerate(table.rows):
+            if ri == 0:
+                continue
+            # extract_cell_text (not the bare cell.text python-docx exposes)
+            # so a cell whose real content lives in a NESTED table — e.g. a
+            # "Description" cell containing a whole failure-mode sub-table —
+            # isn't silently read as empty.
+            cells = [extract_cell_text(c).strip() for c in row.cells]
+            if upstream_idx >= len(cells) or not cells:
+                continue
+            match = REQ_ID_RE.search(cells[0])
+            if not match:
+                continue  # not a requirement row (spacer, note, continuation)
+
+            upstream = cells[upstream_idx].strip()
+            # R22 is satisfied as soon as the field is FILLED — either with a
+            # real upstream reference, or with "N/A" which the rule explicitly
+            # designates as the way to declare "this requirement has no
+            # upstream". Only a genuinely EMPTY cell is a traceability gap.
+            traced = bool(upstream)
+            explicit_na = bool(upstream) and bool(_NA_UPSTREAM_RE.match(upstream))
+            # cells[1] is already extract_cell_text's full recursive read
+            # (own paragraph(s) + any nested table, header row included).
+            # An earlier version tried to skip a nested table's supposed
+            # "header row" for a cleaner excerpt — but real requirements
+            # (e.g. a voltage-vs-time profile with no column labels at
+            # all) have genuine DATA as their very first nested row, so
+            # that heuristic silently discarded real content. Keeping the
+            # full text is lossless, and the annotator (spec_annotator.py)
+            # builds its highlight units from the SAME extract_cell_text
+            # call, so this excerpt is always found as a match.
+            description = cells[1] if len(cells) > 1 else ""
+
+            rows.append(RequirementRow(
+                req_id=match.group(0).strip(),
+                description=description,
+                upstream=upstream,
+                section=section,
+                traced=traced,
+                table_index=ti,
+                row_index=ri,
+                explicit_na=explicit_na,
+            ))
+
+    return rows
+
+
+def _normalize_ws_lower(text: str) -> str:
+    return re.sub(r"\s+", " ", text or "").strip().lower()
+
+
+def check_dreaded_event_associations(source_path) -> List["EvidenceFinding"]:
+    """
+    R43: "For Menace-Aggression ER identified, there must be at least one
+    requirement of constraint associated." — every row of a "dreaded
+    event" table that HAS an explicit "Associated requirements" column
+    must have that cell filled in; a dreaded event with no associated
+    requirement is processed nowhere in the specification.
+
+    Structural (docx table) check, mirroring extract_requirement_rows:
+    only tables whose header names BOTH a dreaded-event column and an
+    "associated requirement(s)" column qualify. The real CTS spec has
+    several differently-shaped "dreaded event" tables — a plain
+    "Reference | Definition" list, a customer-impact matrix, an FMEA
+    quantitative table — none of which have this column at all, and must
+    never be checked against a column that doesn't exist for them.
+
+    Returns [] for non-DOCX inputs or if the file cannot be parsed —
+    same fallback contract as extract_requirement_rows.
+    """
+    findings: List[EvidenceFinding] = []
+    try:
+        from docx import Document
+        from app.qa.retrieval import extract_cell_text
+    except Exception:
+        return findings
+
+    path_str = str(source_path)
+    if not path_str.lower().endswith(".docx"):
+        return findings
+    try:
+        doc = Document(path_str)
+    except Exception:
+        return findings
+
+    r43 = get_rule_by_id("R43")
+    r43_text = r43.text if r43 else (
+        "For Menace-Aggression ER identified, there must be at least one "
+        "requirement of constraint associated."
+    )
+    found_table = False
+    violations = 0
+
+    for ti, table in enumerate(doc.tables):
+        if not table.rows:
+            continue
+        header = [_normalize_ws_lower(c.text) for c in table.rows[0].cells]
+        event_idx = assoc_idx = None
+        for ci, h in enumerate(header):
+            if "dreaded event" in h:
+                event_idx = ci
+            if "associated requirement" in h:
+                assoc_idx = ci
+        if event_idx is None or assoc_idx is None:
+            continue
+        found_table = True
+
+        for ri, row in enumerate(table.rows):
+            if ri == 0:
+                continue
+            cells = [extract_cell_text(c).strip() for c in row.cells]
+            if max(event_idx, assoc_idx) >= len(cells):
+                continue
+            event = cells[event_idx]
+            if not event:
+                continue
+            if not cells[assoc_idx]:
+                violations += 1
+                findings.append(EvidenceFinding(
+                    check="I_EXTENDED_WG_RULES", severity="warning",
+                    section="DEMONSTRATION OF COMPLIANCE WITH REQUIREMENTS",
+                    rule_id="R43",
+                    message=f"Dreaded event '{event[:80]}' has no associated requirement (R43 violation).",
+                    source_rule=f"R43: {r43_text}",
+                    source_doc="writing_guide",
+                    user_excerpt=event[:200],
+                    user_location=f"Dreaded events table (table {ti + 1}), row {ri}",
+                    why="R43 requires every identified dreaded event to be covered by at least one constraint requirement — an event with none is processed nowhere in the specification.",
+                    fix_suggestion=f"Add at least one associated requirement reference for the dreaded event '{event[:80]}'.",
+                ))
+
+    if not found_table:
+        findings.append(EvidenceFinding(
+            check="I_EXTENDED_WG_RULES", severity="info",
+            section="DEMONSTRATION OF COMPLIANCE WITH REQUIREMENTS",
+            rule_id="R43",
+            message="No dreaded-events table with an 'Associated requirements' column found — R43 not applicable.",
+            source_rule=f"R43: {r43_text}",
+            source_doc="writing_guide", user_excerpt="", user_location="Entire document",
+            why="R43 only applies when the document has a dreaded-events table listing an associated requirement per event.",
+        ))
+    elif violations == 0:
+        findings.append(EvidenceFinding(
+            check="I_EXTENDED_WG_RULES", severity="pass",
+            section="DEMONSTRATION OF COMPLIANCE WITH REQUIREMENTS",
+            rule_id="R43",
+            message="All identified dreaded events have at least one associated requirement (R43 compliant).",
+            source_rule=f"R43: {r43_text}",
+            source_doc="writing_guide", user_excerpt="", user_location="Dreaded events table",
+            why="R43 requires every dreaded event to be covered by at least one constraint requirement.",
+        ))
+    return findings
 
 
 # ── User document analysis helpers ────────────────────────────────
@@ -151,12 +419,18 @@ def _section_matches(required: str, found_sections: List[str]) -> Optional[str]:
         if f_lower in ("requirements document", "of the alarm siren unit", "module"):
             continue
         f_words = set(f_lower.split())
-        # For short required names (1-2 words), require exact or near-exact match
+        # For short required names (1-2 words), match as a whole word/phrase
+        # anywhere in the heading — e.g. required 'ERGONOMICS' must match a
+        # real heading like '6.4.3 ERGONOMICS AND HUMAN FACTORS'. A plain
+        # substring+length-cap check used to reject this because the extra
+        # words ('AND HUMAN FACTORS') pushed the heading past the cap, even
+        # though `found_sections` only ever contains genuine detected
+        # headings (never arbitrary prose), so a word-boundary match here
+        # can't produce a stray mid-sentence false positive.
         if len(req_words) <= 2:
             if req_lower == f_lower:
                 return found
-            # Allow 'requirements' to match 'requirements' but NOT 'requirements document'
-            if req_lower in f_lower and len(f_words) <= len(req_words) + 1:
+            if re.search(r"\b" + re.escape(req_lower) + r"\b", f_lower):
                 return found
             continue
         # For longer names, use word overlap
@@ -184,11 +458,97 @@ def _find_excerpt(text: str, pattern: str, context_chars: int = 100) -> str:
     return excerpt
 
 
+def _find_line_excerpt(text: str, pattern: str, max_len: int = 200) -> str:
+    """
+    Find `pattern` and return the WHOLE LINE it appears on — not a
+    fixed-radius character window around it (see _find_excerpt).
+
+    A declaration table ("[Mark] | Reference | Version | Title") is
+    flattened one row per line, and each row is typically far shorter
+    than a 100-character radius — so _find_excerpt's window almost always
+    pulls in the NEXT row too. The excerpt then describes two physically
+    separate table rows glued together, for which the real document has
+    no single matching run of text, so it can never be found and
+    highlighted (confirmed: 14 of 16 R17 standards findings on the real
+    ASU spec silently failed to highlight anything for exactly this
+    reason). Returning just the one containing line keeps the excerpt
+    confined to a single real row/paragraph.
+    """
+    try:
+        regex = re.compile(pattern, re.IGNORECASE)
+    except re.error:
+        return ""
+    for line in text.split("\n"):
+        if regex.search(line):
+            line = line.strip()
+            return line[:max_len] + ("..." if len(line) > max_len else "")
+    return ""
+
+
+def _locate_pattern(user_text: str, pattern: str, limit: int = 3) -> str:
+    """
+    Build a PRECISE, human-readable location for every match of `pattern`:
+    the enclosing section heading plus the line number, e.g.
+    "PROTECTION AGAINST HOSTILITY (line 1523)".
+
+    Findings used to report a bare count ("1 occurrences") as their
+    location, which tells the engineer nothing about where to look. Any
+    check that detects a textual pattern should use this instead.
+    """
+    lines = user_text.split("\n")
+    sections = _detect_user_sections(user_text)
+    try:
+        regex = re.compile(pattern, re.IGNORECASE)
+    except re.error:
+        return ""
+
+    hits: List[str] = []
+    for i, line in enumerate(lines):
+        if not regex.search(line):
+            continue
+        section_name = ""
+        for name, sec_line in sections:
+            if sec_line <= i:
+                section_name = name
+            else:
+                break
+        hits.append(
+            f"{section_name} (line {i + 1})" if section_name else f"line {i + 1}"
+        )
+
+    if not hits:
+        return ""
+    if len(hits) <= limit:
+        return " ; ".join(hits)
+    return " ; ".join(hits[:limit]) + f" … (+{len(hits) - limit} more)"
+
+
 # ── Requirement patterns (from the template + writing guide) ──────
-# R22/PCIEE: Requirement IDs follow REF-/APP-/GEN- prefix pattern
+# R22/PCIEE: Requirement IDs follow a REF-/APP-/GEN- prefix followed by
+# dash-separated segments and ending in a number.
+#
+# Real specs are typed by hand, so the separators are inconsistent. All of
+# these occur verbatim in the ASU spec and denote valid requirements:
+#     REF-ASU-CD-EXIFUNC-001        (clean)
+#     REF- ASU-CD-EXIFUNC-023       (space after the prefix dash)
+#     REF-ASU-CD- EXINTER-0001      (space on ONE side only)
+#     REF-ASU-CD- EXINTER -0005     (spaces on BOTH sides)
+#     REF-ASU-CD- -CONN-0002        (doubled dash)
+#     APP-ASU-CD-SdF-0001           (mixed-case segment)
+#     REF-SIR-CD ESSAI-0002         (separator is a SPACE, no dash at all)
+# Rather than special-casing each typo, the separator itself tolerates
+# surrounding whitespace and repeated dashes. A whitespace-only separator
+# is allowed too, but only when the following segment is 2+ upper-case
+# alphanumerics — otherwise "REF-ASU this is ... -5" in ordinary prose
+# would be swallowed as an ID. Requiring at least one intermediate segment
+# AND a trailing number keeps it from drifting to an unrelated figure.
+# Verified against the full ASU spec: 300 unique matches, zero false
+# positives (the only mixed-case hits are the real REF-ASU-CD-Safety-000N).
+_REQ_ID_SEP = r"(?:\s*[-_](?:\s*[-_])*\s*|\s+(?=[A-Z0-9]{2,}))"
 REQ_ID_RE = re.compile(
-    r"\b(?:REF|APP|GEN)\s*[-_\s]\s*[A-Z0-9][A-Z0-9_-]*?\s*[-_]\s*\d+",
-    re.IGNORECASE,
+    r"\b(?:REF|APP|GEN)"
+    r"(?:" + _REQ_ID_SEP + r"[A-Za-z0-9]+)+"
+    + _REQ_ID_SEP + r"\d+"
 )
 SHALL_RE = re.compile(r"\bshall\b", re.IGNORECASE)
 # R23: prohibited subjective words
@@ -393,8 +753,16 @@ def check_placeholder_residue(
             message=f"{len(placeholders)} template placeholders (<<...>>) remaining unfilled. Examples: {', '.join(sample[:3])}",
             source_rule="Template: 'Writing instructions are PRINTED IN RED, delete them before submitting the document for revision'",
             source_doc="template",
-            user_excerpt="; ".join(sample[:3]),
-            user_location=f"{len(placeholders)} occurrences throughout document",
+            # ONE literal occurrence, not several joined with "; " — a
+            # joined multi-sample string spans several physically separate
+            # locations, which no single highlightable unit in the real
+            # document ever contains, so it silently fails to highlight
+            # anything (confirmed: this exact join was one of only 2
+            # error/warning findings, out of 22, that matched no unit at
+            # all in a full sweep of the real ASU spec).
+            user_excerpt=sample[0] if sample else "",
+            user_location=_locate_pattern(user_text, r"<<[^>]*>>")
+                          or f"{len(placeholders)} occurrences throughout document",
             why="Template placeholders like <<...>> are unfilled fields from the CTS template. They must be replaced with real values before submission. The template explicitly instructs to delete writing instructions before revision.",
             fix_suggestion="Replace all <<...>> placeholders with actual content or remove the instruction text.",
         ))
@@ -411,7 +779,8 @@ def check_placeholder_residue(
             source_rule="Template uses <component name>, <part name>, <reference> as placeholders to be replaced with actual values.",
             source_doc="template",
             user_excerpt=", ".join(f"<{v}>" for v in component_vars[:5]),
-            user_location=f"{len(component_vars)} occurrences",
+            user_location=_locate_pattern(user_text, COMPONENT_VAR_RE.pattern)
+                          or f"{len(component_vars)} occurrences",
             why="Template variables like '<component name>' must be replaced with the actual part/component name. Leaving them unfilled makes the specification ambiguous.",
             fix_suggestion="Replace all <...> template variables with the actual component/part names and references.",
         ))
@@ -428,7 +797,8 @@ def check_placeholder_residue(
             source_rule="Template: all values must be finalized before release. TBD markers signal pending decisions.",
             source_doc="template",
             user_excerpt=", ".join(set(tbds[:5])),
-            user_location=f"{len(tbds)} occurrences",
+            user_location=_locate_pattern(user_text, r"\b(?:TBD|TBC|TODO|XXX)\b")
+                          or f"{len(tbds)} occurrences",
             why="TBD/TBC/TODO markers signal decisions or data that are still pending. In an industrial specification, all values must be finalized before release.",
             fix_suggestion="Resolve all TBD/TBC/TODO markers with final values.",
         ))
@@ -689,32 +1059,198 @@ def check_requirement_ids(
 
 
 # ── Check G: Traceability (R22 — upstream requirement column) ─────
+_MAX_ID_LOOKBACK = 20
+
+
+def _find_owning_req_id(lines: List[str], i: int) -> Optional[str]:
+    """
+    Find the requirement ID that "owns" line i.
+
+    A requirement's ID sits on the FIRST line of its table row/cell (e.g.
+    "REF-ASU-CD-EXINTER-0007(0) | In the standby operating situation..."),
+    while its individual "shall" bullets are continuation lines below it
+    with no ID of their own (flattened one paragraph per line). So: if
+    this line has no ID, walk backward to the nearest preceding line that
+    does — that is this requirement's real name, not an arbitrary line
+    number.
+    """
+    m = REQ_ID_RE.search(lines[i])
+    if m:
+        return m.group(0).strip()
+    for j in range(i - 1, max(-1, i - _MAX_ID_LOOKBACK), -1):
+        m = REQ_ID_RE.search(lines[j])
+        if m:
+            return m.group(0).strip()
+    return None
+
+
+def _locate_untraced_requirements(
+    lines: List[str],
+    shall_entries: List[Tuple[int, str]],
+    traced_flags: List[bool],
+    user_sections: List[Tuple[str, int]],
+    limit: int = 200,
+) -> List[Dict]:
+    """
+    Build the list of requirements that lack an upstream reference, each
+    with an identifier (its REF-/APP-/GEN- ID — found on this line, or on
+    the nearest preceding line if this is a continuation bullet within
+    the same requirement row — else its line number as a last resort) and
+    its placement (the enclosing section heading, or the line number if
+    no section was detected above it).
+    """
+    items: List[Dict] = []
+    for (i, line), traced in zip(shall_entries, traced_flags):
+        if traced:
+            continue
+        req_id = _find_owning_req_id(lines, i) or f"Line {i + 1}"
+
+        section_name = ""
+        for name, sec_line in user_sections:
+            if sec_line <= i:
+                section_name = name
+            else:
+                break
+        location = f"{section_name} (line {i + 1})" if section_name else f"Line {i + 1}"
+
+        items.append({
+            "id": req_id,
+            "location": location,
+            "excerpt": line.strip()[:180],
+        })
+        if len(items) >= limit:
+            break
+    return items
+
+
+def _structural_untraced_items(
+    req_rows: List["RequirementRow"], limit: int = 400
+) -> List[Dict]:
+    """Itemize every requirement row whose Input requirement cell is empty."""
+    items: List[Dict] = []
+    for row in req_rows:
+        if row.traced:
+            continue
+        location = row.section or f"Table {row.table_index + 1}"
+        items.append({
+            "id": row.req_id,
+            "location": f"{location} (table {row.table_index + 1})",
+            "excerpt": re.sub(r"\s+", " ", row.description).strip()[:180],
+        })
+        if len(items) >= limit:
+            break
+    return items
+
+
 def check_traceability(
     user_text: str,
     rules: ExtractedRules,
+    req_rows: Optional[List["RequirementRow"]] = None,
 ) -> List[EvidenceFinding]:
-    """Check R22: each requirement has an upstream requirement reference (or N/A)."""
+    """
+    Check R22: each requirement has an upstream requirement reference (or N/A).
+
+    When `req_rows` is supplied (structurally read from the .docx requirement
+    tables) the "Input requirement" column is read directly, which is exact.
+    Otherwise falls back to a text heuristic for formats where the column
+    structure is unavailable (PDF/TXT) — see extract_requirement_rows().
+    """
     findings: List[EvidenceFinding] = []
     r22 = get_rule_by_id("R22")
 
-    shall_lines = [l for l in user_text.split("\n") if SHALL_RE.search(l) and len(l.strip()) > 20]
-    if not shall_lines:
+    if req_rows:
+        total = len(req_rows)
+        traced = sum(1 for r in req_rows if r.traced)
+        ratio = traced / total if total else 0
+        untraced_items = _structural_untraced_items(req_rows)
+        n_untraced = total - traced
+
+        example = next((r for r in req_rows if r.traced), None)
+        excerpt = (
+            f"{example.req_id} → {example.upstream}"[:200] if example else ""
+        )
+
+        n_na = sum(1 for r in req_rows if r.explicit_na)
+        na_note = f" ({n_na} declared explicitly as 'N/A')" if n_na else ""
+
+        if n_untraced == 0:
+            severity, message = "pass", (
+                f"Traceability complete: all {total} requirements declare an "
+                f"upstream requirement (or N/A) in the 'Input requirement' "
+                f"column{na_note}."
+            )
+        elif ratio >= 0.5:
+            severity, message = "warning", (
+                f"Traceability incomplete: {n_untraced} of {total} requirements "
+                f"have an EMPTY 'Input requirement' column "
+                f"({round(ratio * 100)}% declared)."
+            )
+        else:
+            severity, message = "warning", (
+                f"Traceability largely missing: {n_untraced} of {total} "
+                f"requirements have an EMPTY 'Input requirement' column "
+                f"(only {round(ratio * 100)}% declared)."
+            )
+
+        findings.append(EvidenceFinding(
+            check="G_TRACEABILITY",
+            severity=severity,
+            section="REQUIREMENTS",
+            rule_id="R22",
+            message=message,
+            source_rule="R22: 'Number(s) of the upstream requirement(s) with version, to which the requirement refers. When there is no input requirement, the field is filled with N/A.'",
+            source_doc="writing_guide",
+            user_excerpt=excerpt,
+            user_location=f"{traced}/{total} requirements with a filled 'Input requirement' cell",
+            why="Traceability links each requirement to its source (customer spec, regulation, standard). This is critical for change impact analysis and compliance audits. R22 requires the field to be filled with 'N/A' when a requirement genuinely has no upstream source — leaving it empty is not equivalent.",
+            fix_suggestion=(
+                "Fill the 'Input requirement' column for every requirement listed "
+                "below — either with the upstream requirement reference, or with "
+                "'N/A' if the requirement deliberately has no upstream source."
+            ) if n_untraced else "",
+            items=untraced_items,
+        ))
         return findings
 
-    req_with_trace = sum(1 for l in shall_lines if _has_traceability(l))
-
-    # Also check broader context for table-format specs
     lines = user_text.split("\n")
-    if req_with_trace == 0:
-        for i, line in enumerate(lines):
-            if SHALL_RE.search(line) and len(line.strip()) > 20:
-                start = max(0, i - 10)
-                end = min(len(lines), i + 11)
-                context = " ".join(lines[start:end])
-                if _has_traceability(context):
-                    req_with_trace += 1
+    shall_entries = [
+        (i, line) for i, line in enumerate(lines)
+        if SHALL_RE.search(line) and len(line.strip()) > 20
+    ]
+    if not shall_entries:
+        return findings
 
-    trace_ratio = req_with_trace / len(shall_lines) if shall_lines else 0
+    # A requirement's upstream reference frequently lands on a DIFFERENT
+    # physical line than its "shall" statement: a multi-paragraph table
+    # cell (e.g. a description with several bullet sub-clauses — "Idle
+    # State: ... shall wait...", "Arming State: ...") gets flattened one
+    # paragraph per line, while the Input Requirement value is appended
+    # to the LAST paragraph's line — several lines below an EARLIER
+    # "shall" bullet in that very same row. So every line is checked
+    # directly first, then (if that fails) within a ±10-line context
+    # window — unconditionally, not only as a last-resort fallback when
+    # the whole document found zero direct matches, otherwise genuinely
+    # traced sub-bullets get wrongly reported as independent untraced
+    # requirements (confirmed on the real ASU spec: REF-ASU-CD-EXIFUNC-002
+    # has both a VF_xxx reference and [SSD_AUE], yet its "Idle State"
+    # sub-bullet was flagged untraced because those markers sit a few
+    # lines below it, outside the single line being checked).
+    traced_flags = []
+    for i, line in shall_entries:
+        if _has_traceability(line):
+            traced_flags.append(True)
+            continue
+        start, end = max(0, i - 10), min(len(lines), i + 11)
+        context = " ".join(lines[start:end])
+        traced_flags.append(_has_traceability(context))
+    req_with_trace = sum(traced_flags)
+
+    shall_lines = [line for _, line in shall_entries]
+    trace_ratio = req_with_trace / len(shall_entries) if shall_entries else 0
+    user_sections = _detect_user_sections(user_text)
+    untraced_items = _locate_untraced_requirements(
+        lines, shall_entries, traced_flags, user_sections
+    )
 
     if trace_ratio >= 0.5:
         findings.append(EvidenceFinding(
@@ -728,6 +1264,13 @@ def check_traceability(
             user_excerpt=_find_excerpt(user_text, r"\b(input requirement|upstream|N/A|derived from)\b"),
             user_location=f"{req_with_trace}/{len(shall_lines)} requirements",
             why="Traceability links each requirement to its source (customer spec, regulation, standard). This is critical for change impact analysis and compliance audits.",
+            # Even when the OVERALL ratio passes, the remaining untraced
+            # requirements are still real gaps and must stay visible in the
+            # report — previously these `items` were silently dropped
+            # whenever the document passed the 50% threshold overall,
+            # hiding every individual "no input requirement" requirement
+            # in an otherwise mostly-compliant document.
+            items=untraced_items,
         ))
     elif trace_ratio > 0:
         findings.append(EvidenceFinding(
@@ -742,6 +1285,7 @@ def check_traceability(
             user_location=f"{req_with_trace}/{len(shall_lines)} requirements",
             why="Each requirement should reference its upstream source. Partial traceability means some requirements cannot be traced to their origin, creating gaps in compliance audits.",
             fix_suggestion="Add upstream requirement references to all requirements. Use 'N/A' for requirements with no upstream source.",
+            items=untraced_items,
         ))
     else:
         findings.append(EvidenceFinding(
@@ -756,6 +1300,7 @@ def check_traceability(
             user_location="NOT FOUND",
             why="Traceability links each requirement to its source. Without it, change impact analysis and compliance audits cannot be performed. Mark genuinely new requirements as 'N/A'.",
             fix_suggestion="Add an 'Input Requirement' column to each requirement table, referencing the upstream requirement ID or 'N/A'.",
+            items=untraced_items,
         ))
 
     return findings
@@ -1044,7 +1589,10 @@ def check_extended_writing_guide_rules(
             source_rule=f"R02: {r02.text if r02 else 'The document should be readable in black and white printing.'}",
             source_doc="writing_guide",
             user_excerpt=_find_excerpt(user_text, r"\b(?:in\s+red|in\s+blue|colored)\b"),
-            user_location=f"{color_only_refs} occurrences",
+            user_location=_locate_pattern(
+                user_text,
+                r"\b(?:in\s+red|in\s+blue|in\s+green|red\s+text|blue\s+text|colored\s+in)\b",
+            ) or f"{color_only_refs} occurrences",
             why="Color-only references are lost in B&W printing. R02 requires the document to be readable without color.",
             fix_suggestion="Replace color-dependent references with text labels or patterns (e.g. bold, underline) that survive B&W printing.",
         ))
@@ -1177,10 +1725,21 @@ def check_extended_writing_guide_rules(
             ))
 
     # ── R14: Documents cited with revision index ──
+    # R14/R15 both look for the same real thing: content in the document's
+    # reference-document ecosystem (Quoted/Reference/Applicable Documents,
+    # Upstream Requirements, Standards — headings that nest each other in
+    # this template, e.g. REFERENCE DOCUMENTS > UPSTREAM REQUIREMENTS holds
+    # the actual "Mark | Reference | Version | Title" table). Heading-
+    # boundary text extraction stops at the first subsection heading, so it
+    # misses that nested table entirely. Reuse the structural declaration-
+    # table detection built for R17 (finds every "[TAG] | Reference | ..."
+    # row anywhere in the document, regardless of which heading it sits
+    # under) instead of the narrower heading-scoped text.
     r14 = get_rule_by_id("R14")
+    declaration_text, _ = _split_declaration_and_body(user_text)
     ref_section_text = _extract_section_text(user_text, "REFERENCE DOCUMENTS")
     appl_section_text = _extract_section_text(user_text, "APPLICABLE DOCUMENTS")
-    combined_docs = (ref_section_text + "\n" + appl_section_text).lower()
+    combined_docs = (declaration_text + "\n" + ref_section_text + "\n" + appl_section_text).lower()
     has_revision_indices = bool(re.search(r"\b(?:rev\.?|revision|version|v\d+|index)\b", combined_docs))
     has_doc_references = bool(re.search(r"\b\d{4,}_\d{2}_\d{4,}\b|\b[A-Z]{2,}\d{3,}\b|\bSTA\d+\b", combined_docs))
     if has_doc_references and has_revision_indices:
@@ -1216,7 +1775,7 @@ def check_extended_writing_guide_rules(
 
     # ── R15: At least one Design file quoted in reference documents ──
     r15 = get_rule_by_id("R15")
-    has_design_file = bool(re.search(r"\b(?:design\s+file|DC\b|upstream\s+(?:functional\s+)?requirements?|architecture\s+(?:constraints?|file))\b", ref_section_text, re.IGNORECASE))
+    has_design_file = bool(re.search(r"\b(?:design\s+file|DC\b|upstream\s+(?:functional\s+)?requirements?|architecture\s+(?:constraints?|file))\b", combined_docs, re.IGNORECASE))
     if has_design_file:
         findings.append(EvidenceFinding(
             check="I_EXTENDED_WG_RULES", severity="pass", section="REFERENCE DOCUMENTS",
@@ -1224,11 +1783,15 @@ def check_extended_writing_guide_rules(
             message="At least one design file / upstream requirement quoted (R15 compliant).",
             source_rule=f"R15: {r15.text if r15 else 'There is at least one Design file to quote. All the DCs assigning at least one requirement should be quoted.'}",
             source_doc="writing_guide",
-            user_excerpt=_find_excerpt(ref_section_text, r"\b(?:design\s+file|upstream\s+requirements?)\b", 80),
-            user_location="REFERENCE DOCUMENTS section",
+            user_excerpt=_find_excerpt(
+                combined_docs,
+                r"\b(?:design\s+file|DC\b|upstream\s+(?:functional\s+)?requirements?|architecture\s+(?:constraints?|file))\b",
+                80,
+            ),
+            user_location="REFERENCE DOCUMENTS / UPSTREAM REQUIREMENTS section",
             why="R15 requires at least one Design file to be quoted. All DCs assigning requirements to the component must be referenced.",
         ))
-    elif ref_section_text:
+    elif declaration_text.strip() or ref_section_text:
         findings.append(EvidenceFinding(
             check="I_EXTENDED_WG_RULES", severity="warning", section="REFERENCE DOCUMENTS",
             rule_id="R15",
@@ -1608,6 +2171,41 @@ def check_extended_writing_guide_rules(
             fix_suggestion="Add power consumption requirements specifying max current/voltage/dissipation.",
         ))
 
+    # ── R29: Reset of the computer (§ 5.1) ──
+    # A deterministic PRESENCE check, the same shape as R37/R41 above: does
+    # the document define what happens when the component/ECU is reset?
+    # Verifying the reset behaviour is CORRECT would need understanding
+    # the requirement's meaning — out of reach here — but verifying a
+    # reset requirement EXISTS at all is a plain keyword-presence check,
+    # exactly like the power-consumption (R37) and random-noise (R41)
+    # checks already deterministic in this file.
+    r29 = get_rule_by_id("R29")
+    has_reset_req = bool(re.search(
+        r"\breset\b.*\b(?:shall|must)\b|\b(?:shall|must)\b.*\breset\b",
+        text_lower,
+    ))
+    if has_reset_req:
+        findings.append(EvidenceFinding(
+            check="I_EXTENDED_WG_RULES", severity="pass", section="FUNCTIONAL REQUIREMENTS",
+            rule_id="R29",
+            message="Reset requirement found (R29 compliant).",
+            source_rule=f"R29: {r29.text if r29 else 'Reset of the computer (§ 5.1).'}",
+            source_doc="writing_guide",
+            user_excerpt=_find_line_excerpt(user_text, r"\breset\b"),
+            user_location="FUNCTIONAL REQUIREMENTS section",
+            why="R29 requires the component's reset behaviour to be specified — what triggers a reset and what state the component returns to.",
+        ))
+    else:
+        findings.append(EvidenceFinding(
+            check="I_EXTENDED_WG_RULES", severity="info", section="FUNCTIONAL REQUIREMENTS",
+            rule_id="R29",
+            message="No explicit reset requirement detected. R29 recommends specifying the computer's reset behaviour.",
+            source_rule=f"R29: {r29.text if r29 else 'Reset of the computer (§ 5.1).'}",
+            source_doc="writing_guide", user_excerpt="", user_location="FUNCTIONAL REQUIREMENTS section",
+            why="R29 expects a reset requirement — what causes the component to reset, and what state it returns to afterward. Without one, this behaviour is undefined.",
+            fix_suggestion="Add a requirement specifying what triggers a reset (power cycle, watchdog, command…) and the component's state immediately after.",
+        ))
+
     # ── R51: Environment constraints without referring to test implementation ──
     r51 = get_rule_by_id("R51")
     has_env_section = _section_matches("ENVIRONMENT CONDITIONS", user_sections)
@@ -1912,6 +2510,50 @@ def _extract_section_text(text: str, section_keyword: str) -> str:
     return "\n".join(lines[start_line:end_line])
 
 
+def _extract_full_section_text(user_text: str, section_name: str, rules: ExtractedRules) -> str:
+    """
+    Extract ALL text belonging to a section — INCLUDING its own
+    subsections — bounded by the NEXT genuine TOP-LEVEL section from the
+    template's own standard plan (rules.section_order), not by just any
+    detected heading.
+
+    _extract_section_text stops at the very next heading regardless of
+    whether that heading is a real sibling section or one of THIS
+    section's own subsections — confirmed during the R14/R15 fix
+    (REFERENCE DOCUMENTS' real content lived under a nested "UPSTREAM
+    REQUIREMENTS" subsection heading, cut off before it was reached) and
+    again here (EXTERNAL INTERFACES REQUIREMENTS, ELECTRICAL INTERFACES:
+    each returned under 35 characters — their real content lives under
+    their OWN subsections, e.g. "Power supply requirements").
+
+    Scans forward from the section's start line through every detected
+    heading, in order, and stops at the first one that is ALSO a genuine
+    top-level entry in rules.section_order — this correctly handles a
+    subsection that isn't itself in section_order (e.g. "Maintainability"
+    is §5.4.4, a subsection of "RAMS REQUIREMENTS", not its own top-level
+    entry): it still gets bounded by whatever real top-level section
+    comes after it, instead of running to the end of the whole document.
+    """
+    lines = user_text.split("\n")
+    user_sections = _detect_user_sections(user_text)
+    user_names = [s[0] for s in user_sections]
+
+    matched = _section_matches(section_name, user_names)
+    if not matched:
+        return ""
+    start_line = next(line for name, line in user_sections if name == matched)
+
+    end_line = len(lines)
+    top_level_names = {n.lower() for n in rules.section_order}
+    for name, line in user_sections:
+        if line <= start_line:
+            continue
+        if name.lower() in top_level_names:
+            end_line = line
+            break
+    return "\n".join(lines[start_line:end_line])
+
+
 # ── Check J: Standards/norms consistency (R17) ─────────────────────
 # Stellantis internal norm/standard references use bracketed MARK tags —
 # [STA20] (Stellantis STAndard) and [N41] (Norme) — confirmed by the
@@ -2006,6 +2648,60 @@ def _split_declaration_and_body(user_text: str) -> Tuple[str, str]:
     return declaration_text, body_text
 
 
+def check_standards_reference_completeness(
+    user_text: str,
+    rules: ExtractedRules,
+) -> List[EvidenceFinding]:
+    """
+    Every standard/norm declared in the Applicable Documents table must
+    have a REAL, resolvable reference (document/drawing number) — not an
+    empty cell, and not an unfilled template placeholder (<<...>> or a
+    trailing TBD-style revision index). A declared standard whose
+    reference is blank or still a placeholder cannot actually be found or
+    verified by anyone reading the specification: the declaration exists
+    but points nowhere.
+
+    Distinct from R17 (check_standards_consistency): R17 checks whether a
+    declared standard is ever actually USED — this checks whether a
+    declared standard can even be LOCATED. Confirmed on the real ASU
+    spec: [STA2]'s entire reference is an unfilled placeholder
+    ("<<96 xxx xxx 99 xx>>"), and [STA7] appears three times with a real
+    document number but an unresolved trailing revision index
+    ("<<(1)>>") each time.
+    """
+    findings: List[EvidenceFinding] = []
+    declaration_text, _ = _split_declaration_and_body(user_text)
+
+    for line in declaration_text.split("\n"):
+        if not _DECLARATION_ROW_RE.match(line):
+            continue
+        parts = [p.strip() for p in line.strip().split("|")]
+        if len(parts) < 2:
+            continue
+        mark = parts[0].strip("[] ")
+        reference = parts[1].strip()
+        if not reference:
+            problem = "its reference field is empty"
+        elif PLACEHOLDER_RE.search(reference) or TBD_RE.search(reference):
+            problem = f"its reference still contains an unfilled placeholder: '{reference}'"
+        else:
+            continue
+        findings.append(EvidenceFinding(
+            check="J_STANDARDS_CONSISTENCY",
+            severity="warning",
+            section="APPLICABLE DOCUMENTS",
+            rule_id="TEMPLATE",
+            message=f"Standard/norm '{mark}' is declared in Applicable Documents but {problem}.",
+            source_rule="Template: every declared applicable document/standard must have a real, resolvable reference — an empty or placeholder reference cannot be located or verified.",
+            source_doc="template",
+            user_excerpt=line.strip()[:200],
+            user_location=f"APPLICABLE DOCUMENTS declaration row for '{mark}'",
+            why="A declared standard with no real, resolvable reference cannot be looked up or verified by anyone reading the specification — the declaration exists but points nowhere.",
+            fix_suggestion=f"Fill in the real reference/drawing number (and revision index, if applicable) for '{mark}'.",
+        ))
+    return findings
+
+
 def check_standards_consistency(
     user_text: str,
     rules: ExtractedRules,
@@ -2058,7 +2754,7 @@ def check_standards_consistency(
             message=f"Standard/norm '{std}' is declared in Applicable Documents/Standards but never cited by any requirement.",
             source_rule=f"R17: {r17_text}",
             source_doc="writing_guide",
-            user_excerpt=_find_excerpt(declaration_text, _flexible_ref_pattern(std)),
+            user_excerpt=_find_line_excerpt(declaration_text, _flexible_ref_pattern(std)),
             user_location="APPLICABLE DOCUMENTS / STANDARDS (declaration table)",
             why="A standard listed as applicable but never cited by any requirement suggests either a stale declaration or a missing requirement that should apply it.",
             fix_suggestion=f"Remove '{std}' from Applicable Documents if it truly doesn't apply, or add the requirement(s) that apply it.",
@@ -2072,7 +2768,7 @@ def check_standards_consistency(
             message=f"Standard/norm '{std}' is cited in the document but NOT declared in Applicable Documents/Standards.",
             source_rule=f"R17: {r17_text}",
             source_doc="writing_guide",
-            user_excerpt=_find_excerpt(body_text, _flexible_ref_pattern(std)),
+            user_excerpt=_find_line_excerpt(body_text, _flexible_ref_pattern(std)),
             user_location="Referenced in document body",
             why="Every standard/norm a requirement depends on must be declared in Applicable Documents/Standards so the full compliance perimeter is visible and traceable.",
             fix_suggestion=f"Add '{std}' to the Applicable Documents or Standards section.",
@@ -2182,10 +2878,193 @@ def _compute_scores(findings: List[EvidenceFinding], rules: ExtractedRules) -> D
     }
 
 
+# ── Check K: Semantic writing-guide rules (require judgment, not pattern-matching) ──
+#
+# Every other check in this file is deterministic: a regex, a keyword, a
+# table structure. That's what makes them trustworthy — the same input
+# always gives the same, explainable answer. A specific subset of the
+# writing-guide rules genuinely cannot be judged that way: they ask
+# whether TWO pieces of text are *consistent in meaning* (R42: does the
+# dreaded event's wording match its defect mode's wording?), whether a
+# requirement is written at the wrong *level of abstraction* (P05: is a
+# "what" requirement secretly describing "how"?), or whether content is
+# in the *conceptually right place* (R28/R44: is this diagnostic content
+# actually about the right kind of diagnostic?). These need an LLM.
+#
+# To keep that boundary explicit rather than quietly blurring it into the
+# deterministic findings: these live under their own check id
+# (K_SEMANTIC_ANALYSIS), every finding says outright that it is an
+# AI-generated judgment to be verified by a human, and the whole
+# function degrades to a single informational finding — never an
+# exception — if the LLM is unavailable, misconfigured, or returns
+# something unparseable. Disabled by default (see validate_with_evidence's
+# include_semantic_analysis parameter) so every existing caller and test
+# keeps its current fully offline, deterministic behaviour unless it
+# explicitly opts in.
+_SEMANTIC_RULE_SECTIONS: List[Tuple[str, str, List[str]]] = [
+    ("P03", "Each service must be described autonomously (independent of upstream architecture constraints) — §2.2/§5.1.",
+     ["SCOPE", "GENERAL DESCRIPTION OF THE SYSTEM"]),
+    ("P05", "Requirements must stay at the right level of abstraction (Application = pure functional behavior, with no protocol/transfer detail) — §5.",
+     ["FUNCTIONAL REQUIREMENTS"]),
+    ("R26", "Every value in the applicative I/O tables must be used in the semantic-level requirements — §5.1.",
+     ["EXTERNAL INTERFACES REQUIREMENTS", "FUNCTIONAL REQUIREMENTS"]),
+    ("R28", "The \"phase of life\" diagnostic must be handled under Maintainability (§5.4.4.5); autodiagnostic must remain in §5.1 with the other use cases.",
+     ["MAINTAINABILITY", "FUNCTIONAL REQUIREMENTS"]),
+    ("R34", "The network frame reception protocol must describe the behavior for invalid/unused values, frame loss, and default values in fault mode — §5.3.1.",
+     ["EXTERNAL INTERFACES REQUIREMENTS"]),
+    ("R35", "The controller must check the consistency of received input data — §5.3.1.",
+     ["EXTERNAL INTERFACES REQUIREMENTS"]),
+    ("R38", "Wired interfaces must be described via the expected reference catalogs (selection guide, DA8/DA9) — §5.3.2.",
+     ["ELECTRICAL INTERFACES"]),
+    ("R39", "HMI content (color, message readability, icon style, force) must be grouped in the section dedicated to Human-Machine Interfaces — §5.3.4.",
+     ["HUMAN-MACHINE INTERFACES"]),
+    ("R42", "The statement of a dreaded event must be consistent with the statement of its associated failure mode — §5.4.4.",
+     ["DEMONSTRATION OF COMPLIANCE WITH REQUIREMENTS", "RAMS REQUIREMENTS"]),
+    ("R44", "Diagnostic, download, remote coding and programming must be grouped in the same paragraph; customer-facing autodiagnostic remains in §5.1 — §5.4.4.",
+     ["MAINTAINABILITY", "DOCUMENT REQUIREMENTS"]),
+]
+
+_SEMANTIC_MAX_SECTION_CHARS = 3000
+_SEMANTIC_VERDICT_TO_SEVERITY = {
+    "compliant": "pass",
+    "violation": "warning",
+    "not_applicable": "info",
+    "cannot_verify": "info",
+}
+
+
+def check_semantic_writing_guide_rules(user_text: str, rules: ExtractedRules) -> List[EvidenceFinding]:
+    """
+    LLM-assisted evaluation of the writing-guide rules that require
+    judging MEANING rather than matching a pattern (see module comment
+    above for which rules and why). Every returned finding is severity
+    "pass"/"warning"/"info" mapped from the LLM's own verdict, and every
+    one explicitly states in its `why` field that it is an AI judgment
+    requiring human verification — never presented as an equally-certain
+    peer of the deterministic checks.
+
+    Returns a single informational finding (never raises) if the LLM
+    cannot be reached, isn't configured, or returns something that
+    doesn't parse as the expected structured response.
+    """
+    sections_used: Dict[str, str] = {}
+    prompt_blocks: List[str] = []
+    for rule_id, rule_desc, candidates in _SEMANTIC_RULE_SECTIONS:
+        combined = ""
+        for cand in candidates:
+            text = _extract_full_section_text(user_text, cand, rules)
+            if text:
+                combined = (combined + "\n" + text).strip() if combined else text
+        combined = combined[:_SEMANTIC_MAX_SECTION_CHARS]
+        sections_used[rule_id] = combined
+        excerpt_note = combined if combined else "[Section missing or not found in the document]"
+        prompt_blocks.append(
+            f"=== {rule_id} ===\nRule: {rule_desc}\nDocument excerpt:\n{excerpt_note}\n"
+        )
+
+    system_prompt = (
+        "You are an expert reviewer of Stellantis mechatronics technical "
+        "specifications (CTS). You are given a list of writing-guide rules that "
+        "require a JUDGMENT ON MEANING — not a simple pattern match (already "
+        "covered elsewhere). For EACH rule, you receive the document excerpt "
+        "judged relevant (or an explicit mention that the section is missing). "
+        "Judge ONLY from the text provided — never invent content. If the "
+        "excerpt is missing, empty, or simply says \"NA\", answer "
+        "not_applicable. If the excerpt exists but does not allow a confident "
+        "judgment, answer cannot_verify rather than guessing.\n\n"
+        "Respond STRICTLY with a JSON array, one object per rule, in this exact "
+        "order, with no text before or after:\n"
+        '[{"rule_id": "P03", "verdict": "compliant|violation|not_applicable|'
+        'cannot_verify", "explanation": "one clear sentence in English '
+        'explaining the verdict", "excerpt": "the exact quote from the document '
+        'that justifies the verdict, or an empty string"}, ...]'
+    )
+    user_message = "\n".join(prompt_blocks)
+
+    try:
+        from app.embeddings import call_llm
+        raw_response = call_llm(system_prompt, user_message, temperature=0.1, max_tokens=2500)
+        cleaned = raw_response.strip()
+        if cleaned.startswith("```"):
+            cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
+            cleaned = re.sub(r"\s*```$", "", cleaned)
+        parsed = json.loads(cleaned)
+        if not isinstance(parsed, list):
+            raise ValueError("LLM response is not a JSON array")
+    except Exception as exc:
+        return [EvidenceFinding(
+            check="K_SEMANTIC_ANALYSIS", severity="info", section="",
+            rule_id="K_SEMANTIC",
+            message="Semantic analysis (AI-assisted) unavailable — could not reach or parse the LLM response.",
+            source_rule="Rules requiring judgment on meaning (P03, P05, R26, R28, R34, R35, R38, R39, R42, R44).",
+            source_doc="writing_guide", user_excerpt="", user_location="Entire document",
+            why=f"The LLM call failed or returned an unusable response ({exc}); these rules still require manual review.",
+        )]
+
+    by_rule = {item.get("rule_id"): item for item in parsed if isinstance(item, dict)}
+    findings: List[EvidenceFinding] = []
+    for rule_id, rule_desc, _candidates in _SEMANTIC_RULE_SECTIONS:
+        item = by_rule.get(rule_id)
+        r = get_rule_by_id(rule_id)
+        source_rule_text = f"{rule_id}: {r.text if r else rule_desc}"
+        if not item:
+            findings.append(EvidenceFinding(
+                check="K_SEMANTIC_ANALYSIS", severity="info", section="",
+                rule_id=rule_id,
+                message=f"{rule_id}: the AI analysis did not return a verdict for this rule.",
+                source_rule=source_rule_text, source_doc="writing_guide",
+                user_excerpt="", user_location="Entire document",
+                why="The LLM response omitted this rule — treat as not yet reviewed.",
+            ))
+            continue
+        verdict = item.get("verdict", "cannot_verify")
+        severity = _SEMANTIC_VERDICT_TO_SEVERITY.get(verdict, "info")
+        explanation = str(item.get("explanation", ""))[:400]
+        excerpt = str(item.get("excerpt", ""))[:250]
+        findings.append(EvidenceFinding(
+            check="K_SEMANTIC_ANALYSIS", severity=severity, section="",
+            rule_id=rule_id,
+            message=f"[AI analysis — to verify] {rule_id}: {explanation or verdict}",
+            source_rule=source_rule_text, source_doc="writing_guide",
+            user_excerpt=excerpt, user_location="Semantic Analysis (AI)",
+            why=(
+                "This finding comes from an AI-assisted analysis (not a "
+                "deterministic rule) because this rule requires judging the "
+                "MEANING of the text, not just whether it is present. It must "
+                "be verified by a human reviewer before any action is taken."
+            ),
+            fix_suggestion="Manually verify this point before treating it as final." if severity == "warning" else "",
+        ))
+    return findings
+
+
 # ── Main validation function ──────────────────────────────────────
-def validate_with_evidence(file_name: str, user_text: str) -> Dict:
+def validate_with_evidence(
+    file_name: str,
+    user_text: str,
+    source_path=None,
+    include_semantic_analysis: bool = False,
+) -> Dict:
     """
     Validate a user specification against the REAL extracted rules.
+
+    Args:
+        file_name: display name of the document.
+        user_text: flattened text (from extract_text_from_file).
+        source_path: optional path to the ORIGINAL .docx. When given, the
+            requirement tables are read structurally so the "Input
+            requirement" column can be checked exactly instead of guessed
+            from the flattened text. Ignored for non-DOCX sources.
+        include_semantic_analysis: when True, also runs
+            check_semantic_writing_guide_rules — an LLM-assisted judgment
+            of the writing-guide rules that need to evaluate MEANING
+            (P03, P05, R26, R28, R34, R35, R38, R39, R42, R44), clearly
+            tagged as AI-assisted and requiring human verification.
+            Defaults to False so every existing caller keeps today's
+            fully deterministic, offline, network-free behaviour unless
+            it explicitly opts in — this is a real network call (cost,
+            latency, and a dependency on Azure OpenAI being reachable
+            and configured), never silently added to the default path.
 
     Returns a dict with:
       - fileName, overallScore, verdict, scores
@@ -2218,6 +3097,15 @@ def validate_with_evidence(file_name: str, user_text: str) -> Dict:
             "sectionsFound": [], "sectionsMissing": [],
         }
 
+    # Structural read of the requirement tables (exact traceability) when
+    # the original .docx is available; [] otherwise → text heuristic.
+    req_rows: List[RequirementRow] = []
+    if source_path:
+        try:
+            req_rows = extract_requirement_rows(source_path)
+        except Exception:
+            req_rows = []
+
     # Run all checks
     all_findings: List[EvidenceFinding] = []
     all_findings.extend(check_section_coverage(user_text, rules))
@@ -2226,10 +3114,15 @@ def validate_with_evidence(file_name: str, user_text: str) -> Dict:
     all_findings.extend(check_requirement_format(user_text, rules))
     all_findings.extend(check_requirement_language(user_text, rules))
     all_findings.extend(check_requirement_ids(user_text, rules))
-    all_findings.extend(check_traceability(user_text, rules))
+    all_findings.extend(check_traceability(user_text, rules, req_rows=req_rows))
     all_findings.extend(check_writing_guide_rules(user_text, rules))
     all_findings.extend(check_extended_writing_guide_rules(user_text, rules))
     all_findings.extend(check_standards_consistency(user_text, rules))
+    all_findings.extend(check_standards_reference_completeness(user_text, rules))
+    if source_path:
+        all_findings.extend(check_dreaded_event_associations(source_path))
+    if include_semantic_analysis:
+        all_findings.extend(check_semantic_writing_guide_rules(user_text, rules))
 
     # Compute scores
     scores = _compute_scores(all_findings, rules)
@@ -2265,6 +3158,7 @@ def validate_with_evidence(file_name: str, user_text: str) -> Dict:
             "source_rule": f.source_rule, "source_doc": f.source_doc,
             "user_excerpt": f.user_excerpt, "user_location": f.user_location,
             "why": f.why, "fix_suggestion": f.fix_suggestion,
+            "items": f.items,
         }
 
     findings_list = [_to_dict(f) for f in all_findings]

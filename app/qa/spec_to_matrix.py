@@ -2,7 +2,10 @@
 Spec → Conformity Matrix generator.
 
 Extracts every requirement (ID + description) from a specification document
-and fills them into the official CTS conformity matrix template
+— excluding bare "Input requirement" DOORS/PLM traceability references,
+which point to an upstream requirement rather than describing one of this
+spec's own requirements — and fills them into the official CTS conformity
+matrix template
 (data/refs/Conformity_Matrix_Template.xlsx — the "new version" sheet of
 Conformity_matrix_history_management_V1_5, macros removed), so suppliers
 receive a pre-filled matrix instead of building it by hand.
@@ -34,9 +37,26 @@ COL_REQ_ID = 3        # C
 # Requirement identifier schemes seen in CTS specs and conformity matrices:
 #   REF-PSP-COMP-001 / APP-xxx / GEN-xxx (spec schemes)
 #   REQ-0945126 (matrix scheme)
+#
+# Real specs are hand-typed, so the separators between segments are
+# inconsistent — all of these occur verbatim in the real ASU spec and are
+# genuine requirement IDs with real description text attached:
+#     REF-ASU-CD--CONN-0002     (doubled dash — already handled: "-" is a
+#                                 body character, so no fix needed here)
+#     REF-SIR-CD ESSAI-0002     (a SPACE where a dash belongs, no dash at
+#                                 all between segments)
+#     REF-ASU-CD- -CONN-0002    (dash, then a stray space, then a dash)
+#     GEN-XXX-CDC-54411.001     (dotted numeric suffix — dots stay in the
+#                                 body class, unlike a segment separator)
+# The body class tolerates ONE embedded space at a time, but ONLY when the
+# very next character is itself a valid ID character (upper-case letter,
+# digit, underscore, dot or dash) — never a lower-case letter — so it
+# bridges real typos without ever drifting into ordinary prose ("REF-ASU
+# this is just text" still stops at "REF-ASU", exactly like before).
+_ID_BODY = r"(?:[A-Za-z0-9_.-]|\s(?=[A-Z0-9_.-]))"
 _REQ_ID_RE = re.compile(
     r"\b("
-    r"(?:REF|APP|GEN)-[A-Z0-9][A-Z0-9_.-]{2,40}"
+    r"(?:REF|APP|GEN)-[A-Za-z0-9]" + _ID_BODY + r"{1,40}"
     r"|REQ-\d{4,10}"
     r")\b"
 )
@@ -82,7 +102,7 @@ def _best_description(segments: List[str]) -> str:
 # short applicability code like " C" or "(v)"), e.g. "REQ-0937326  C".
 _ANCHOR_RE = re.compile(
     r"^\s*("
-    r"(?:REF|APP|GEN)-[A-Z0-9][A-Z0-9_.-]{2,40}"
+    r"(?:REF|APP|GEN)-[A-Za-z0-9]" + _ID_BODY + r"{1,40}"
     r"|REQ-\d{4,10}"
     r")\b[\s.()A-Za-z0-9]{0,12}$"
 )
@@ -116,7 +136,7 @@ _BLOCK_MAX_LINES = 30
 # ("APP-ASU-CD-PERF-0001(0) | The ASU must … | [M8]") — such a line always
 # ENDS the current anchor block: it belongs to the next requirement.
 _INLINE_ROW_RE = re.compile(
-    r"^\s*(?:(?:REF|APP|GEN)-[A-Z0-9][A-Z0-9_.-]{2,40}|REQ-\d{4,10})\b[^|]{0,20}\|"
+    r"^\s*(?:(?:REF|APP|GEN)-[A-Za-z0-9]" + _ID_BODY + r"{1,40}|REQ-\d{4,10})\b[^|]{0,20}\|"
 )
 
 
@@ -202,6 +222,16 @@ def extract_requirements(text: str) -> List[Requirement]:
         # A change-history heading is not a description
         if desc and _HISTORY_HEADING_RE.search(desc):
             desc = ""
+        # A "REQ-…" (DOORS export id) block that never got a real
+        # requirement statement merged into it — because the next anchor
+        # turned out to be a genuinely separate, unrelated requirement,
+        # not this one's internal ref — can end up with its OWN "block"
+        # being nothing but the next subsection's heading (e.g. "Timing
+        # Performances"), since that heading is the only content sitting
+        # between the two anchors. A heading is not a description: if a
+        # REQ- entry's text has no shall/must statement, it isn't one.
+        if rid.startswith("REQ-") and desc and not _SHALL_RE.search(desc):
+            desc = ""
         if rid:
             if rid in by_id:
                 # Prefer the occurrence that has a description
@@ -238,12 +268,43 @@ def extract_requirements(text: str) -> List[Requirement]:
     # "REQ-… C" (DOORS id) anchor is immediately followed by the internal
     # "REF-…" number of the SAME requirement — merge them into one block
     # keyed by the REQ id, with the REF id kept as internal reference.
+    #
+    # This must NOT fire on the real ASU spec's actual layout: there, every
+    # "REQ-… C" is the TRAILING doors-id of a requirement whose own
+    # substantial description was already given by an EARLIER "REF-…"
+    # anchor — and the very next anchor after it is a completely
+    # DIFFERENT, unrelated requirement's own "REF-…", sometimes only 0-3
+    # lines away (a short subsection heading + the repeated table-header
+    # row, or nothing at all between two tightly-packed rows). Naively
+    # coalescing on proximity alone silently dropped that next
+    # requirement from the matrix entirely — confirmed on the real spec:
+    # 11+ real requirements lost this way.
+    #
+    # The reliable signal is whether the "REQ-…" anchor is TRAILING an
+    # already-substantial block (real content — a shall/must statement —
+    # between the PREVIOUS anchor and this one) versus genuinely OPENING
+    # a fresh one (nothing of substance precedes it, e.g. it's the very
+    # first anchor, or a bare history-mention placeholder). Only the
+    # latter may still absorb the next anchor, and only when the gap to
+    # that next anchor is itself trivial (blank, or just the repeated
+    # table-header row — never a real subsection heading).
+    def _has_shall_content(start: int, stop: int) -> bool:
+        return any(_SHALL_RE.search(lines[k]) for k in range(start, stop))
+
     merged_into_prev = set()
     for pos in range(len(anchor_idx) - 1):
         i, nxt = anchor_idx[pos], anchor_idx[pos + 1]
         rid = _ANCHOR_RE.match(lines[i].strip()).group(1)
         nid = _ANCHOR_RE.match(lines[nxt].strip()).group(1)
-        if rid.startswith("REQ-") and not nid.startswith("REQ-") and nxt - i <= 4:
+        gap_is_trivial = all(
+            not lines[k].strip() or _TABLE_HEADER_RE.search(lines[k])
+            for k in range(i + 1, nxt)
+        )
+        prev_anchor = anchor_idx[pos - 1] if pos > 0 else -1
+        trails_substantial_block = _has_shall_content(prev_anchor + 1, i)
+        if (rid.startswith("REQ-") and not nid.startswith("REQ-")
+                and nxt - i <= 4 and gap_is_trivial
+                and not trails_substantial_block):
             merged_into_prev.add(pos + 1)
 
     for pos, i in enumerate(anchor_idx):
@@ -452,6 +513,21 @@ def extract_requirements(text: str) -> List[Requirement]:
     if not by_id:
         for orph in orphans:
             _add("", orph.text, orph.line_no)
+
+    # A bare "REQ-nnnnnnn" id (no REF-/APP-/GEN- prefix) is the DOORS/PLM
+    # export id used by CTS tables as the "Input requirement (v)" column
+    # value — an upstream traceability reference, not a requirement of
+    # THIS spec. It only became a candidate row here because the anchor
+    # scanner also treats it as a block anchor (some CTS tables place it
+    # first, as its own requirement's DOORS id). When that anchor's block
+    # never yields a real shall/must statement of its own — the normal
+    # case, since real content already belongs to the requirement it
+    # trails — it carries no description and must not appear in the
+    # matrix at all: it is the input requirement, not a requirement.
+    requirements = [
+        r for r in requirements
+        if not (re.fullmatch(r"REQ-\d{4,10}", r.req_id) and not r.text)
+    ]
 
     return requirements
 

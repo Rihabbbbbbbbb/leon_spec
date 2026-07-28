@@ -1,26 +1,40 @@
 <!DOCTYPE html>
-<html lang="fr">
+<html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>LEON — Conformité &amp; Validation de Spec</title>
+  <title>LEON — Conformity &amp; Spec Validation</title>
   <style>
+    /* ── Enterprise theme ────────────────────────────────────────────
+       Light, neutral corporate palette (replaces the earlier dark
+       developer-console look). Every custom property name below is kept
+       identical to before — several are read dynamically from inline
+       styles built in JS (var(--accent), var(--ok)/--nok/--warn, etc.) —
+       only the colour VALUES changed, so no script logic needed to move.
+    */
     :root {
-      --bg: #0f1115;
-      --panel: #161a22;
-      --panel-2: #1c2230;
-      --border: #2a3142;
-      --text: #e6e9ef;
-      --muted: #8a93a6;
-      --accent: #3b82f6;
-      --accent-hover: #2563eb;
-      --ok: #28a745;
-      --nok: #dc3545;
-      --na: #6c757d;
-      --empty: #e9ecef;
-      --warn: #f59e0b;
-      --error: #ef4444;
+      --bg: #eef1f6;
+      --panel: #ffffff;
+      --panel-2: #f2f5f9;
+      --border: #dde3ec;
+      --text: #1c2b3a;
+      --muted: #5b6b7c;
+      --accent: #1d4ed8;
+      --accent-hover: #1739ab;
+      --ok: #157347;
+      --nok: #b3261e;
+      --na: #5b6b7c;
+      --empty: #c7cfd9;
+      --warn: #9a5b00;
+      --error: #b3261e;
       --mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+
+      /* Masthead-only tokens (full-bleed top bar; not used elsewhere) */
+      --masthead-bg: #0b2545;
+      --masthead-bg-2: #123061;
+      --masthead-text: #f4f7fb;
+      --masthead-muted: #a9bcd4;
+      --masthead-border: rgba(255, 255, 255, 0.14);
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     html, body { height: 100%; }
@@ -34,37 +48,49 @@
     .app {
       max-width: 1100px;
       margin: 0 auto;
-      padding: 20px;
+      padding: 24px 20px 40px;
     }
+
+    /* Full-bleed masthead — a distinct top bar rather than plain text on
+       the page background, matching the shell pattern of enterprise
+       consoles (Azure Portal, ServiceNow, ADO). */
     header {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 16px 0;
-      border-bottom: 1px solid var(--border);
-      margin-bottom: 24px;
+      gap: 16px;
+      padding: 18px max(20px, calc((100% - 1100px) / 2));
+      background: linear-gradient(135deg, var(--masthead-bg), var(--masthead-bg-2));
+      border-bottom: 1px solid var(--masthead-border);
     }
     header h1 {
-      font-size: 22px;
+      font-size: 19px;
       font-weight: 700;
-      color: var(--text);
+      letter-spacing: 0.2px;
+      color: var(--masthead-text);
     }
     header h1 small {
       display: block;
       font-size: 12px;
       font-weight: 400;
-      color: var(--muted);
-      margin-top: 2px;
+      color: var(--masthead-muted);
+      margin-top: 3px;
+      letter-spacing: 0.2px;
     }
     .health-badge {
       font-size: 11px;
-      padding: 4px 12px;
-      border-radius: 12px;
-      border: 1px solid var(--border);
+      font-weight: 600;
+      letter-spacing: 0.3px;
+      padding: 5px 14px;
+      border-radius: 999px;
+      border: 1px solid var(--masthead-border);
+      background: rgba(255, 255, 255, 0.06);
+      color: var(--masthead-muted);
       font-family: var(--mono);
+      white-space: nowrap;
     }
-    .health-ok { color: var(--ok); border-color: var(--ok); }
-    .health-err { color: var(--error); border-color: var(--error); }
+    .health-ok { color: #6ee7b0; border-color: rgba(110, 231, 176, 0.4); }
+    .health-err { color: #f4a3a3; border-color: rgba(244, 163, 163, 0.4); }
 
     /* Tabs */
     .tabs {
@@ -74,15 +100,15 @@
       border-bottom: 1px solid var(--border);
     }
     .tab {
-      padding: 10px 20px;
+      padding: 11px 20px;
       cursor: pointer;
       border: none;
       background: none;
       color: var(--muted);
       font-size: 14px;
-      font-weight: 500;
+      font-weight: 600;
       border-bottom: 2px solid transparent;
-      transition: all 0.2s;
+      transition: all 0.15s;
     }
     .tab:hover { color: var(--text); }
     .tab.active {
@@ -97,12 +123,14 @@
       border-radius: 10px;
       padding: 24px;
       margin-bottom: 20px;
+      box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
     }
     .panel h2 {
-      font-size: 16px;
-      font-weight: 600;
+      font-size: 15px;
+      font-weight: 700;
       margin-bottom: 16px;
       color: var(--text);
+      letter-spacing: 0.1px;
     }
 
     /* Upload */
@@ -112,15 +140,16 @@
       padding: 40px;
       text-align: center;
       cursor: pointer;
+      background: var(--panel-2);
       transition: all 0.2s;
     }
     .upload-zone:hover {
       border-color: var(--accent);
-      background: rgba(59, 130, 246, 0.05);
+      background: rgba(29, 78, 216, 0.05);
     }
     .upload-zone.dragover {
       border-color: var(--accent);
-      background: rgba(59, 130, 246, 0.1);
+      background: rgba(29, 78, 216, 0.09);
     }
     .upload-zone p {
       color: var(--muted);
@@ -128,7 +157,7 @@
       font-size: 13px;
     }
     .upload-icon {
-      font-size: 36px;
+      font-size: 32px;
       color: var(--accent);
     }
     #file-input { display: none; }
@@ -139,6 +168,7 @@
       gap: 12px;
       padding: 12px 16px;
       background: var(--panel-2);
+      border: 1px solid var(--border);
       border-radius: 8px;
       margin-top: 12px;
     }
@@ -164,7 +194,7 @@
       font-size: 14px;
       font-weight: 600;
       cursor: pointer;
-      transition: all 0.2s;
+      transition: all 0.15s;
     }
     .btn-primary {
       background: var(--accent);
@@ -172,15 +202,15 @@
     }
     .btn-primary:hover { background: var(--accent-hover); }
     .btn-primary:disabled {
-      opacity: 0.5;
+      opacity: 0.45;
       cursor: not-allowed;
     }
     .btn-secondary {
-      background: var(--panel-2);
+      background: var(--panel);
       color: var(--text);
       border: 1px solid var(--border);
     }
-    .btn-secondary:hover { border-color: var(--accent); }
+    .btn-secondary:hover { border-color: var(--accent); color: var(--accent); }
     .btn-row {
       display: flex;
       gap: 12px;
@@ -198,8 +228,8 @@
     .loading.show { display: block; }
     .spinner {
       display: inline-block;
-      width: 32px;
-      height: 32px;
+      width: 30px;
+      height: 30px;
       border: 3px solid var(--border);
       border-top-color: var(--accent);
       border-radius: 50%;
@@ -226,7 +256,7 @@
       text-align: center;
     }
     .stat-card .value {
-      font-size: 28px;
+      font-size: 26px;
       font-weight: 700;
       font-family: var(--mono);
     }
@@ -253,6 +283,7 @@
       max-width: 100%;
       border-radius: 8px;
       background: white;
+      border: 1px solid var(--border);
       padding: 8px;
     }
 
@@ -271,7 +302,7 @@
       background: var(--panel-2);
       padding: 10px 12px;
       text-align: left;
-      font-weight: 600;
+      font-weight: 700;
       color: var(--muted);
       border-bottom: 1px solid var(--border);
       white-space: nowrap;
@@ -280,7 +311,7 @@
       padding: 8px 12px;
       border-bottom: 1px solid var(--border);
     }
-    tr:hover { background: rgba(59, 130, 246, 0.05); }
+    tr:hover { background: rgba(29, 78, 216, 0.04); }
 
     /* Status badges */
     .badge {
@@ -291,14 +322,15 @@
       font-weight: 700;
       font-family: var(--mono);
     }
-    .badge-OK { background: rgba(40,167,69,0.2); color: var(--ok); }
-    .badge-NOK { background: rgba(220,53,69,0.2); color: var(--nok); }
-    .badge-NA { background: rgba(108,117,125,0.2); color: var(--na); }
-    .badge-EMPTY { background: rgba(233,236,239,0.1); color: var(--muted); }
+    .badge-OK { background: rgba(21,115,71,0.12); color: var(--ok); }
+    .badge-NOK { background: rgba(179,38,30,0.12); color: var(--nok); }
+    .badge-NA { background: rgba(91,107,124,0.12); color: var(--na); }
+    .badge-EMPTY { background: rgba(91,107,124,0.08); color: var(--muted); }
 
     /* Inconsistency cards */
     .inc-card {
       background: var(--panel-2);
+      border: 1px solid var(--border);
       border-left: 3px solid var(--error);
       border-radius: 6px;
       padding: 14px;
@@ -342,14 +374,14 @@
       padding: 6px 14px;
       border: 1px solid var(--border);
       border-radius: 6px;
-      background: var(--panel-2);
+      background: var(--panel);
       color: var(--muted);
       cursor: pointer;
       font-size: 12px;
-      font-weight: 600;
-      transition: all 0.2s;
+      font-weight: 700;
+      transition: all 0.15s;
     }
-    .filter-btn:hover { border-color: var(--accent); }
+    .filter-btn:hover { border-color: var(--accent); color: var(--accent); }
     .filter-btn.active {
       background: var(--accent);
       color: white;
@@ -361,7 +393,7 @@
       padding: 6px 14px;
       border: 1px solid var(--border);
       border-radius: 6px;
-      background: var(--panel-2);
+      background: var(--panel);
       color: var(--text);
       font-size: 13px;
     }
@@ -379,7 +411,7 @@
       align-items: center;
       gap: 6px;
       padding: 8px 16px;
-      background: var(--panel-2);
+      background: var(--panel);
       border: 1px solid var(--border);
       border-radius: 8px;
       color: var(--accent);
@@ -387,9 +419,9 @@
       font-size: 13px;
       font-weight: 600;
       cursor: pointer;
-      transition: all 0.2s;
+      transition: all 0.15s;
     }
-    .download-link:hover { border-color: var(--accent); }
+    .download-link:hover { border-color: var(--accent); background: rgba(29, 78, 216, 0.05); }
 
     /* Compare */
     .compare-files {
@@ -400,7 +432,7 @@
     .compare-files select {
       flex: 1;
       padding: 8px 12px;
-      background: var(--panel-2);
+      background: var(--panel);
       border: 1px solid var(--border);
       border-radius: 6px;
       color: var(--text);
@@ -432,6 +464,7 @@
       opacity: 0;
       transform: translateY(20px);
       transition: all 0.3s;
+      box-shadow: 0 4px 12px rgba(16, 24, 40, 0.18);
     }
     .toast.show { opacity: 1; transform: translateY(0); }
     .toast-success { background: var(--ok); color: white; }
@@ -444,18 +477,18 @@
   </style>
 </head>
 <body>
-<div class="app">
   <header>
-    <h1>LEON — Analyse Qualité
-      <small>Matrice de conformité FNR · Validation de spécification · Analyse IA · Rapports Excel/Word/PDF</small>
+    <h1>LEON — Quality Analysis
+      <small>FNR Conformity Matrix · Spec Validation · AI Analysis · Excel/Word Reports · Stellantis Mechatronics Engineering</small>
     </h1>
-    <span id="health-badge" class="health-badge health-err">Vérification…</span>
+    <span id="health-badge" class="health-badge health-err">Checking…</span>
   </header>
+<div class="app">
 
   <!-- Tabs -->
   <div class="tabs">
-    <button class="tab active" data-tab="analyze" onclick="switchTab('analyze')">📊 Matrice de Conformité</button>
-    <button class="tab" data-tab="validator" onclick="switchTab('validator')">📄 Validation de Spec</button>
+    <button class="tab active" data-tab="analyze" onclick="switchTab('analyze')">📊 Conformity Matrix</button>
+    <button class="tab" data-tab="validator" onclick="switchTab('validator')">📄 Spec Validation</button>
   </div>
 
   <!-- ═══════════════════════════════════════════════════════════════ -->
@@ -463,44 +496,44 @@
   <!-- ═══════════════════════════════════════════════════════════════ -->
   <div id="tab-analyze">
     <div class="panel">
-      <h2>1. Téléverser une ou plusieurs matrices de conformité (ODS / XLSX)</h2>
+      <h2>1. Upload one or more conformity matrices (ODS / XLSX)</h2>
       <div class="upload-zone" id="upload-zone" onclick="document.getElementById('file-input').click()">
         <div class="upload-icon">📁</div>
-        <p><strong>Cliquez ou glissez un ou plusieurs fichiers ici</strong></p>
-        <p>Formats acceptés: .ods, .xlsx, .xlsm — plusieurs fichiers à la fois possibles</p>
+        <p><strong>Click or drag one or more files here</strong></p>
+        <p>Accepted formats: .ods, .xlsx, .xlsm — multiple files at once supported</p>
         <input type="file" id="file-input" accept=".ods,.xlsx,.xlsm" multiple />
       </div>
       <div id="file-info-container"></div>
       <div class="btn-row">
         <button class="btn btn-primary" id="analyze-btn" disabled onclick="doAnalyze()">
-          📊 Analyser la conformité
+          📊 Analyze conformity
         </button>
         <button class="btn btn-secondary" id="excel-btn" disabled onclick="doReport()">
-          📗 Rapport Excel
+          📗 Excel Report
         </button>
       </div>
     </div>
 
     <div class="loading" id="loading-analyze">
       <div class="spinner"></div>
-      <p style="margin-top:12px" id="loading-analyze-text">Analyse en cours…</p>
+      <p style="margin-top:12px" id="loading-analyze-text">Analysis in progress…</p>
     </div>
 
     <!-- Batch results (2+ files): compact per-file summary + combined download -->
     <div class="results" id="results-batch">
       <div class="panel">
-        <h2>Résultats — <span id="batch-count"></span></h2>
+        <h2>Results — <span id="batch-count"></span></h2>
         <div id="batch-failed" class="muted" style="font-size:12px;margin-bottom:12px"></div>
         <div class="table-container">
           <table id="batch-table">
             <thead>
               <tr>
-                <th>Fichier</th>
+                <th>File</th>
                 <th>Total</th>
                 <th>OK</th>
                 <th>NOK</th>
                 <th>NA</th>
-                <th>Points d'attention</th>
+                <th>Points of Attention</th>
               </tr>
             </thead>
             <tbody id="batch-tbody"></tbody>
@@ -513,7 +546,7 @@
     <div class="results" id="results-analyze">
       <!-- Stats -->
       <div class="panel">
-        <h2>1. Statistiques de conformité</h2>
+        <h2>1. Conformity Statistics</h2>
         <div class="stats-grid" id="stats-grid"></div>
         <div class="chart-container" id="chart-container"></div>
         <div id="meta-info" class="muted" style="font-size:12px"></div>
@@ -521,30 +554,30 @@
 
       <!-- OK Deep Analysis (AI review of OK comments — unified, comprehensive) -->
       <div class="panel" id="okdeep-panel">
-        <h2>3. Analyse approfondie des réponses OK <span id="okdeep-count" class="muted"></span></h2>
+        <h2>3. Deep Analysis of OK Responses <span id="okdeep-count" class="muted"></span></h2>
         <div id="okdeep-list"></div>
       </div>
 
       <!-- Items table -->
       <div class="panel">
-        <h2>4. Exigences détaillées</h2>
+        <h2>4. Detailed Requirements</h2>
         <div class="filter-bar">
-          <input type="text" class="search-box" id="search-box" placeholder="Rechercher par REQ-ID, description, commentaire…" oninput="filterTable()" />
-          <button class="filter-btn active" data-filter="ALL" onclick="setFilter('ALL')">Tous</button>
+          <input type="text" class="search-box" id="search-box" placeholder="Search by REQ-ID, description, comment…" oninput="filterTable()" />
+          <button class="filter-btn active" data-filter="ALL" onclick="setFilter('ALL')">All</button>
           <button class="filter-btn" data-filter="OK" onclick="setFilter('OK')">✅ OK</button>
           <button class="filter-btn" data-filter="NOK" onclick="setFilter('NOK')">❌ NOK</button>
           <button class="filter-btn" data-filter="NA" onclick="setFilter('NA')">⬜ NA</button>
-          <button class="filter-btn" data-filter="EMPTY" onclick="setFilter('EMPTY')">⬜ VIDE</button>
+          <button class="filter-btn" data-filter="EMPTY" onclick="setFilter('EMPTY')">⬜ EMPTY</button>
         </div>
         <div class="table-container">
           <table id="items-table">
             <thead>
               <tr>
                 <th>REQ-ID</th>
-                <th>Référence</th>
-                <th>Version applicable</th>
-                <th>Statut</th>
-                <th>Commentaire</th>
+                <th>Reference</th>
+                <th>Applicable Version</th>
+                <th>Engagement</th>
+                <th>Comment</th>
               </tr>
             </thead>
             <tbody id="items-tbody"></tbody>
@@ -560,33 +593,33 @@
   <!-- ═══════════════════════════════════════════════════════════════ -->
   <div id="tab-validator" class="hidden">
     <div class="panel">
-      <h2>1. Téléverser une spécification (DOCX / PDF / TXT)</h2>
+      <h2>1. Upload a specification (DOCX / PDF / TXT)</h2>
       <div class="upload-zone" id="spec-upload-zone" onclick="document.getElementById('spec-file-input').click()">
         <div class="upload-icon">📄</div>
-        <p><strong>Cliquez ou glissez un fichier ici</strong></p>
-        <p>Formats acceptés: .docx, .pdf, .txt</p>
+        <p><strong>Click or drag a file here</strong></p>
+        <p>Accepted formats: .docx, .pdf, .txt</p>
         <input type="file" id="spec-file-input" accept=".docx,.pdf,.txt" />
       </div>
       <div id="spec-file-info-container"></div>
       <div class="btn-row">
         <button class="btn btn-primary" id="validate-btn" disabled onclick="doValidate()">
-          🔍 Valider la spécification
+          🔍 Validate the specification
         </button>
         <button class="btn btn-secondary" id="matrix-btn" disabled onclick="doSpecToMatrix()">
-          📊 Générer la Matrice de Conformité
+          📊 Generate the Conformity Matrix
         </button>
       </div>
     </div>
 
     <div class="loading" id="loading-validate">
       <div class="spinner"></div>
-      <p style="margin-top:12px">Validation en cours…</p>
+      <p style="margin-top:12px">Validation in progress…</p>
     </div>
 
     <div class="results" id="results-validate">
       <!-- Verdict + scores + downloads -->
       <div class="panel">
-        <h2>2. Verdict de validation</h2>
+        <h2>2. Validation Verdict</h2>
         <div class="stats-grid" id="spec-stats-grid"></div>
         <p id="spec-summary" class="muted" style="margin-top:12px;font-size:13px"></p>
         <div class="download-links" id="spec-downloads"></div>
@@ -594,12 +627,12 @@
 
       <!-- Findings -->
       <div class="panel">
-        <h2>3. Constats détaillés <span id="spec-findings-count" class="muted"></span></h2>
+        <h2>3. Detailed Findings <span id="spec-findings-count" class="muted"></span></h2>
         <div class="filter-bar" id="spec-filter-bar">
-          <button class="filter-btn active" data-sfilter="ALL" onclick="setSpecFilter('ALL')">Problèmes</button>
-          <button class="filter-btn" data-sfilter="error" onclick="setSpecFilter('error')">❌ Erreurs</button>
-          <button class="filter-btn" data-sfilter="warning" onclick="setSpecFilter('warning')">⚠️ Avertissements</button>
-          <button class="filter-btn" data-sfilter="pass" onclick="setSpecFilter('pass')">✅ Conformes</button>
+          <button class="filter-btn active" data-sfilter="ALL" onclick="setSpecFilter('ALL')">Issues</button>
+          <button class="filter-btn" data-sfilter="error" onclick="setSpecFilter('error')">❌ Errors</button>
+          <button class="filter-btn" data-sfilter="warning" onclick="setSpecFilter('warning')">⚠️ Warnings</button>
+          <button class="filter-btn" data-sfilter="pass" onclick="setSpecFilter('pass')">✅ Compliant</button>
         </div>
         <div id="spec-findings-list"></div>
       </div>
@@ -639,11 +672,11 @@ async function checkHealth() {
     const res = await fetch(window.location.href, { method: 'GET', cache: 'no-store' });
     if (res.ok) {
       const badge = document.getElementById('health-badge');
-      badge.textContent = '● Service en ligne';
+      badge.textContent = '● Service online';
       badge.className = 'health-badge health-ok';
     }
   } catch(e) {
-    document.getElementById('health-badge').textContent = '● Hors ligne';
+    document.getElementById('health-badge').textContent = '● Offline';
   }
 }
 checkHealth();
@@ -689,7 +722,7 @@ function addFiles(fileList) {
     if (currentFiles.some(f => f.name === file.name && f.size === file.size)) continue; // dedup
     currentFiles.push(file);
   }
-  if (rejected) toast(`${rejected} fichier(s) ignoré(s) — formats acceptés: .ods, .xlsx, .xlsm`, 'error');
+  if (rejected) toast(`${rejected} file(s) ignored — accepted formats: .ods, .xlsx, .xlsm`, 'error');
   renderFileList();
 }
 
@@ -724,9 +757,9 @@ function renderFileList() {
   document.getElementById('analyze-btn').disabled = n === 0;
   document.getElementById('excel-btn').disabled = n === 0;
   document.getElementById('analyze-btn').textContent =
-    n > 1 ? `📊 Analyser les ${n} matrices` : '📊 Analyser la conformité';
+    n > 1 ? `📊 Analyze ${n} matrices` : '📊 Analyze conformity';
   document.getElementById('excel-btn').textContent =
-    n > 1 ? '📦 Rapport Excel combiné' : '📗 Rapport Excel';
+    n > 1 ? '📦 Combined Excel Report' : '📗 Excel Report';
 
   if (n === 0) {
     document.getElementById('results-analyze').classList.remove('show');
@@ -745,7 +778,7 @@ async function doAnalyze() {
 }
 
 async function doAnalyzeSingle(file) {
-  showLoading('loading-analyze', true, 'Analyse en cours…');
+  showLoading('loading-analyze', true, 'Analysis in progress…');
   document.getElementById('results-analyze').classList.remove('show');
   document.getElementById('results-batch').classList.remove('show');
 
@@ -757,7 +790,7 @@ async function doAnalyzeSingle(file) {
     const data = await res.json();
 
     if (!res.ok || !data.analysis) {
-      toast('Erreur: ' + (data.detail || data.answer || 'analyse échouée'), 'error');
+      toast('Error: ' + (data.detail || data.answer || 'analysis failed'), 'error');
       return;
     }
 
@@ -771,16 +804,16 @@ async function doAnalyzeSingle(file) {
     renderMeta(data.analysis);
 
     document.getElementById('results-analyze').classList.add('show');
-    toast('Analyse terminée — ' + data.analysis.summary.total + ' exigences');
+    toast('Analysis complete — ' + data.analysis.summary.total + ' requirements');
   } catch(e) {
-    toast('Erreur réseau: ' + e.message, 'error');
+    toast('Network error: ' + e.message, 'error');
   } finally {
     showLoading('loading-analyze', false);
   }
 }
 
 async function doAnalyzeBatch() {
-  showLoading('loading-analyze', true, `Analyse de ${currentFiles.length} matrices en cours…`);
+  showLoading('loading-analyze', true, `Analyzing ${currentFiles.length} matrices…`);
   document.getElementById('results-analyze').classList.remove('show');
   document.getElementById('results-batch').classList.remove('show');
 
@@ -792,16 +825,16 @@ async function doAnalyzeBatch() {
     const data = await res.json();
 
     if (!res.ok || !data.reportExcel) {
-      toast('Erreur: ' + (data.detail || data.answer || 'analyse échouée'), 'error');
+      toast('Error: ' + (data.detail || data.answer || 'analysis failed'), 'error');
       return;
     }
 
     lastBatchExcel = data.reportExcel;
     renderBatchResults(data);
     document.getElementById('results-batch').classList.add('show');
-    toast(`Analyse terminée — ${data.filesAnalyzed}/${data.filesAnalyzed + data.filesFailed} matrice(s) analysée(s)`);
+    toast(`Analysis complete — ${data.filesAnalyzed}/${data.filesAnalyzed + data.filesFailed} matrix(es) analyzed`);
   } catch(e) {
-    toast('Erreur réseau: ' + e.message, 'error');
+    toast('Network error: ' + e.message, 'error');
   } finally {
     showLoading('loading-analyze', false);
   }
@@ -809,11 +842,11 @@ async function doAnalyzeBatch() {
 
 function renderBatchResults(data) {
   document.getElementById('batch-count').textContent =
-    `${data.filesAnalyzed} matrice(s) analysée(s)` + (data.filesFailed ? `, ${data.filesFailed} échec(s)` : '');
+    `${data.filesAnalyzed} matrix(es) analyzed` + (data.filesFailed ? `, ${data.filesFailed} failure(s)` : '');
 
   const failedEl = document.getElementById('batch-failed');
   failedEl.innerHTML = (data.failed || []).length
-    ? '⚠️ Non analysés : ' + data.failed.map(f => `${f.fileName} (${f.error})`).join(' · ')
+    ? '⚠️ Not analyzed: ' + data.failed.map(f => `${f.fileName} (${f.error})`).join(' · ')
     : '';
 
   document.getElementById('batch-tbody').innerHTML = (data.files || []).map(f => {
@@ -829,7 +862,7 @@ function renderBatchResults(data) {
   }).join('');
 
   document.getElementById('batch-downloads').innerHTML =
-    `<a class="download-link" onclick="downloadBatchExcel()">📦 Télécharger le rapport combiné (Excel)</a>`;
+    `<a class="download-link" onclick="downloadBatchExcel()">📦 Download combined report (Excel)</a>`;
 }
 
 function downloadBatchExcel() {
@@ -844,7 +877,7 @@ function downloadBatchExcel() {
   a.download = `conformity_batch_report_${currentFiles.length}_matrices.xlsx`;
   a.click();
   URL.revokeObjectURL(url);
-  toast('Rapport combiné téléchargé');
+  toast('Combined report downloaded');
 }
 
 // ── Excel report ────────────────────────────────────────────
@@ -863,7 +896,7 @@ async function doReport() {
     return;
   }
 
-  toast('Génération du rapport Excel…');
+  toast('Generating Excel report…');
   const formData = new FormData();
   formData.append('file', file);
 
@@ -871,13 +904,13 @@ async function doReport() {
     const res = await fetch(apiUrl('/conformity-excel'), { method: 'POST', body: formData });
     const data = await res.json();
     if (!res.ok || !data.reportExcel) {
-      toast('Erreur: ' + (data.detail || data.answer || 'génération échouée'), 'error');
+      toast('Error: ' + (data.detail || data.answer || 'generation failed'), 'error');
       return;
     }
     lastExcel = { name: file.name, b64: data.reportExcel };
     downloadExcel(data.reportExcel, file.name);
   } catch(e) {
-    toast('Erreur: ' + e.message, 'error');
+    toast('Error: ' + e.message, 'error');
   }
 }
 
@@ -892,7 +925,7 @@ function downloadExcel(b64, fileName) {
   a.download = fileName.replace(/\.(ods|xlsx|xlsm)$/i, '') + '_report.xlsx';
   a.click();
   URL.revokeObjectURL(url);
-  toast('Rapport Excel téléchargé');
+  toast('Excel report downloaded');
 }
 
 // ── Render functions ──────────────────────────────────────────
@@ -903,7 +936,7 @@ function renderStats(a) {
     {cls:'stat-ok', val:s.ok, label:'OK'},
     {cls:'stat-nok', val:s.nok, label:'NOK'},
     {cls:'stat-na', val:s.na, label:'NA'},
-    {cls:'stat-warn', val:(s.okDeepFindings||0), label:'Points d\'attention'},
+    {cls:'stat-warn', val:(s.okDeepFindings||0), label:'Points of Attention'},
   ];
   document.getElementById('stats-grid').innerHTML = cards.map(c =>
     `<div class="stat-card ${c.cls}"><div class="value">${c.val}</div><div class="label">${c.label}</div></div>`
@@ -925,18 +958,18 @@ function renderChart(a) {
       container.innerHTML = `<img src="data:image/png;base64,${a.chartBase64}" />`;
     }
   } else {
-    container.innerHTML = '<p class="muted">Pas de graphique disponible</p>';
+    container.innerHTML = '<p class="muted">No chart available</p>';
   }
 }
 
 function renderMeta(a) {
   const meta = document.getElementById('meta-info');
-  meta.innerHTML = `Feuille: <strong>${a.sheetName}</strong> | Ligne en-tête: ${a.headerRow+1} | Ligne données: ${a.dataStartRow+1} | Colonnes conformité: [${a.columnMapping.conformity}] | Colonnes commentaires: [${a.columnMapping.comment}] | Colonnes version applicable: [${a.columnMapping.version_applicable || []}]`;
+  meta.innerHTML = `Sheet: <strong>${a.sheetName}</strong> | Header row: ${a.headerRow+1} | Data row: ${a.dataStartRow+1} | Conformity columns: [${a.columnMapping.conformity}] | Comment columns: [${a.columnMapping.comment}] | Applicable version columns: [${a.columnMapping.version_applicable || []}]`;
 }
 
 function renderItems(a) {
   allItems = a.items || [];
-  document.getElementById('items-count').textContent = `${allItems.length} exigences extraites`;
+  document.getElementById('items-count').textContent = `${allItems.length} requirements extracted`;
   filterTable();
 }
 
@@ -972,9 +1005,9 @@ function filterTable() {
   `).join('');
 
   if (filtered.length > maxRows) {
-    document.getElementById('items-count').textContent = `${filtered.length} exigences (affichage: ${maxRows} premières)`;
+    document.getElementById('items-count').textContent = `${filtered.length} requirements (showing: first ${maxRows})`;
   } else {
-    document.getElementById('items-count').textContent = `${filtered.length} exigences`;
+    document.getElementById('items-count').textContent = `${filtered.length} requirements`;
   }
 }
 
@@ -988,13 +1021,13 @@ function renderOKDeepFindings(a) {
   const okCount = document.getElementById('okdeep-count');
   const method = a.okDeepMethod || '';
   const methodLabel = method.startsWith('ia')
-    ? '<span class="muted" style="font-size:11px;font-weight:400">· analyse sémantique IA (GPT)</span>'
-    : '<span class="muted" style="font-size:11px;font-weight:400">· analyse par motifs</span>';
+    ? '<span class="muted" style="font-size:11px;font-weight:400">· AI semantic analysis (GPT)</span>'
+    : '<span class="muted" style="font-size:11px;font-weight:400">· pattern-based analysis</span>';
 
   if (findings.length === 0) {
     if (okCount) okCount.textContent = '(0)';
-    h2.innerHTML = '3. Analyse approfondie des réponses OK <span id="okdeep-count" class="muted">(0)</span> ✅ Aucun point d\'attention ' + methodLabel;
-    document.getElementById('okdeep-list').innerHTML = '<p class="muted" style="padding:12px">✅ Tous les statuts OK sont cohérents avec leurs commentaires — aucun signal suspect détecté.</p>';
+    h2.innerHTML = '3. Deep Analysis of OK Responses <span id="okdeep-count" class="muted">(0)</span> ✅ No points of attention ' + methodLabel;
+    document.getElementById('okdeep-list').innerHTML = '<p class="muted" style="padding:12px">✅ All OK engagements are consistent with their comments — no suspicious signal detected.</p>';
     return;
   }
 
@@ -1003,11 +1036,11 @@ function renderOKDeepFindings(a) {
   const warnings = findings.filter(f => f.severity === 'warning').length;
   const infos = findings.filter(f => f.severity === 'info').length;
   let summaryHtml = '';
-  if (errors > 0) summaryHtml += `<span style="color:var(--nok);font-weight:600">${errors} critique(s)</span> `;
-  if (warnings > 0) summaryHtml += `<span style="color:var(--warn);font-weight:600">${warnings} attention(s)</span> `;
+  if (errors > 0) summaryHtml += `<span style="color:var(--nok);font-weight:600">${errors} critical</span> `;
+  if (warnings > 0) summaryHtml += `<span style="color:var(--warn);font-weight:600">${warnings} warning(s)</span> `;
   if (infos > 0) summaryHtml += `<span style="color:var(--ok);font-weight:600">${infos} info(s)</span>`;
 
-  h2.innerHTML = `3. Analyse approfondie des réponses OK <span id="okdeep-count" class="muted">(${findings.length})</span> ⚠️ ${summaryHtml} ${methodLabel}`;
+  h2.innerHTML = `3. Deep Analysis of OK Responses <span id="okdeep-count" class="muted">(${findings.length})</span> ⚠️ ${summaryHtml} ${methodLabel}`;
   document.getElementById('okdeep-list').innerHTML = findings.slice(0, 50).map(f => {
     const sevClass = f.severity === 'error' ? 'inc-card' : f.severity === 'warning' ? 'inc-card warning' : 'inc-card';
     const sevBadge = f.severity === 'error' ? 'badge-NOK' : f.severity === 'warning' ? 'badge-STANDBY' : 'badge-NA';
@@ -1021,8 +1054,8 @@ function renderOKDeepFindings(a) {
         <span class="muted" style="font-size:11px">${signals}</span>
       </div>
       <div class="explanation" style="color:var(--${f.severity === 'error' ? 'nok' : f.severity === 'warning' ? 'warn' : 'text'})">${f.aiComment || ''}</div>
-      ${f.conformity ? `<div class="meta">Conformité FNR: "${f.conformity}"</div>` : ''}
-      ${f.comment ? `<div class="meta">Commentaire FNR: "${f.comment}"</div>` : ''}
+      ${f.conformity ? `<div class="meta">FNR Conformity: "${f.conformity}"</div>` : ''}
+      ${f.comment ? `<div class="meta">FNR Comment: "${f.comment}"</div>` : ''}
     </div>
   `}).join('');
 }
@@ -1051,7 +1084,7 @@ specZone.addEventListener('drop', e => {
 function handleSpecFile(file) {
   const ext = file.name.split('.').pop().toLowerCase();
   if (!['docx','pdf','txt'].includes(ext)) {
-    toast('Format non supporté. Utilisez .docx, .pdf ou .txt', 'error');
+    toast('Unsupported format. Use .docx, .pdf or .txt', 'error');
     return;
   }
   specFile = file;
@@ -1079,7 +1112,7 @@ function clearSpecFile() {
 // ── Spec → Conformity Matrix ──────────────────────────────────
 async function doSpecToMatrix() {
   if (!specFile) return;
-  toast('Génération de la matrice de conformité…');
+  toast('Generating conformity matrix…');
 
   const formData = new FormData();
   formData.append('file', specFile);
@@ -1088,7 +1121,7 @@ async function doSpecToMatrix() {
     const res = await fetch(apiUrl('/spec-to-matrix'), { method: 'POST', body: formData });
     const data = await res.json();
     if (!res.ok || !data.matrixExcel) {
-      toast('Erreur: ' + (data.detail || data.answer || 'génération échouée'), 'error');
+      toast('Error: ' + (data.detail || data.answer || 'generation failed'), 'error');
       return;
     }
     _downloadB64(
@@ -1096,9 +1129,9 @@ async function doSpecToMatrix() {
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       specFile.name.replace(/\.(docx|pdf|txt)$/i, '') + '_Conformity_Matrix.xlsx'
     );
-    toast(`Matrice téléchargée — ${data.requirementsCount} exigences (${data.withIdCount} avec ID)`);
+    toast(`Matrix downloaded — ${data.requirementsCount} requirements (${data.withIdCount} with ID)`);
   } catch(e) {
-    toast('Erreur réseau: ' + e.message, 'error');
+    toast('Network error: ' + e.message, 'error');
   }
 }
 
@@ -1115,26 +1148,26 @@ async function doValidate() {
     const data = await res.json();
 
     if (!res.ok || !data.validationReport) {
-      toast('Erreur: ' + (data.detail || data.answer || 'validation échouée'), 'error');
+      toast('Error: ' + (data.detail || data.answer || 'validation failed'), 'error');
       return;
     }
 
     specValidation = data;
     renderValidation(data);
     document.getElementById('results-validate').classList.add('show');
-    toast('Validation terminée — ' + (data.verdict || ''));
+    toast('Validation complete — ' + (data.verdict || ''));
   } catch(e) {
-    toast('Erreur réseau: ' + e.message, 'error');
+    toast('Network error: ' + e.message, 'error');
   } finally {
     showLoading('loading-validate', false);
   }
 }
 
 const VERDICT_STYLE = {
-  'GOOD':                  {color:'var(--ok)',   label:'GOOD — Spécification conforme'},
-  'ACCEPTABLE_WITH_FIXES': {color:'var(--warn)', label:'ACCEPTABLE — corrections à prévoir'},
-  'NOT_RELIABLE':          {color:'var(--warn)', label:'NOT RELIABLE — à retravailler'},
-  'NON_COMPLIANT':         {color:'var(--nok)',  label:'NON COMPLIANT — non conforme'},
+  'GOOD':                  {color:'var(--ok)',   label:'GOOD — Compliant specification'},
+  'ACCEPTABLE_WITH_FIXES': {color:'var(--warn)', label:'ACCEPTABLE — fixes required'},
+  'NOT_RELIABLE':          {color:'var(--warn)', label:'NOT RELIABLE — needs rework'},
+  'NON_COMPLIANT':         {color:'var(--nok)',  label:'NON COMPLIANT — not compliant'},
 };
 
 function renderValidation(data) {
@@ -1144,12 +1177,12 @@ function renderValidation(data) {
   const counts = r.summaryCounts || {};
 
   const cards = [
-    {val: Math.round((r.overallScore||0)*100)+'%', label:'Score global', color:v.color},
+    {val: Math.round((r.overallScore||0)*100)+'%', label:'Overall Score', color:v.color},
     {val: Math.round((scores.structure||0)*100)+'%', label:'Structure'},
-    {val: Math.round((scores.requirements_quality||0)*100)+'%', label:'Exigences'},
-    {val: Math.round((scores.writing_guide_compliance||0)*100)+'%', label:'Guide de rédaction'},
-    {val: counts.errors||0, label:'Erreurs', color:'var(--nok)'},
-    {val: counts.warnings||0, label:'Avertissements', color:'var(--warn)'},
+    {val: Math.round((scores.requirements_quality||0)*100)+'%', label:'Requirements'},
+    {val: Math.round((scores.writing_guide_compliance||0)*100)+'%', label:'Writing Guide'},
+    {val: counts.errors||0, label:'Errors', color:'var(--nok)'},
+    {val: counts.warnings||0, label:'Warnings', color:'var(--warn)'},
   ];
   document.getElementById('spec-stats-grid').innerHTML =
     `<div class="stat-card" style="grid-column:1/-1">
@@ -1163,10 +1196,14 @@ function renderValidation(data) {
   document.getElementById('spec-summary').textContent = r.summary || '';
 
   let dl = '';
-  if (data.documentBase64) dl += `<a class="download-link" onclick="downloadSpecDoc()">📘 Rapport Word (modèle standardisé)</a>`;
-  if (data.pdfBase64) dl += `<a class="download-link" onclick="downloadSpecPdf()">📕 Rapport PDF</a>`;
+  if (data.documentBase64) dl += `<a class="download-link" onclick="downloadSpecDoc()">📘 Word Report (standardized template)</a>`;
+  if (data.annotatedSpecAvailable) {
+    dl += `<a class="download-link" onclick="downloadAnnotatedSpec()">🖍️ Highlighted spec (${data.annotatedSpecHighlightCount} passage(s) to fix)</a>`;
+  } else if ((specFile && specFile.name.match(/\.docx$/i))) {
+    dl += `<span class="muted" style="font-size:12px">🖍️ Highlighted spec: no passages to fix detected</span>`;
+  }
   document.getElementById('spec-downloads').innerHTML =
-    dl || '<span class="muted">Rapports non disponibles</span>';
+    dl || '<span class="muted">Reports not available</span>';
 
   setSpecFilter('ALL');
 }
@@ -1188,19 +1225,19 @@ function renderSpecFindings() {
   const sevColor = {error:'var(--nok)', warning:'var(--warn)', info:'var(--accent)', pass:'var(--ok)'};
 
   document.getElementById('spec-findings-count').textContent =
-    filtered.length > maxShow ? `(${filtered.length} — ${maxShow} affichés)` : `(${filtered.length})`;
+    filtered.length > maxShow ? `(${filtered.length} — ${maxShow} shown)` : `(${filtered.length})`;
 
   document.getElementById('spec-findings-list').innerHTML = filtered.slice(0, maxShow).map(f => `
     <div class="inc-card" style="border-left-color:${sevColor[f.severity]||'var(--muted)'}">
       <div class="header">
-        <span class="badge" style="background:rgba(255,255,255,0.06);color:${sevColor[f.severity]||'var(--muted)'}">${(f.severity||'').toUpperCase()}</span>
+        <span class="badge" style="background:rgba(28,43,58,0.07);color:${sevColor[f.severity]||'var(--muted)'}">${(f.severity||'').toUpperCase()}</span>
         <span class="req-id">${f.rule_id || ''}</span>
         <span class="muted" style="font-size:11px">${f.section || ''}</span>
       </div>
       <div class="explanation">${f.message || ''}</div>
       ${f.fix_suggestion ? `<div class="meta">💡 ${f.fix_suggestion}</div>` : ''}
     </div>`).join('')
-    || '<p class="muted" style="padding:12px">Aucun constat pour ce filtre.</p>';
+    || '<p class="muted" style="padding:12px">No findings for this filter.</p>';
 }
 
 function _downloadB64(b64, mime, name) {
@@ -1221,16 +1258,16 @@ function downloadSpecDoc() {
     'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     (specValidation.fileName || 'spec').replace(/\.(docx|pdf|txt)$/i, '') + '_validation_report.docx'
   );
-  toast('Rapport Word téléchargé');
+  toast('Word report downloaded');
 }
 
-function downloadSpecPdf() {
+function downloadAnnotatedSpec() {
   _downloadB64(
-    specValidation.pdfBase64,
-    'application/pdf',
-    (specValidation.fileName || 'spec').replace(/\.(docx|pdf|txt)$/i, '') + '_validation_report.pdf'
+    specValidation.annotatedSpecBase64,
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    (specValidation.fileName || 'spec').replace(/\.(docx|pdf|txt)$/i, '') + '_highlighted.docx'
   );
-  toast('Rapport PDF téléchargé');
+  toast('Highlighted spec downloaded — ' + (specValidation.annotatedSpecHighlightCount || 0) + ' passage(s) marked in purple');
 }
 
 // ── Utils ─────────────────────────────────────────────────────

@@ -1430,11 +1430,11 @@ def detect_inconsistencies(analysis: ConformityAnalysis) -> List[Dict]:
                     "signals": labels,
                     "matched": matched_texts,
                     "explanation": (
-                        f"Le fournisseur a marqué '{conf_raw}' (OK) mais le "
-                        f"commentaire contient un langage négatif ou de non-conformité "
-                        f"(signaux: {labels}, score: {score}): "
-                        f"'{comment[:200]}'. Incohérence logique — le commentaire "
-                        f"ne correspond pas au statut OK déclaré."
+                        f"The supplier marked '{conf_raw}' (OK) but the "
+                        f"comment contains negative or non-conforming language "
+                        f"(signals: {labels}, score: {score}): "
+                        f"'{comment[:200]}'. Logical inconsistency — the comment "
+                        f"does not match the declared OK status."
                     ),
                 }
 
@@ -1455,10 +1455,10 @@ def detect_inconsistencies(analysis: ConformityAnalysis) -> List[Dict]:
                     "signals": "na_in_ok",
                     "matched": [na_match.group()],
                     "explanation": (
-                        f"Le fournisseur a marqué '{conf_raw}' (OK) mais le "
-                        f"commentaire mentionne 'N/A' ou 'not applicable': "
-                        f"'{comment[:200]}'. Incohérence — si l'exigence n'est "
-                        f"pas applicable, le statut OK n'est pas cohérent."
+                        f"The supplier marked '{conf_raw}' (OK) but the "
+                        f"comment mentions 'N/A' or 'not applicable': "
+                        f"'{comment[:200]}'. Inconsistency — if the requirement "
+                        f"is not applicable, the OK status is not coherent."
                     ),
                 }
 
@@ -1474,9 +1474,9 @@ def detect_inconsistencies(analysis: ConformityAnalysis) -> List[Dict]:
                     "conformity": conf_raw,
                     "comment": "",
                     "explanation": (
-                        f"Le fournisseur a marqué '{conf_raw}' (OK) sans "
-                        f"commentaire. Un commentaire justifiant la conformité "
-                        f"est recommandé pour l'auditabilité."
+                        f"The supplier marked '{conf_raw}' (OK) without a "
+                        f"comment. A comment justifying the conformity "
+                        f"is recommended for auditability."
                     ),
                 }
 
@@ -1677,95 +1677,95 @@ def _generate_ai_comment_ok(
 
     if "na_language" in labels:
         return (
-            "⚠️ Le commentaire mentionne 'N/A' ou 'not applicable' mais le "
-            "statut est OK. Incohérence logique — si l'exigence n'est pas "
-            "applicable, le statut OK ne correspond pas au commentaire. "
-            "Vérifier la cohérence entre le statut déclaré et le contenu."
+            "⚠️ The comment mentions 'N/A' or 'not applicable' but the "
+            "status is OK. Logical inconsistency — if the requirement is not "
+            "applicable, the OK status does not match the comment. "
+            "Check the consistency between the declared status and the content."
         )
     if "cannot" in labels:
         return (
-            "⚠️ Le commentaire indique une impossibilité ou incapacité technique "
-            "('cannot', 'unable', 'impossible') alors que le statut FNR est OK. "
-            "Incohérence logique — le commentaire décrit une non-conformité "
-            "tandis que le statut déclare OK. Vérifier la cohérence."
+            "⚠️ The comment indicates a technical impossibility or inability "
+            "('cannot', 'unable', 'impossible') while the FNR status is OK. "
+            "Logical inconsistency — the comment describes a non-conformity "
+            "while the status declares OK. Check the consistency."
         )
     if "not_responsible" in labels:
         return (
-            "⚠️ Le fournisseur décline sa responsabilité dans le commentaire "
-            "mais a marqué OK. Incohérence logique — si le fournisseur n'est "
-            "pas responsable de cette exigence, le commentaire contredit le "
-            "statut OK. Vérifier la cohérence."
+            "⚠️ The supplier disclaims responsibility in the comment "
+            "but marked OK. Logical inconsistency — if the supplier is not "
+            "responsible for this requirement, the comment contradicts the "
+            "OK status. Check the consistency."
         )
     if "rejected" in labels:
         return (
-            "⚠️ Le commentaire contient un langage de refus/rejet alors que le "
-            "statut est OK. Incohérence logique majeure — le commentaire "
-            "décrit un refus mais le statut indique OK. Vérifier la cohérence."
+            "⚠️ The comment contains rejection/refusal language while the "
+            "status is OK. Major logical inconsistency — the comment "
+            "describes a refusal but the status indicates OK. Check the consistency."
         )
     if "pending_confirmation" in labels or "in_development" in labels:
         return (
-            "⚠️ Le commentaire indique que ce point est encore en cours de "
-            "développement ou en attente de confirmation, mais le statut est OK. "
-            "Incohérence logique — le commentaire suggère que la conformité "
-            "n'est pas encore validée. Vérifier la cohérence entre le statut "
-            "déclaré et l'état réel."
+            "⚠️ The comment indicates that this point is still under "
+            "development or pending confirmation, but the status is OK. "
+            "Logical inconsistency — the comment suggests that conformity "
+            "has not yet been validated. Check the consistency between the "
+            "declared status and the actual state."
         )
     if "needs_action" in labels or "stla_action" in labels:
         return (
-            "⚠️ Le commentaire indique qu'une action est nécessaire (par le "
-            "fournisseur ou STLA), mais le statut est déjà OK. Incohérence "
-            "logique — si des actions sont encore requises, le commentaire "
-            "contredit le statut OK. Vérifier la cohérence."
+            "⚠️ The comment indicates that an action is needed (by the "
+            "supplier or STLA), but the status is already OK. Logical "
+            "inconsistency — if actions are still required, the comment "
+            "contradicts the OK status. Check the consistency."
         )
     if "alternative_approach" in labels:
         return (
-            "⚠️ Le commentaire mentionne une approche alternative, une déviation "
-            "ou une substitution par rapport à l'exigence originale. Bien que le "
-            "statut soit OK, l'approche alternative n'est pas documentée dans "
-            "le statut. Vérifier la cohérence."
+            "⚠️ The comment mentions an alternative approach, a deviation, "
+            "or a substitution relative to the original requirement. Although the "
+            "status is OK, the alternative approach is not documented in "
+            "the status. Check the consistency."
         )
     if "conflict" in labels:
         return (
-            "⚠️ Le commentaire mentionne un conflit ou une contradiction avec "
-            "une autre exigence. Le statut OK ne reflète pas cette situation "
-            "décrite dans le commentaire — incohérence logique. "
-            "Vérifier la cohérence."
+            "⚠️ The comment mentions a conflict or contradiction with "
+            "another requirement. The OK status does not reflect this situation "
+            "described in the comment — logical inconsistency. "
+            "Check the consistency."
         )
     if "partial_limited" in labels:
         return (
-            "⚠️ Le commentaire suggère une conformité partielle ou limitée "
-            "('partial', 'limited to', 'only for') alors que le statut est OK. "
-            "Incohérence logique — le commentaire décrit des limitations "
-            "qui contredisent un statut OK complet. Vérifier la cohérence."
+            "⚠️ The comment suggests partial or limited conformity "
+            "('partial', 'limited to', 'only for') while the status is OK. "
+            "Logical inconsistency — the comment describes limitations "
+            "that contradict a fully OK status. Check the consistency."
         )
     if "temporary" in labels:
         return (
-            "⚠️ Le commentaire mentionne une solution temporaire ou provisoire. "
-            "Le statut OK ne mentionne pas cette condition temporaire — "
-            "incohérence logique. Vérifier la cohérence entre le statut "
-            "et le commentaire."
+            "⚠️ The comment mentions a temporary or provisional solution. "
+            "The OK status does not mention this temporary condition — "
+            "logical inconsistency. Check the consistency between the status "
+            "and the comment."
         )
     if "remaining" in labels:
         return (
-            "⚠️ Le commentaire indique qu'il reste des éléments à compléter. "
-            "Le statut OK ne reflète pas ces éléments restants — "
-            "incohérence logique. Vérifier la cohérence."
+            "⚠️ The comment indicates that some elements still remain to be completed. "
+            "The OK status does not reflect these remaining elements — "
+            "logical inconsistency. Check the consistency."
         )
 
     # Generic fallback based on score
     if score >= 3:
         return (
-            f"⚠️ Le commentaire contient plusieurs signaux ({', '.join(labels)}) "
-            f"qui contredisent le statut OK déclaré par le fournisseur. "
-            f"Incohérence logique — le commentaire ne correspond pas au "
-            f"statut OK. Une revue humaine est recommandée pour vérifier "
-            f"la cohérence."
+            f"⚠️ The comment contains several signals ({', '.join(labels)}) "
+            f"that contradict the OK status declared by the supplier. "
+            f"Logical inconsistency — the comment does not match the "
+            f"OK status. A human review is recommended to check "
+            f"the consistency."
         )
     if score >= 1:
         return (
-            f"ℹ️ Le commentaire présente des signaux mineurs "
-            f"({', '.join(labels)}) qui ne correspondent pas au statut OK. "
-            f"Vérifier la cohérence entre le statut déclaré et le commentaire."
+            f"ℹ️ The comment shows minor signals "
+            f"({', '.join(labels)}) that do not match the OK status. "
+            f"Check the consistency between the declared status and the comment."
         )
     return ""
 
@@ -1811,27 +1811,27 @@ _LLM_BATCH_SIZE = 25       # items per LLM call
 _LLM_MAX_ITEMS = 150       # beyond this, remaining items fall back to patterns
 _LLM_COMMENT_MAX_CHARS = 600
 
-_LLM_SYSTEM_PROMPT = """Tu es un auditeur qualité senior spécialisé dans les matrices de conformité fournisseur (FNR) de l'industrie automobile.
+_LLM_SYSTEM_PROMPT = """You are a senior quality auditor specialized in automotive industry supplier conformity matrices (FNR).
 
-Pour chaque exigence fournie, le fournisseur a déclaré le statut OK (conforme). Ta mission : juger si le COMMENTAIRE du fournisseur justifie réellement ce statut OK, ou s'il révèle en réalité un problème caché.
+For each requirement provided, the supplier has declared the status OK (conform). Your task: judge whether the supplier's COMMENT genuinely justifies this OK status, or whether it actually reveals a hidden problem.
 
-Rends un verdict pour CHAQUE exigence :
-- "CONTRADICTION" : le commentaire décrit en réalité une non-conformité (refus, impossibilité, fonction absente ou non supportée, non applicable, hors périmètre, défaut connu...) → gravite "error"
-- "PARTIEL" : conformité partielle, limitée, conditionnelle, avec déviation ou solution alternative non validée → gravite "warning"
-- "EN_ATTENTE" : conformité non encore acquise (en cours, à confirmer, TBD, dépend d'une action, d'une livraison ou d'un essai futur...) → gravite "warning"
-- "AMBIGU" : commentaire trop vague ou sans rapport pour justifier un OK → gravite "info"
-- "COHERENT" : le commentaire confirme ou est compatible avec la conformité → gravite "none"
+Give a verdict for EACH requirement:
+- "CONTRADICTION": the comment actually describes a non-conformity (refusal, impossibility, missing or unsupported function, not applicable, out of scope, known defect...) → gravite "error"
+- "PARTIAL": partial, limited, conditional conformity, with an unvalidated deviation or alternative solution → gravite "warning"
+- "PENDING": conformity not yet achieved (in progress, to be confirmed, TBD, depends on a future action, delivery, or test...) → gravite "warning"
+- "AMBIGUOUS": comment too vague or unrelated to justify an OK → gravite "info"
+- "COHERENT": the comment confirms or is compatible with conformity → gravite "none"
 
-Règles :
-- Les commentaires peuvent être en français ou en anglais.
-- Un commentaire technique décrivant COMMENT l'exigence est satisfaite est COHERENT.
-- Les commentaires du type « <domaine>: ok » (ex. « EE: ok », « SW: ok », « Touch: ok », « EE: ok SW: ok »), éventuellement accompagnés d'une date, sont des confirmations de conformité domaine par domaine : verdict COHERENT, jamais AMBIGU.
-- De simples références (numéros de document, versions, dates, codes domaine) ne sont pas des problèmes.
-- Ne signale AMBIGU que si le commentaire empêche réellement de comprendre pourquoi l'exigence serait conforme.
-- "citation" : recopie exactement le fragment du commentaire (15 mots max) qui fonde ton verdict ; "" si COHERENT.
-- "explication" : 1 à 2 phrases en français, précises et professionnelles.
+Rules:
+- Comments may be in French or English.
+- A technical comment describing HOW the requirement is satisfied is COHERENT.
+- Comments of the type "<domain>: ok" (e.g. "EE: ok", "SW: ok", "Touch: ok", "EE: ok SW: ok"), possibly with a date, are domain-by-domain conformity confirmations: verdict COHERENT, never AMBIGUOUS.
+- Plain references (document numbers, versions, dates, domain codes) are not problems.
+- Only flag AMBIGUOUS if the comment genuinely prevents understanding why the requirement would be conform.
+- "citation": copy exactly the fragment of the comment (15 words max) that grounds your verdict; "" if COHERENT.
+- "explication": 1 to 2 precise, professional sentences in English.
 
-Réponds UNIQUEMENT en JSON strict, sans texte autour :
+Respond ONLY in strict JSON, with no surrounding text:
 {"resultats": [{"id": <int>, "verdict": "...", "gravite": "error|warning|info|none", "explication": "...", "citation": "..."}]}"""
 
 _LLM_SEVERITY_SCORE = {"error": 5, "warning": 3, "info": 1}
@@ -1843,14 +1843,14 @@ def _llm_finding(item: ConformityItem, verdict: str, severity: str,
     icon = "ℹ️" if severity == "info" else "⚠️"
     ai_comment = f"{icon} {explication.strip()}"
     if citation:
-        ai_comment += f" (extrait : « {citation.strip()} »)"
+        ai_comment += f" (excerpt: \"{citation.strip()}\")"
     return {
         "reqId": item.req_id,
         "reference": item.reference,
         "conformity": item.conformity_raw.strip(),
         "comment": item.comment.strip()[:300],
         "score": _LLM_SEVERITY_SCORE.get(severity, 1),
-        "signals": ["analyse_ia", verdict.lower()],
+        "signals": ["ai_analysis", verdict.lower()],
         "matched": [citation] if citation else [],
         "aiComment": ai_comment,
         "severity": severity,
@@ -1863,7 +1863,7 @@ def _analyze_ok_deep_llm(items: List[ConformityItem]) -> Tuple[List[Dict], set]:
     Semantic deep analysis of OK comments via the Azure OpenAI LLM.
 
     Sends the OK items (batched) to GPT and collects a verdict per item:
-    CONTRADICTION / PARTIEL / EN_ATTENTE / AMBIGU / COHERENT.
+    CONTRADICTION / PARTIAL / PENDING / AMBIGUOUS / COHERENT.
 
     Returns (findings, analyzed_indices). Items whose batch failed are NOT
     in analyzed_indices — the caller falls back to pattern analysis for them.
@@ -1901,12 +1901,12 @@ def _analyze_ok_deep_llm(items: List[ConformityItem]) -> Tuple[List[Dict], set]:
             comment = item.comment.strip()[:_LLM_COMMENT_MAX_CHARS]
             conf = item.conformity_raw.strip() or "OK"
             lines.append(
-                f"[{idx}] Exigence {item.req_id or '(sans id)'} — "
-                f"statut déclaré : {conf}\nCommentaire : {comment}"
+                f"[{idx}] Requirement {item.req_id or '(no id)'} — "
+                f"declared status: {conf}\nComment: {comment}"
             )
         user_msg = (
-            f"Analyse les {len(batch)} exigences suivantes "
-            f"(toutes déclarées OK par le fournisseur) :\n\n"
+            f"Analyze the following {len(batch)} requirements "
+            f"(all declared OK by the supplier):\n\n"
             + "\n\n".join(lines)
         )
 
@@ -1945,15 +1945,15 @@ def _analyze_ok_deep_llm(items: List[ConformityItem]) -> Tuple[List[Dict], set]:
             if severity not in ("error", "warning", "info"):
                 severity = {
                     "CONTRADICTION": "error",
-                    "PARTIEL": "warning",
-                    "EN_ATTENTE": "warning",
+                    "PARTIAL": "warning",
+                    "PENDING": "warning",
                 }.get(verdict, "info")
             if severity == "info":
                 continue  # only real problems (error/warning) are reported
             findings.append(_llm_finding(
                 item, verdict, severity,
                 str(r.get("explication", "")).strip()
-                or "Le commentaire ne justifie pas clairement le statut OK.",
+                or "The comment does not clearly justify the OK status.",
                 str(r.get("citation", "")).strip()[:120],
             ))
 
@@ -2074,7 +2074,7 @@ def _generate_svg_pie_chart(labels: list, sizes: list, colors: list,
         f'font-weight="bold" font-family="Arial" fill="#003366">'
         f'{_xml_escape(title)}</text>',
         f'<text x="250" y="45" text-anchor="middle" font-size="11" '
-        f'font-family="Arial" fill="#666">({total} exigences)</text>',
+        f'font-family="Arial" fill="#666">({total} requirements)</text>',
     ]
 
     start_angle = -90.0  # Start at top (12 o'clock)
@@ -2173,7 +2173,7 @@ def generate_pie_chart(analysis: ConformityAnalysis) -> str:
     total = sum(sizes)
 
     title = (
-        f"Repartition des statuts de conformite FNR"
+        f"Conformity Status Breakdown (FNR)"
     )
 
     # Try matplotlib first (generates PNG)
@@ -2198,8 +2198,8 @@ def generate_pie_chart(analysis: ConformityAnalysis) -> str:
             autotext.set_fontweight("bold")
 
         ax.set_title(
-            f"Répartition des statuts de conformité FNR\n"
-            f"({total} exigences — {analysis.file_name or analysis.sheet_name})",
+            f"Conformity Status Breakdown (FNR)\n"
+            f"({total} requirements — {analysis.file_name or analysis.sheet_name})",
             fontsize=13,
             fontweight="bold",
             pad=20,
@@ -2233,19 +2233,19 @@ def generate_report_text(analysis: ConformityAnalysis) -> str:
     lines: List[str] = []
 
     lines.append("=" * 70)
-    lines.append("LEON — Rapport d'Analyse de Matrice de Conformité FNR")
+    lines.append("LEON — Conformity Matrix Analysis Report FNR")
     lines.append("=" * 70)
     lines.append("")
-    lines.append(f"Fichier analysé : {analysis.file_name}")
-    lines.append(f"Feuille : {analysis.sheet_name}")
-    lines.append(f"Ligne d'en-tête : {analysis.header_row + 1}")
-    lines.append(f"Première ligne de données : {analysis.data_start_row + 1}")
-    lines.append(f"Nombre total d'exigences : {analysis.total_rows}")
+    lines.append(f"File analyzed: {analysis.file_name}")
+    lines.append(f"Sheet: {analysis.sheet_name}")
+    lines.append(f"Header row: {analysis.header_row + 1}")
+    lines.append(f"First data row: {analysis.data_start_row + 1}")
+    lines.append(f"Total number of requirements: {analysis.total_rows}")
     lines.append("")
 
     # Statistics
     lines.append("─" * 50)
-    lines.append("RÉPARTITION DES STATUTS DE CONFORMITÉ")
+    lines.append("BREAKDOWN OF CONFORMITY STATUSES")
     lines.append("─" * 50)
     for cat, count in sorted(analysis.stats.items(), key=lambda x: -x[1]):
         pct = (count / analysis.total_rows * 100) if analysis.total_rows else 0
@@ -2256,10 +2256,10 @@ def generate_report_text(analysis: ConformityAnalysis) -> str:
     ok_items = [item for item in analysis.items if item.conformity_category == "OK"]
     if ok_items:
         lines.append("─" * 50)
-        lines.append(f"EXIGENCES CONFORMES (OK) — {len(ok_items)}")
+        lines.append(f"CONFORMING REQUIREMENTS (OK) — {len(ok_items)}")
         lines.append("─" * 50)
         for item in ok_items:
-            comment_str = f" | Commentaire: {item.comment}" if item.comment else ""
+            comment_str = f" | Comment: {item.comment}" if item.comment else ""
             version_str = f" | Version: {item.version}" if item.version else ""
             lines.append(f"  ✅ {item.req_id}: {item.conformity_raw}{version_str}{comment_str}")
         lines.append("")
@@ -2268,10 +2268,10 @@ def generate_report_text(analysis: ConformityAnalysis) -> str:
     nok_items = [item for item in analysis.items if item.conformity_category == "NOK"]
     if nok_items:
         lines.append("─" * 50)
-        lines.append(f"EXIGENCES NON CONFORMES (NOK) — {len(nok_items)}")
+        lines.append(f"NON-CONFORMING REQUIREMENTS (NOK) — {len(nok_items)}")
         lines.append("─" * 50)
         for item in nok_items:
-            comment_str = f" | Commentaire: {item.comment}" if item.comment else ""
+            comment_str = f" | Comment: {item.comment}" if item.comment else ""
             version_str = f" | Version: {item.version}" if item.version else ""
             lines.append(f"  ❌ {item.req_id}: {item.conformity_raw}{version_str}{comment_str}")
         lines.append("")
@@ -2280,10 +2280,10 @@ def generate_report_text(analysis: ConformityAnalysis) -> str:
     na_items = [item for item in analysis.items if item.conformity_category == "NA"]
     if na_items:
         lines.append("─" * 50)
-        lines.append(f"EXIGENCES NON APPLICABLES (NA) — {len(na_items)}")
+        lines.append(f"NOT APPLICABLE REQUIREMENTS (NA) — {len(na_items)}")
         lines.append("─" * 50)
         for item in na_items:
-            comment_str = f" | Commentaire: {item.comment}" if item.comment else ""
+            comment_str = f" | Comment: {item.comment}" if item.comment else ""
             version_str = f" | Version: {item.version}" if item.version else ""
             lines.append(f"  ⬜ {item.req_id}: {item.conformity_raw}{version_str}{comment_str}")
         lines.append("")
@@ -2292,18 +2292,18 @@ def generate_report_text(analysis: ConformityAnalysis) -> str:
     review_items = [item for item in analysis.items if item.needs_review]
     if review_items:
         lines.append("─" * 50)
-        lines.append(f"EXIGENCES À VÉRIFIER MANUELLEMENT — {len(review_items)}")
+        lines.append(f"REQUIREMENTS TO VERIFY MANUALLY — {len(review_items)}")
         lines.append("─" * 50)
         for item in review_items:
-            conf_str = f"Statut: {item.conformity_category} ('{item.conformity_raw}')"
-            comment_str = f" | Commentaire: {item.comment}" if item.comment else ""
+            conf_str = f"Status: {item.conformity_category} ('{item.conformity_raw}')"
+            comment_str = f" | Comment: {item.comment}" if item.comment else ""
             lines.append(f"  🔍 {item.req_id}: {conf_str}{comment_str}")
         lines.append("")
 
     # Deep analysis findings (unified: covers all OK suspicion signals)
     if analysis.inconsistencies:
         lines.append("─" * 50)
-        lines.append(f"ANALYSE APPROFONDIE DES RÉPONSES OK — {len(analysis.inconsistencies)} point(s) d'attention")
+        lines.append(f"DEEP ANALYSIS OF OK RESPONSES — {len(analysis.inconsistencies)} point(s) of attention")
         lines.append("─" * 50)
         for inc in analysis.inconsistencies:
             sev = inc.get("severity", "warning")
@@ -2311,22 +2311,22 @@ def generate_report_text(analysis: ConformityAnalysis) -> str:
             signals = ", ".join(inc.get("signals", []))
             lines.append(f"  {icon} [{sev.upper()}] {inc.get('reqId', inc.get('req_id', ''))} (score: {inc.get('score', 0)})")
             if signals:
-                lines.append(f"     Signaux: {signals}")
+                lines.append(f"     Signals: {signals}")
             if inc.get('conformity'):
-                lines.append(f"     Conformité: '{inc['conformity']}'")
+                lines.append(f"     Conformity: '{inc['conformity']}'")
             if inc.get('comment'):
-                lines.append(f"     Commentaire: '{inc['comment'][:200]}'")
+                lines.append(f"     Comment: '{inc['comment'][:200]}'")
             if inc.get('aiComment'):
-                lines.append(f"     Analyse: {inc['aiComment']}")
+                lines.append(f"     Analysis: {inc['aiComment']}")
             lines.append("")
     else:
         lines.append("─" * 50)
-        lines.append("✅ ANALYSE APPROFONDIE DES OK — Aucun point d'attention détecté")
+        lines.append("✅ DEEP ANALYSIS OF OK RESPONSES — No point of attention detected")
         lines.append("─" * 50)
         lines.append("")
 
     lines.append("=" * 70)
-    lines.append("Fin du rapport — LEON Conformity Matrix Analyzer")
+    lines.append("End of report — LEON Conformity Matrix Analyzer")
     lines.append("=" * 70)
 
     report = "\n".join(lines)
@@ -2670,48 +2670,48 @@ def _generate_comparison_report(comparison: MatrixComparison, file_names: List[s
     lines: List[str] = []
 
     lines.append("=" * 70)
-    lines.append("LEON — Rapport de Comparaison Multi-Matrices de Conformité")
+    lines.append("LEON — Multi-Matrix Conformity Comparison Report")
     lines.append("=" * 70)
     lines.append("")
 
     # Per-matrix summary
     lines.append("─" * 50)
-    lines.append("RÉSUMÉ PAR MATRICE")
+    lines.append("SUMMARY BY MATRIX")
     lines.append("─" * 50)
     for matrix_info in comparison.matrices:
         lines.append(f"\n  📊 {matrix_info['fileName']}")
-        lines.append(f"     Feuille: {matrix_info['sheetName']}")
-        lines.append(f"     Total: {matrix_info['totalRows']} exigences")
+        lines.append(f"     Sheet: {matrix_info['sheetName']}")
+        lines.append(f"     Total: {matrix_info['totalRows']} requirements")
         summary = matrix_info.get("summary", {})
         lines.append(f"     OK: {summary.get('ok', 0)} | NOK: {summary.get('nok', 0)} | "
                      f"NA: {summary.get('na', 0)} | EMPTY: {summary.get('empty', 0)}")
-        lines.append(f"     Incohérences IA: {matrix_info.get('inconsistencies', 0)}")
+        lines.append(f"     AI inconsistencies: {matrix_info.get('inconsistencies', 0)}")
     lines.append("")
 
     # Comparison summary
     lines.append("─" * 50)
-    lines.append("COMPARAISON")
+    lines.append("COMPARISON")
     lines.append("─" * 50)
-    lines.append(f"  Exigences comparées: {comparison.total_compared}")
-    lines.append(f"  Changements de statut: {comparison.total_changes}")
-    lines.append(f"  Exigences manquantes: {comparison.total_missing}")
+    lines.append(f"  Requirements compared: {comparison.total_compared}")
+    lines.append(f"  Status changes: {comparison.total_changes}")
+    lines.append(f"  Missing requirements: {comparison.total_missing}")
     lines.append("")
 
     # Status changes
     if comparison.status_changes:
         lines.append("─" * 50)
-        lines.append(f"CHANGEMENTS DE STATUT — {len(comparison.status_changes)}")
+        lines.append(f"STATUS CHANGES — {len(comparison.status_changes)}")
         lines.append("─" * 50)
         improvements = [c for c in comparison.status_changes if c["improvement"]]
         regressions = [c for c in comparison.status_changes if not c["improvement"]]
 
         if improvements:
-            lines.append(f"\n  ✅ AMÉLIORATIONS ({len(improvements)}):")
+            lines.append(f"\n  ✅ IMPROVEMENTS ({len(improvements)}):")
             for change in improvements[:20]:
                 lines.append(f"    {change['reqId']}: {change['from']} → {change['to']}")
 
         if regressions:
-            lines.append(f"\n  ❌ RÉGRESSIONS ({len(regressions)}):")
+            lines.append(f"\n  ❌ REGRESSIONS ({len(regressions)}):")
             for change in regressions[:20]:
                 lines.append(f"    {change['reqId']}: {change['from']} → {change['to']}")
         lines.append("")
@@ -2719,16 +2719,16 @@ def _generate_comparison_report(comparison: MatrixComparison, file_names: List[s
     # Missing requirements
     if comparison.missing_in:
         lines.append("─" * 50)
-        lines.append("EXIGENCES MANQUANTES")
+        lines.append("MISSING REQUIREMENTS")
         lines.append("─" * 50)
         for matrix_name, req_ids in comparison.missing_in.items():
-            lines.append(f"\n  Absentes dans '{matrix_name}': {len(req_ids)} exigences")
+            lines.append(f"\n  Missing in '{matrix_name}': {len(req_ids)} requirements")
             for req_id in req_ids[:20]:
                 lines.append(f"    {req_id}")
         lines.append("")
 
     lines.append("=" * 70)
-    lines.append("Fin du rapport — LEON Multi-Matrix Comparison")
+    lines.append("End of report — LEON Multi-Matrix Comparison")
     lines.append("=" * 70)
 
     comparison.report_text = "\n".join(lines)

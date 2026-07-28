@@ -294,7 +294,7 @@ def handle_validate(file_name: str) -> func.HttpResponse:
 
     from app.qa.evidence_comparator import validate_with_evidence
     try:
-        report = validate_with_evidence(file_name, text)
+        report = validate_with_evidence(file_name, text, source_path=file_path)
     except Exception as val_exc:
         import traceback
         logging.error(f"Validation crashed: {val_exc}\n{traceback.format_exc()}")
@@ -423,7 +423,9 @@ def handle_upload_and_validate(file_name: str, file_bytes: bytes) -> func.HttpRe
 
     from app.qa.evidence_comparator import validate_with_evidence
     try:
-        report = validate_with_evidence(saved_path.name, text)
+        report = validate_with_evidence(
+            saved_path.name, text, source_path=saved_path, include_semantic_analysis=True
+        )
     except Exception as val_exc:
         import traceback
         logging.error(f"Validation crashed: {val_exc}\n{traceback.format_exc()}")
@@ -439,15 +441,12 @@ def handle_upload_and_validate(file_name: str, file_bytes: bytes) -> func.HttpRe
         f"{report.get('summary', '')}"
     )
 
-    # ── Generate PDF (base64 for JSON response) ──────────────
+    # ── PDF report intentionally not produced here ────────────
+    # The spec validator ships the Word report only (dropped on request).
+    # The key stays in the response as empty/False so existing consumers
+    # keep parsing; /api/upload-and-validate-pdf and /api/validation-pdf
+    # remain available for anyone who still needs a PDF.
     pdf_base64 = ""
-    try:
-        from app.qa.pdf_report import generate_validation_pdf
-        import base64 as _b64
-        pdf_bytes = generate_validation_pdf(report)
-        pdf_base64 = _b64.b64encode(pdf_bytes).decode("ascii")
-    except Exception as exc:
-        logging.warning(f"PDF generation failed (non-fatal): {exc}")
 
     # ── Generate unified DOCX document (standardized template) ──
     docx_base64 = ""
@@ -471,6 +470,19 @@ def handle_upload_and_validate(file_name: str, file_bytes: bytes) -> func.HttpRe
     except Exception as exc:
         logging.warning(f"DOCX generation failed (non-fatal): {exc}")
 
+    # ── Generate the annotated spec (original doc, problems highlighted yellow) ──
+    annotated_base64 = ""
+    annotated_highlight_count = 0
+    try:
+        from app.qa.spec_annotator import generate_annotated_spec
+        import base64 as _b643
+        annotated_result = generate_annotated_spec(file_bytes, suffix, report)
+        if annotated_result:
+            annotated_bytes, annotated_highlight_count = annotated_result
+            annotated_base64 = _b643.b64encode(annotated_bytes).decode("ascii")
+    except Exception as exc:
+        logging.warning(f"Annotated spec generation failed (non-fatal): {exc}")
+
     # ── Return JSON with all fields for Copilot Studio ────────
     # CRITICAL: Must return JSON (not raw PDF bytes) so Copilot Studio
     # can parse output bindings (answer, verdict, overallScore, etc.)
@@ -491,6 +503,10 @@ def handle_upload_and_validate(file_name: str, file_bytes: bytes) -> func.HttpRe
         "documentBase64": docx_base64,
         "documentUrl": document_url,
         "documentAvailable": bool(docx_base64),
+        # Original spec with every flagged passage highlighted in yellow
+        "annotatedSpecBase64": annotated_base64,
+        "annotatedSpecAvailable": bool(annotated_base64),
+        "annotatedSpecHighlightCount": annotated_highlight_count,
     }
     return func.HttpResponse(
         body=json.dumps(val_body, ensure_ascii=False, default=str),
@@ -532,7 +548,7 @@ def handle_upload_and_validate_pdf(file_name: str, file_bytes: bytes) -> func.Ht
         )
 
     from app.qa.evidence_comparator import validate_with_evidence
-    report = validate_with_evidence(saved_path.name, text)
+    report = validate_with_evidence(saved_path.name, text, source_path=saved_path)
 
     # Generate PDF
     try:
@@ -759,7 +775,7 @@ def handle_validate_url(file_url: str, file_name: str = "") -> func.HttpResponse
 
     from app.qa.evidence_comparator import validate_with_evidence
     try:
-        report = validate_with_evidence(saved_path.name, text)
+        report = validate_with_evidence(saved_path.name, text, source_path=saved_path)
     except Exception as val_exc:
         import traceback
         logging.error(f"Validation crashed: {val_exc}\n{traceback.format_exc()}")
@@ -991,7 +1007,7 @@ def handle_validation_pdf(file_name: str) -> func.HttpResponse:
         )
 
     from app.qa.evidence_comparator import validate_with_evidence
-    report = validate_with_evidence(file_name, text)
+    report = validate_with_evidence(file_name, text, source_path=file_path)
 
     try:
         from app.qa.pdf_report import generate_validation_pdf

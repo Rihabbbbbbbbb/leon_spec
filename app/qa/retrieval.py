@@ -219,20 +219,85 @@ def extract_text_from_file(path: Path) -> str:
     return ""
 
 
+def _iter_docx_block_items(parent):
+    """
+    Yield each top-level body child of a python-docx Document as a
+    Paragraph or Table, in TRUE VISUAL DOCUMENT ORDER (interleaved, exactly
+    as they appear), instead of python-docx's separate .paragraphs/.tables
+    collections which each only preserve order WITHIN their own type.
+
+    This matters: a heading followed immediately by its data table must
+    stay adjacent in the extracted text. Grouping "all paragraphs, then
+    all tables" (the previous approach) can put a heading at the top of
+    the document and its table hundreds of lines later, once all OTHER
+    tables from the whole document are appended after every paragraph.
+    """
+    from docx.oxml.ns import qn
+    from docx.table import Table
+    from docx.text.paragraph import Paragraph
+
+    for child in parent.element.body.iterchildren():
+        if child.tag == qn("w:p"):
+            yield Paragraph(child, parent)
+        elif child.tag == qn("w:tbl"):
+            yield Table(child, parent)
+
+
+def extract_cell_text(cell) -> str:
+    """
+    Return ALL text inside a table cell, INCLUDING any table(s) nested
+    inside it (recursively).
+
+    python-docx's own `Cell.text` property only concatenates the cell's
+    own paragraphs and silently returns "" for any content that lives in
+    a nested <w:tbl> — which real CTS specs use routinely (e.g. a
+    "Description of the requirement" cell whose actual content is a
+    failure-mode sub-table: "Failure mode | Physical failure mode |
+    Maximum value..."). Without this, every check downstream of DOCX
+    extraction is blind to that requirement's substance: no "shall"
+    statement, no placeholder, no standard citation is ever seen because
+    the cell reads as empty.
+    """
+    from docx.oxml.ns import qn
+    from docx.table import Table
+    from docx.text.paragraph import Paragraph
+
+    parts: List[str] = []
+    for child in cell._tc.iterchildren():
+        if child.tag == qn("w:p"):
+            text = Paragraph(child, cell).text.strip()
+            if text:
+                parts.append(text)
+        elif child.tag == qn("w:tbl"):
+            nested = Table(child, cell)
+            for row in nested.rows:
+                row_cells = [extract_cell_text(c) for c in row.cells]
+                row_cells = [rc for rc in row_cells if rc]
+                if row_cells:
+                    parts.append(" | ".join(row_cells))
+    return "\n".join(parts)
+
+
 def _extract_docx(path: Path) -> str:
-    """Extract text from a .docx file (paragraphs + table cells)."""
+    """Extract text from a .docx file (paragraphs + table cells, including
+    any nested tables — see extract_cell_text), in true document order
+    (see _iter_docx_block_items)."""
     from docx import Document
+    from docx.table import Table
+
     doc = Document(str(path))
     parts: List[str] = []
-    for para in doc.paragraphs:
-        t = para.text.strip()
-        if t:
-            parts.append(t)
-    for table in doc.tables:
-        for row in table.rows:
-            cells = [c.text.strip() for c in row.cells if c.text.strip()]
-            if cells:
-                parts.append(" | ".join(cells))
+    for block in _iter_docx_block_items(doc):
+        if isinstance(block, Table):
+            for row in block.rows:
+                cells = [extract_cell_text(c).strip() for c in row.cells]
+                cells = [c for c in cells if c]
+                if cells:
+                    parts.append(" | ".join(cells))
+        else:
+            t = block.text.strip()
+            if t:
+                parts.append(t)
     return "\n".join(parts)
 
 
