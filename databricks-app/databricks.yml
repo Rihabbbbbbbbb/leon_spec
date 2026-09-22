@@ -1,0 +1,54 @@
+# DABs bundle for the LEON Databricks App.
+# Deploy with:  databricks bundle validate --profile <PROFILE>
+#               databricks apps deploy leon-spec -t dev --profile <PROFILE>
+bundle:
+  name: leon-spec-validator
+
+resources:
+  apps:
+    leon-spec:
+      name: leon-spec
+      description: "LEON — CTS conformity analysis, spec validation, and grounded Q&A."
+      source_code_path: .
+
+      # Secret resources: the app's service principal is auto-granted READ on
+      # deploy. Create the scope + keys first (see README.md).
+      resources:
+        - name: azure-openai-api-key
+          description: "Azure OpenAI API key"
+          secret:
+            scope: leon
+            key: azure-openai-api-key
+            permission: READ
+        - name: azure-search-api-key
+          description: "Azure AI Search admin/query key"
+          secret:
+            scope: leon
+            key: azure-search-api-key
+            permission: READ
+
+      config:
+        command:
+          - python
+          - main.py
+        env:
+          - name: AZURE_OPENAI_ENDPOINT
+            value: "https://Ragchatbotemwh.services.ai.azure.com/openai/v1/"
+          - name: AZURE_OPENAI_LLM_DEPLOYMENT
+            value: "gpt-4o"
+          - name: AZURE_OPENAI_EMBEDDING_DEPLOYMENT
+            value: "text-embedding-3-large"
+          - name: AZURE_SEARCH_ENDPOINT
+            value: "https://leon-spec-search-915f.search.windows.net"
+          - name: AZURE_SEARCH_INDEX_NAME
+            value: "leon-specs-index"
+          - name: AZURE_OPENAI_API_KEY
+            valueFrom: azure-openai-api-key
+          - name: AZURE_SEARCH_API_KEY
+            valueFrom: azure-search-api-key
+
+targets:
+  dev:
+    default: true
+    workspace:
+      host: https://adb-5678659344564033.13.azuredatabricks.net

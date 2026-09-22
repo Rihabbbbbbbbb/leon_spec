@@ -1,0 +1,797 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Spec Q&A Assistant</title>
+  <style>
+    :root {
+      --bg: #0f1115;
+      --panel: #161a22;
+      --panel-2: #1c2230;
+      --border: #2a3142;
+      --text: #e6e9ef;
+      --muted: #8a93a6;
+      --accent: #3b82f6;
+      --accent-hover: #2563eb;
+      --user-bubble: #1f2937;
+      --assistant-bubble: #11151c;
+      --warn: #f59e0b;
+      --ok: #10b981;
+      --mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      font-size: 14px;
+    }
+    .app {
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      max-width: 920px;
+      margin: 0 auto;
+      border-left: 1px solid var(--border);
+      border-right: 1px solid var(--border);
+    }
+    header {
+      padding: 14px 20px;
+      border-bottom: 1px solid var(--border);
+      background: var(--panel);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    header .title { font-weight: 600; font-size: 15px; letter-spacing: 0.2px; }
+    header .title small {
+      display: block; font-weight: 400; color: var(--muted);
+      font-size: 11px; margin-top: 2px;
+    }
+    .badge {
+      font-size: 10px; color: var(--muted);
+      border: 1px solid var(--border); padding: 3px 8px;
+      border-radius: 10px; font-family: var(--mono);
+      display: flex; align-items: center;
+    }
+    .files-bar {
+      padding: 8px 20px;
+      background: var(--panel-2);
+      border-bottom: 1px solid var(--border);
+      font-size: 11px; color: var(--muted);
+      font-family: var(--mono);
+      display: flex; gap: 8px; align-items: center;
+      flex-wrap: wrap;
+    }
+    .files-bar .label { color: var(--muted); }
+    .files-bar .file {
+      color: var(--text);
+      background: var(--panel);
+      border: 1px solid var(--border);
+      padding: 2px 8px; border-radius: 4px;
+    }
+    .files-bar .file.uploaded {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+    .files-bar .file .remove {
+      margin-left: 6px; cursor: pointer; color: var(--muted);
+      font-size: 13px; line-height: 1;
+    }
+    .files-bar .file .remove:hover { color: var(--warn); }
+    .files-bar .file .validate-btn {
+      margin-left: 6px; cursor: pointer; color: var(--accent);
+      font-size: 10px; border: 1px solid var(--border);
+      padding: 1px 6px; border-radius: 3px; user-select: none;
+    }
+    .files-bar .file .validate-btn:hover { border-color: var(--accent); }
+    .files-bar .upload-btn {
+      margin-left: auto; cursor: pointer; color: var(--accent);
+      border: 1px dashed var(--border); padding: 2px 10px;
+      border-radius: 4px; font-size: 11px; user-select: none;
+    }
+    .files-bar .upload-btn:hover { border-color: var(--accent); }
+    .files-bar .upload-btn.uploading { opacity: 0.5; pointer-events: none; }
+    .upload-toast {
+      position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%);
+      background: var(--panel); border: 1px solid var(--border);
+      color: var(--text); padding: 10px 16px; border-radius: 8px;
+      font-size: 13px; box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+      z-index: 100; max-width: 90%;
+    }
+    .upload-toast.ok { border-color: var(--ok); }
+    .upload-toast.err { border-color: var(--warn); }
+    .val-panel {
+      max-width: 82%; background: var(--assistant-bubble);
+      border: 1px solid var(--border); border-radius: 10px;
+      padding: 14px 16px; display: flex; flex-direction: column; gap: 10px;
+    }
+    .val-panel .val-header {
+      display: flex; justify-content: space-between; align-items: center;
+      border-bottom: 1px solid var(--border); padding-bottom: 8px;
+    }
+    .val-panel .val-title { font-weight: 600; font-size: 13px; }
+    .val-verdict {
+      font-size: 11px; font-weight: 600; padding: 3px 10px;
+      border-radius: 10px; font-family: var(--mono); text-transform: uppercase;
+    }
+    .val-verdict.GOOD { background: rgba(16,185,129,0.15); color: var(--ok); border: 1px solid rgba(16,185,129,0.4); }
+    .val-verdict.ACCEPTABLE_WITH_FIXES { background: rgba(245,158,11,0.15); color: var(--warn); border: 1px solid rgba(245,158,11,0.4); }
+    .val-verdict.NOT_RELIABLE { background: rgba(239,68,68,0.15); color: #ef4444; border: 1px solid rgba(239,68,68,0.4); }
+    .val-verdict.NON_COMPLIANT { background: rgba(239,68,68,0.2); color: #ef4444; border: 1px solid rgba(239,68,68,0.5); }
+    .val-scores { display: flex; gap: 12px; flex-wrap: wrap; }
+    .val-score-item {
+      font-size: 11px; color: var(--muted); background: var(--panel-2);
+      padding: 4px 10px; border-radius: 6px; border: 1px solid var(--border);
+    }
+    .val-score-item .val-score-val { color: var(--text); font-weight: 600; }
+    .val-score-bar {
+      height: 4px; background: var(--border); border-radius: 2px;
+      margin-top: 4px; overflow: hidden;
+    }
+    .val-score-bar .val-score-fill { height: 100%; border-radius: 2px; }
+    .val-findings { display: flex; flex-direction: column; gap: 4px; max-height: 300px; overflow-y: auto; }
+    .val-finding {
+      font-size: 12px; padding: 6px 10px; border-radius: 6px;
+      border-left: 3px solid; line-height: 1.4;
+    }
+    .val-finding.error { border-color: #ef4444; background: rgba(239,68,68,0.08); color: var(--text); }
+    .val-finding.warning { border-color: var(--warn); background: rgba(245,158,11,0.08); color: var(--text); }
+    .val-finding.info { border-color: var(--accent); background: rgba(59,130,246,0.08); color: var(--muted); }
+    .val-finding .val-finding-tag {
+      font-size: 10px; text-transform: uppercase; font-weight: 600;
+      margin-right: 6px; font-family: var(--mono);
+    }
+    .val-finding.error .val-finding-tag { color: #ef4444; }
+    .val-finding.warning .val-finding-tag { color: var(--warn); }
+    .val-finding.info .val-finding-tag { color: var(--accent); }
+    .val-summary { font-size: 12px; color: var(--muted); line-height: 1.5; }
+    .history {
+      flex: 1; overflow-y: auto; padding: 20px;
+      display: flex; flex-direction: column; gap: 16px;
+    }
+    .msg { display: flex; flex-direction: column; gap: 6px; }
+    .msg.user { align-items: flex-end; }
+    .msg.assistant { align-items: flex-start; }
+    .bubble {
+      max-width: 82%; padding: 10px 14px; border-radius: 10px;
+      line-height: 1.55; white-space: pre-wrap; word-break: break-word;
+    }
+    .msg.user .bubble { background: var(--user-bubble); border: 1px solid var(--border); }
+    .msg.assistant .bubble { background: var(--assistant-bubble); border: 1px solid var(--border); }
+    .sources {
+      max-width: 82%; font-size: 12px; color: var(--muted);
+      display: flex; flex-direction: column; gap: 6px;
+    }
+    .source-item {
+      border-left: 2px solid var(--accent);
+      padding: 6px 10px; background: var(--panel-2);
+      border-radius: 0 6px 6px 0;
+    }
+    .source-item .fn {
+      font-family: var(--mono); color: var(--text);
+      font-size: 11px; margin-bottom: 3px;
+    }
+    .source-item .ex {
+      color: var(--muted); font-size: 12px; white-space: pre-wrap;
+      max-height: 110px; overflow: hidden;
+    }
+    .source-item .ex.full { max-height: none; }
+    .source-item .toggle {
+      font-size: 10px; color: var(--accent); cursor: pointer;
+      margin-top: 4px; user-select: none;
+    }
+    .source-item .toggle:hover { text-decoration: underline; }
+    .role-tag {
+      font-size: 10px; color: var(--muted);
+      text-transform: uppercase; letter-spacing: 0.5px;
+    }
+    .msg.assistant .meta {
+      display: flex; gap: 8px; align-items: center;
+      max-width: 82%;
+    }
+    .confidence-badge {
+      font-size: 10px; font-weight: 600; letter-spacing: 0.5px;
+      padding: 2px 8px; border-radius: 10px;
+      text-transform: uppercase; font-family: var(--mono);
+    }
+    .confidence-badge.HIGH { background: rgba(16,185,129,0.15); color: var(--ok); border: 1px solid rgba(16,185,129,0.4); }
+    .confidence-badge.MEDIUM { background: rgba(245,158,11,0.15); color: var(--warn); border: 1px solid rgba(245,158,11,0.4); }
+    .confidence-badge.LOW { background: rgba(239,68,68,0.15); color: #ef4444; border: 1px solid rgba(239,68,68,0.4); }
+    .composer {
+      border-top: 1px solid var(--border); background: var(--panel);
+      padding: 12px 16px; display: flex; gap: 10px; align-items: flex-end;
+    }
+    .composer textarea {
+      flex: 1; resize: none; min-height: 42px; max-height: 120px;
+      padding: 10px 12px; background: var(--panel-2);
+      border: 1px solid var(--border); border-radius: 8px;
+      color: var(--text); font-family: inherit; font-size: 14px; outline: none;
+    }
+    .composer textarea:focus { border-color: var(--accent); }
+    .composer button {
+      padding: 10px 18px; background: var(--accent); color: white;
+      border: none; border-radius: 8px; font-weight: 600;
+      cursor: pointer; font-size: 14px;
+    }
+    .composer button:hover:not(:disabled) { background: var(--accent-hover); }
+    .composer button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .loading-dots span {
+      display: inline-block; width: 6px; height: 6px;
+      background: var(--muted); border-radius: 50%;
+      margin: 0 2px; animation: bounce 1.2s infinite ease-in-out;
+    }
+    .loading-dots span:nth-child(2) { animation-delay: 0.15s; }
+    .loading-dots span:nth-child(3) { animation-delay: 0.3s; }
+    @keyframes bounce {
+      0%, 80%, 100% { transform: translateY(0); opacity: 0.4; }
+      40% { transform: translateY(-5px); opacity: 1; }
+    }
+    .empty-state {
+      text-align: center; color: var(--muted);
+      margin: auto; max-width: 440px; line-height: 1.6;
+    }
+    .empty-state h2 { color: var(--text); font-weight: 600; margin-bottom: 8px; }
+    .examples { display: flex; flex-direction: column; gap: 6px; margin-top: 14px; }
+    .examples button {
+      background: var(--panel-2); border: 1px solid var(--border);
+      color: var(--text); padding: 8px 12px; border-radius: 6px;
+      cursor: pointer; text-align: left; font-size: 13px;
+    }
+    .examples button:hover { border-color: var(--accent); }
+    .status-dot {
+      display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+      margin-right: 5px;
+    }
+    .status-dot.ok { background: var(--ok); }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <!-- React + ReactDOM only (NO Babel — we use React.createElement directly) -->
+  <script crossorigin src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+
+  <script>
+    (function () {
+      "use strict";
+      var h = React.createElement;
+      var useState = React.useState;
+      var useRef = React.useRef;
+      var useEffect = React.useEffect;
+      var useCallback = React.useCallback;
+
+      // ── API client (separated from UI) ──────────────────────────────
+      function askQuestion(question) {
+        return fetch("/api/ask", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ question: question })
+        }).then(function (res) {
+          if (!res.ok) throw new Error("Request failed: " + res.status);
+          return res.json();
+        });
+      }
+
+      function fetchFiles() {
+        return fetch("/api/files").then(function (res) {
+          if (!res.ok) return { files: [] };
+          return res.json();
+        }).catch(function () { return { files: [] }; });
+      }
+
+      function uploadFile(file) {
+        var fd = new FormData();
+        fd.append("file", file);
+        return fetch("/api/upload", { method: "POST", body: fd }).then(function (res) {
+          return res.json().then(function (data) {
+            if (!res.ok) throw new Error(data.detail || ("Upload failed: " + res.status));
+            return data;
+          });
+        });
+      }
+
+      function removeFile(fileName) {
+        return fetch("/api/files/" + encodeURIComponent(fileName), {
+          method: "DELETE"
+        }).then(function (res) {
+          return res.json().then(function (data) {
+            if (!res.ok) throw new Error(data.detail || ("Delete failed: " + res.status));
+            return data;
+          });
+        });
+      }
+
+      function validateFile(fileName) {
+        return fetch("/api/validate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ fileName: fileName })
+        }).then(function (res) {
+          return res.json().then(function (data) {
+            if (!res.ok) throw new Error(data.detail || ("Validation failed: " + res.status));
+            return data;
+          });
+        });
+      }
+
+      // Built-in files that cannot be removed by the user
+      var BUILTIN_FILES = ["spec_extracted.txt", "template_extracted.txt"];
+
+      // ── Source citation block ───────────────────────────────────────
+      function SourceItemView(props) {
+        var src = props.source;
+        var expandedState = useState(false);
+        var isExpanded = expandedState[0];
+        var setExpanded = expandedState[1];
+        var excerpt = src.excerpt || "";
+        var isLong = excerpt.length > 280;
+        var display = (!isLong || isExpanded) ? excerpt : (excerpt.slice(0, 277) + "...");
+        return h("div", { className: "source-item" },
+          h("div", { className: "fn" }, "[" + src.fileName + "]"),
+          h("div", { className: "ex" + (isExpanded ? " full" : "") }, display),
+          isLong ? h("div", {
+            className: "toggle",
+            onClick: function () { setExpanded(!isExpanded); }
+          }, isExpanded ? "show less" : "show more") : null
+        );
+      }
+
+      function Sources(props) {
+        var sources = props.sources || [];
+        if (sources.length === 0) return null;
+        return h("div", { className: "sources" },
+          h("div", { className: "role-tag" }, "Sources (" + sources.length + ")"),
+          sources.map(function (s, i) {
+            return h(SourceItemView, { key: i, source: s });
+          })
+        );
+      }
+
+      // ── Single message ──────────────────────────────────────────────
+      function Message(props) {
+        var msg = props.msg;
+        var isUser = msg.role === "user";
+        var conf = msg.confidence || "";
+        var status = msg.status || "";
+        var statusLabel = {
+          "answered": "Answered",
+          "not_found": "Not Found",
+          "refusal": "Refused",
+          "partial": "Partial",
+          "clarify": "Clarification Needed"
+        }[status] || "";
+        var meta = (!isUser && (conf || statusLabel))
+          ? h("div", { className: "meta" },
+              conf ? h("span", { className: "confidence-badge " + conf },
+                "Confidence: " + conf) : null,
+              statusLabel ? h("span", {
+                className: "confidence-badge " + (status === "answered" ? "HIGH" : status === "partial" ? "MEDIUM" : "LOW"),
+                style: { marginLeft: conf ? "8px" : "0" }
+              }, statusLabel) : null
+            )
+          : null;
+        return h("div", { className: "msg " + (isUser ? "user" : "assistant") },
+          h("div", { className: "role-tag" }, isUser ? "You" : "Assistant"),
+          h("div", { className: "bubble" }, msg.text),
+          meta,
+          !isUser && msg.sources ? h(Sources, { sources: msg.sources }) : null
+        );
+      }
+
+      // ── Validation report panel ─────────────────────────────────────
+      function ValidationReport(props) {
+        var r = props.report;
+        var verdictClass = r.verdict || "NOT_RELIABLE";
+        var scorePct = Math.round(r.overallScore * 100);
+        var detailState = useState(false);
+        var showDetail = detailState[0];
+        var setShowDetail = detailState[1];
+        var passOpenState = useState(false);
+        var passOpen = passOpenState[0];
+        var setPassOpen = passOpenState[1];
+        var detailed = r.detailed || {};
+        var errors = detailed.errors || [];
+        var warnings = detailed.warnings || [];
+        var infos = detailed.info || [];
+
+        var scoreItems = Object.keys(r.scores || {}).map(function(key) {
+          var val = r.scores[key];
+          var pct = Math.round(val * 100);
+          var color = pct >= 70 ? "var(--ok)" : pct >= 40 ? "var(--warn)" : "#ef4444";
+          return h("div", { className: "val-score-item", key: key },
+            key.replace(/_/g, " ") + ": ",
+            h("span", { className: "val-score-val" }, pct + "%"),
+            h("div", { className: "val-score-bar" },
+              h("div", { className: "val-score-fill", style: { width: pct + "%", background: color } })
+            )
+          );
+        });
+
+        var findingEl = function(f, i) {
+          var hasWhy = f.why && f.why.length > 0;
+          var hasSource = f.source_rule && f.source_rule.length > 0;
+          var hasExcerpt = f.user_excerpt && f.user_excerpt.length > 0;
+          var hasFix = f.fix_suggestion && f.fix_suggestion.length > 0;
+          var sevColor = f.severity === "error" ? "#ef4444" : f.severity === "warning" ? "var(--warn)" : f.severity === "pass" ? "var(--ok)" : "var(--accent)";
+          return h("div", { className: "val-finding " + f.severity, key: i, style: { borderLeft: "3px solid " + sevColor, padding: "8px 10px", marginBottom: "6px", background: "rgba(255,255,255,0.03)" } },
+            h("div", { style: { display: "flex", alignItems: "flex-start", gap: "6px" } },
+              h("span", { className: "val-finding-tag", style: { background: sevColor + "22", color: sevColor, border: "1px solid " + sevColor + "44" } }, (f.rule_id || f.severity)),
+              h("span", { style: { flex: "1" } }, f.message)
+            ),
+            hasSource ? h("div", {
+              style: { marginTop: "6px", fontSize: "11px", color: "var(--muted)", lineHeight: "1.5", borderLeft: "2px solid rgba(59,130,246,0.3)", paddingLeft: "8px" }
+            }, h("b", { style: { color: "var(--accent)" } }, "\u2696 Source rule (" + (f.source_doc || "source") + "):"), " ", f.source_rule) : null,
+            hasExcerpt ? h("div", {
+              style: { marginTop: "4px", fontSize: "11px", color: "var(--muted)", lineHeight: "1.5", borderLeft: "2px solid rgba(16,185,129,0.3)", paddingLeft: "8px" }
+            }, h("b", { style: { color: "var(--ok)" } }, "\uD83D\uDCC4 User document:"), " ", f.user_excerpt) : null,
+            hasWhy ? h("div", {
+              className: "val-finding-why",
+              style: { marginTop: "4px", fontSize: "11px", color: "var(--muted)", lineHeight: "1.5" }
+            }, h("b", null, "Why:"), " ", f.why) : null,
+            hasFix ? h("div", {
+              style: { marginTop: "4px", fontSize: "11px", color: "var(--ok)", lineHeight: "1.5" }
+            }, h("b", null, "\u2705 Fix:"), " ", f.fix_suggestion) : null
+          );
+        };
+
+        var flatFindings = (r.findings || []).map(function(f, i) {
+          return findingEl(f, i);
+        });
+
+        var summaryCounts = r.summaryCounts || {};
+        var rulesUsed = r.rulesUsed || {};
+        var passes = detailed.pass || [];
+        var toggleBtn = h("div", {
+          style: { display: "flex", gap: "6px", marginBottom: "8px", flexWrap: "wrap" }
+        },
+          h("button", {
+            onClick: function() { setShowDetail(false); },
+            style: {
+              padding: "4px 12px", border: showDetail ? "1px solid var(--border)" : "1px solid var(--accent)",
+              borderRadius: "6px", background: showDetail ? "transparent" : "rgba(59,130,246,0.12)",
+              color: showDetail ? "var(--muted)" : "var(--accent)", cursor: "pointer",
+              fontSize: "11px", fontWeight: "600"
+            }
+          }, "Summary"),
+          h("button", {
+            onClick: function() { setShowDetail(true); },
+            style: {
+              padding: "4px 12px", border: showDetail ? "1px solid var(--accent)" : "1px solid var(--border)",
+              borderRadius: "6px", background: showDetail ? "rgba(59,130,246,0.12)" : "transparent",
+              color: showDetail ? "var(--accent)" : "var(--muted)", cursor: "pointer",
+              fontSize: "11px", fontWeight: "600"
+            }
+          }, "Detailed (" + (r.findings || []).length + ")")
+        );
+
+        var summaryView = h("div", null,
+          h("div", { className: "val-summary" }, r.summary),
+          h("div", { style: { fontSize: "11px", color: "var(--muted)", marginTop: "8px", display: "flex", gap: "12px", flexWrap: "wrap" } },
+            h("span", { style: { color: "#ef4444" } }, "\u2716 Errors: " + (summaryCounts.errors || 0)),
+            h("span", { style: { color: "var(--warn)" } }, "\u26A0 Warnings: " + (summaryCounts.warnings || 0)),
+            h("span", { style: { color: "var(--ok)" } }, "\u2714 Passes: " + (summaryCounts.pass || 0)),
+            h("span", { style: { color: "var(--accent)" } }, "\u2139 Info: " + (summaryCounts.info || 0))
+          ),
+          rulesUsed.extraction_ok !== undefined ? h("div", {
+            style: { marginTop: "10px", padding: "8px 10px", background: "rgba(59,130,246,0.08)", borderRadius: "6px", fontSize: "11px", color: "var(--muted)", lineHeight: "1.6" }
+          },
+            h("b", { style: { color: "var(--accent)" } }, "\uD83D\uDCC2 Rules checked against (100% from source documents):"),
+            h("br"),
+            "\u2022 Template sections: " + (rulesUsed.mandatory_sections_count || 0),
+            h("br"),
+            "\u2022 Writing-guide rules: " + (rulesUsed.writing_guide_rules_count || 0),
+            h("br"),
+            "\u2022 Template instructions: " + (rulesUsed.template_instructions_count || 0),
+            rulesUsed.source_documents ? h("div", { style: { marginTop: "4px" } },
+              "\u2022 Sources: " + rulesUsed.source_documents.join(", ")) : null,
+            rulesUsed.extraction_ok === false ? h("div", { style: { color: "#ef4444", marginTop: "4px" } },
+              "\u26A0 Extraction errors: " + (rulesUsed.errors || []).join("; ")) : null
+          ) : null
+        );
+
+        var detailedView = h("div", { className: "val-findings" },
+          errors.length > 0 ? h("div", { style: { marginBottom: "10px" } },
+            h("div", { style: { fontSize: "12px", fontWeight: "600", color: "#ef4444", marginBottom: "6px" } }, "\u2716 Errors (" + errors.length + ")"),
+            errors.map(function(f, i) { return findingEl(f, "err-" + i); })
+          ) : null,
+          warnings.length > 0 ? h("div", { style: { marginBottom: "10px" } },
+            h("div", { style: { fontSize: "12px", fontWeight: "600", color: "var(--warn)", marginBottom: "6px" } }, "\u26A0 Warnings (" + warnings.length + ")"),
+            warnings.map(function(f, i) { return findingEl(f, "warn-" + i); })
+          ) : null,
+          passes.length > 0 ? h("div", { style: { marginBottom: "10px" } },
+            h("div", { style: { fontSize: "12px", fontWeight: "600", color: "var(--ok)", marginBottom: "6px", cursor: "pointer" }, onClick: function() { setPassOpen(!passOpen); } }, "\u2714 Passed checks (" + passes.length + ") " + (passOpen ? "\u25BC" : "\u25B8")),
+            passOpen ? passes.map(function(f, i) { return findingEl(f, "pass-" + i); }) : null
+          ) : null,
+          infos.length > 0 ? h("div", { style: { marginBottom: "10px" } },
+            h("div", { style: { fontSize: "12px", fontWeight: "600", color: "var(--accent)", marginBottom: "6px" } }, "\u2139 Info (" + infos.length + ")"),
+            infos.map(function(f, i) { return findingEl(f, "info-" + i); })
+          ) : null
+        );
+
+        return h("div", { className: "val-panel" },
+          h("div", { className: "val-header" },
+            h("div", { className: "val-title" },
+              "Evidence-Based Validation: " + r.fileName),
+            h("div", { className: "val-verdict " + verdictClass },
+              r.verdict + " (" + scorePct + "%)")
+          ),
+          h("div", { className: "val-scores" }, scoreItems),
+          toggleBtn,
+          showDetail ? detailedView : summaryView
+        );
+      }
+
+      // ── Main chat app ───────────────────────────────────────────────
+      function App() {
+        var messagesState = useState([]);
+        var messages = messagesState[0];
+        var setMessages = messagesState[1];
+        var inputState = useState("");
+        var input = inputState[0];
+        var setInput = inputState[1];
+        var loadingState = useState(false);
+        var loading = loadingState[0];
+        var setLoading = loadingState[1];
+        var filesState = useState([]);
+        var files = filesState[0];
+        var setFiles = filesState[1];
+        var uploadingState = useState(false);
+        var uploading = uploadingState[0];
+        var setUploading = uploadingState[1];
+        var toastState = useState(null);
+        var toast = toastState[0];
+        var setToast = toastState[1];
+        var valReportState = useState(null);
+        var valReport = valReportState[0];
+        var setValReport = valReportState[1];
+        var validatingState = useState("");
+        var validating = validatingState[0];
+        var setValidating = validatingState[1];
+        var historyRef = useRef(null);
+        var taRef = useRef(null);
+        var fileInputRef = useRef(null);
+
+        var refreshFiles = function () {
+          fetchFiles().then(function (data) { setFiles(data.files || []); });
+        };
+
+        var showToast = function (msg, kind) {
+          setToast({ msg: msg, kind: kind || "ok" });
+          setTimeout(function () { setToast(null); }, 4000);
+        };
+
+        useEffect(function () {
+          refreshFiles();
+        }, []);
+
+        useEffect(function () {
+          if (historyRef.current) {
+            historyRef.current.scrollTop = historyRef.current.scrollHeight;
+          }
+        }, [messages, loading]);
+
+        var send = useCallback(function (text) {
+          var q = (text != null ? text : input).trim();
+          if (!q || loading) return;
+          setInput("");
+          if (taRef.current) taRef.current.style.height = "auto";
+          setMessages(function (m) {
+            return m.concat([{ role: "user", text: q }]);
+          });
+          setLoading(true);
+          askQuestion(q).then(function (data) {
+            // If the server returned a validation report, show it;
+            // otherwise clear any previous validation report.
+            setValReport(data.validationReport || null);
+            setMessages(function (m) {
+              return m.concat([{
+                role: "assistant",
+                text: data.answer,
+                sources: data.sources || [],
+                confidence: data.confidence || "",
+                status: data.status || "answered"
+              }]);
+            });
+          }).catch(function (e) {
+            setMessages(function (m) {
+              return m.concat([{
+                role: "assistant",
+                text: "Error: could not reach the Q&A service. " + e.message,
+                sources: []
+              }]);
+            });
+          }).finally(function () {
+            setLoading(false);
+          });
+        }, [input, loading]);
+
+        var onKeyDown = function (e) {
+          if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            send();
+          }
+        };
+
+        var onInput = function (e) {
+          setInput(e.target.value);
+          var el = e.target;
+          el.style.height = "auto";
+          el.style.height = Math.min(el.scrollHeight, 120) + "px";
+        };
+
+        var onFileChange = function (e) {
+          var file = e.target.files && e.target.files[0];
+          e.target.value = "";  // reset so same file can be re-uploaded
+          if (!file) return;
+          var name = file.name;
+          var ext = name.slice(name.lastIndexOf(".")).toLowerCase();
+          if (ext !== ".txt" && ext !== ".docx" && ext !== ".pdf") {
+            showToast("Unsupported file type. Accepted: .txt, .docx, .pdf", "err");
+            return;
+          }
+          setUploading(true);
+          uploadFile(file).then(function (data) {
+            refreshFiles();
+            showToast(data.message || ("Uploaded " + data.fileName), "ok");
+          }).catch(function (e) {
+            showToast("Upload failed: " + e.message, "err");
+          }).finally(function () {
+            setUploading(false);
+          });
+        };
+
+        var onRemoveFile = function (fileName) {
+          removeFile(fileName).then(function (data) {
+            refreshFiles();
+            showToast(data.message || ("Removed " + fileName), "ok");
+          }).catch(function (e) {
+            showToast("Remove failed: " + e.message, "err");
+          });
+        };
+
+        var triggerUpload = function () {
+          if (fileInputRef.current) fileInputRef.current.click();
+        };
+
+        var onValidate = function (fileName) {
+          setValidating(fileName);
+          setValReport(null);
+          validateFile(fileName).then(function (data) {
+            setValReport(data);
+          }).catch(function (e) {
+            showToast("Validation failed: " + e.message, "err");
+          }).finally(function () {
+            setValidating("");
+          });
+        };
+
+        var examples = [
+          "What is the purpose of the ASU specification?",
+          "Where is the ASU located in the vehicle?",
+          "How does the Heartbeat signal work?",
+          "What are the functional states of the ASU?",
+          "What does the spec say about random noise?",
+          "Validate the document"
+        ];
+
+        var filesBar = h("div", { className: "files-bar" },
+            h("span", { className: "label" }, "Accessible files:"),
+            files.map(function (f, i) {
+              var isUploaded = BUILTIN_FILES.indexOf(f) === -1;
+              return h("span", {
+                className: "file" + (isUploaded ? " uploaded" : ""),
+                key: i
+              },
+                f,
+                isUploaded ? h("span", {
+                  className: "validate-btn",
+                  title: "Validate this file against Stellantis CTS template structure",
+                  onClick: function (e) {
+                    e.stopPropagation();
+                    onValidate(f);
+                  }
+                }, validating === f ? "Validating\u2026" : "Validate") : null,
+                isUploaded ? h("span", {
+                  className: "remove",
+                  title: "Remove this uploaded file",
+                  onClick: function (e) {
+                    e.stopPropagation();
+                    onRemoveFile(f);
+                  }
+                }, "\u00d7") : null
+              );
+            }),
+            h("span", {
+              className: "upload-btn" + (uploading ? " uploading" : ""),
+              onClick: triggerUpload
+            }, uploading ? "Uploading\u2026" : "+ Upload spec file")
+          );
+
+        var hiddenInput = h("input", {
+          ref: fileInputRef,
+          type: "file",
+          accept: ".txt,.docx,.pdf",
+          style: { display: "none" },
+          onChange: onFileChange
+        });
+
+        var toastEl = toast
+          ? h("div", { className: "upload-toast " + toast.kind }, toast.msg)
+          : null;
+
+        var emptyState = messages.length === 0
+          ? h("div", { className: "empty-state" },
+              h("h2", null, "Ask about your specification files"),
+              h("p", null,
+                "This assistant answers only from the accessible specification files listed above. ",
+                "It never invents details and will say when support is not found."),
+              h("div", { className: "examples" },
+                examples.map(function (ex, i) {
+                  return h("button", {
+                    key: i,
+                    onClick: function () { send(ex); }
+                  }, ex);
+                })
+              )
+            )
+          : null;
+
+        var messageList = messages.map(function (m, i) {
+          return h(Message, { key: i, msg: m });
+        });
+
+        var loadingBubble = loading
+          ? h("div", { className: "msg assistant" },
+              h("div", { className: "role-tag" }, "Assistant"),
+              h("div", { className: "bubble loading-dots" },
+                h("span"), h("span"), h("span")
+              )
+            )
+          : null;
+
+        return h("div", { className: "app" },
+          h("header", null,
+            h("div", { className: "title" },
+              "Spec Q&A Assistant",
+              h("small", null, "Grounded answers from accessible specification files only")
+            ),
+            h("div", { className: "badge" },
+              h("span", { className: "status-dot ok" }), "no BeStandard"
+            )
+          ),
+          filesBar,
+          hiddenInput,
+          h("div", { className: "history", ref: historyRef },
+            emptyState,
+            valReport ? h(ValidationReport, { report: valReport }) : null,
+            messageList,
+            loadingBubble
+          ),
+          h("div", { className: "composer" },
+            h("textarea", {
+              ref: taRef,
+              value: input,
+              onChange: onInput,
+              onKeyDown: onKeyDown,
+              placeholder: "Ask a question about the specification\u2026",
+              rows: 1
+            }),
+            h("button", {
+              onClick: function () { send(); },
+              disabled: loading || !input.trim()
+            }, "Ask")
+          ),
+          toastEl
+        );
+      }
+
+      ReactDOM.createRoot(document.getElementById("root"))
+        .render(h(App));
+    })();
+  </script>
+</body>
+</html>
