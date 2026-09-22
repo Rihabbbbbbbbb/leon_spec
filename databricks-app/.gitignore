@@ -1,0 +1,14 @@
+# Ephemeral runtime uploads (never committed)
+data/uploads/*
+!data/uploads/.gitkeep
+
+# Generated embeddings index
+data/reference_index.json
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Secrets
+.env

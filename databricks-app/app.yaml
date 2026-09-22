@@ -1,0 +1,24 @@
+# Databricks Apps runtime configuration (used by UI deploys).
+# For DABs deploys, databricks.yml carries the equivalent `config:` block.
+command:
+  - python
+  - main.py
+
+env:
+  # --- Non-secret Azure endpoints (edit if your resources differ) ---
+  - name: AZURE_OPENAI_ENDPOINT
+    value: "https://Ragchatbotemwh.services.ai.azure.com/openai/v1/"
+  - name: AZURE_OPENAI_LLM_DEPLOYMENT
+    value: "gpt-4o"
+  - name: AZURE_OPENAI_EMBEDDING_DEPLOYMENT
+    value: "text-embedding-3-large"
+  - name: AZURE_SEARCH_ENDPOINT
+    value: "https://leon-spec-search-915f.search.windows.net"
+  - name: AZURE_SEARCH_INDEX_NAME
+    value: "leon-specs-index"
+
+  # --- Secrets (injected from the app's declared secret resources) ---
+  - name: AZURE_OPENAI_API_KEY
+    valueFrom: azure-openai-api-key
+  - name: AZURE_SEARCH_API_KEY
+    valueFrom: azure-search-api-key
