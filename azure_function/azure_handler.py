@@ -2092,3 +2092,98 @@ def handle_conformity_powerbi(file_name: str, file_bytes: Optional[bytes] = None
             mimetype="application/json",
             headers={"Content-Type": "application/json; charset=utf-8"},
         )
+
+
+# ═══════════════════════════════════════════════════════════════════
+# AERIS matrix ↔ TDR cross-check
+# ═══════════════════════════════════════════════════════════════════
+def handle_aeris_crosscheck(files: list) -> func.HttpResponse:
+    """
+    files: list of (file_name, file_bytes) tuples.
+
+    The first spreadsheet (.ods/.xlsx/.xlsm/.xls) is the matrix.
+    Every other supported file is treated as TDR / evidence.
+    """
+    import base64
+    import os
+    import tempfile
+    from pathlib import Path as _Path
+
+    matrix_ext = {".ods", ".xlsx", ".xlsm", ".xls"}
+    evidence_ext = {".pptx", ".ppt", ".pdf", ".docx", ".txt"}
+
+    matrix = None
+    evidence = []
+    for name, blob in files:
+        ext = _Path(name or "").suffix.lower()
+        if ext in matrix_ext and matrix is None:
+            matrix = (name, blob)
+        elif ext in evidence_ext:
+            evidence.append((name, blob))
+        elif ext in matrix_ext:
+            evidence.append((name, blob))  # extra matrices are ignored as evidence
+
+    if not matrix:
+        return func.HttpResponse(
+            body=json.dumps({
+                "answer": "A conformity matrix (.ods / .xlsx / .xlsm) is required.",
+                "status": "error",
+            }, ensure_ascii=False),
+            status_code=400,
+            mimetype="application/json",
+            headers={"Content-Type": "application/json; charset=utf-8"},
+        )
+    if not evidence:
+        return func.HttpResponse(
+            body=json.dumps({
+                "answer": "At least one TDR / PPT / PDF evidence file is required.",
+                "status": "error",
+            }, ensure_ascii=False),
+            status_code=400,
+            mimetype="application/json",
+            headers={"Content-Type": "application/json; charset=utf-8"},
+        )
+
+    tmp_path = None
+    try:
+        from app.qa.aeris_crosscheck import run_crosscheck, report_to_dict
+        from app.qa.aeris_report import generate_aeris_excel
+
+        suffix = _Path(matrix[0]).suffix.lower() or ".xlsx"
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+            tmp.write(matrix[1])
+            tmp_path = tmp.name
+        report = run_crosscheck(tmp_path, evidence, matrix[0])
+        payload = report_to_dict(report)
+        xlsx = generate_aeris_excel(payload)
+        payload["reportExcel"] = base64.b64encode(xlsx).decode("ascii")
+        payload["reportFileName"] = _Path(matrix[0]).stem + "_AERIS_synthesis.xlsx"
+        payload["answer"] = (
+            f"AERIS synthesis: {payload['summary'].get('conforme', 0)} conforme / "
+            f"{payload['summary'].get('total', 0)} requirements "
+            f"({payload['summary'].get('conformityRate', 0)}% on judged items)."
+        )
+        return func.HttpResponse(
+            body=json.dumps(payload, ensure_ascii=False, default=str),
+            status_code=200,
+            mimetype="application/json",
+            headers={"Content-Type": "application/json; charset=utf-8"},
+        )
+    except Exception as exc:
+        import traceback
+        logging.error(f"AERIS cross-check failed: {exc}\n{traceback.format_exc()}")
+        return func.HttpResponse(
+            body=json.dumps({
+                "answer": f"AERIS cross-check failed: {str(exc)[:500]}",
+                "status": "error",
+            }, ensure_ascii=False),
+            status_code=500,
+            mimetype="application/json",
+            headers={"Content-Type": "application/json; charset=utf-8"},
+        )
+    finally:
+        if tmp_path:
+            try:
+                os.unlink(tmp_path)
+            except Exception:
+                pass

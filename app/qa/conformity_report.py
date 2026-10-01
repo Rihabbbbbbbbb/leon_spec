@@ -338,6 +338,7 @@ def _category_fill(category: str):
     return {
         "OK": PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid"),        # Green
         "NOK": PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid"),       # Red
+        "DEVIATION": PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid"), # Amber
         "NA": PatternFill(start_color="D9D9D9", end_color="D9D9D9", fill_type="solid"),         # Gray
         "EMPTY": PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid"),     # White
     }.get(category, PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid"))
@@ -349,6 +350,7 @@ def _category_font(category: str):
     return {
         "OK": Font(color="006100", bold=False),
         "NOK": Font(color="9C0006", bold=True),
+        "DEVIATION": Font(color="9C6500", bold=True),
         "NA": Font(color="3F3F3F", bold=False),
         "EMPTY": Font(color="808080", bold=False),
     }.get(category, Font(color="000000", bold=False))
@@ -411,7 +413,7 @@ def generate_conformity_excel(analysis_dict: dict) -> bytes:
     stats = analysis_dict.get("stats", {})
     total = analysis_dict.get("totalRows", 0)
     row_idx = 9
-    for category in ["OK", "NOK", "NA", "EMPTY"]:
+    for category in ["OK", "NOK", "DEVIATION", "NA", "EMPTY"]:
         count = stats.get(category, 0)
         if count == 0 and category not in ("OK", "NOK", "NA"):
             continue
@@ -455,7 +457,7 @@ def generate_conformity_excel(analysis_dict: dict) -> bytes:
     ws_summary[f"A{chart_data_start}"].font = Font(bold=True, size=9)
     ws_summary[f"B{chart_data_start}"].font = Font(bold=True, size=9)
     pie_row = chart_data_start + 1
-    pie_categories = ["OK", "NOK", "NA", "EMPTY"]
+    pie_categories = ["OK", "NOK", "DEVIATION", "NA", "EMPTY"]
     for cat in pie_categories:
         cnt = stats.get(cat, 0)
         if cnt > 0:
@@ -486,7 +488,7 @@ def generate_conformity_excel(analysis_dict: dict) -> bytes:
         pie_chart.set_categories(cats_ref)
 
         # Color the slices
-        chart_colors = ["28a745", "dc3545", "6c757d", "e9ecef"]
+        chart_colors = ["28a745", "dc3545", "e6a817", "6c757d", "e9ecef"]
         for i, color in enumerate(chart_colors):
             if i < len(pie_chart.series[0].data_points):
                 pt = DataPoint(idx=i)
@@ -804,7 +806,7 @@ def generate_batch_conformity_excel(analyses: List[Dict]) -> bytes:
         ws_ov.cell(row=data_row0, column=DATA_COL, value="Engagement").font = Font(bold=True, size=8)
         ws_ov.cell(row=data_row0, column=DATA_COL + 1, value="Total").font = Font(bold=True, size=8)
         data_row = data_row0 + 1
-        for cat in ("OK", "NOK", "NA", "EMPTY"):
+        for cat in ("OK", "NOK", "DEVIATION", "NA", "EMPTY"):
             count = stats.get(cat, 0)
             if count <= 0:
                 continue
@@ -826,8 +828,8 @@ def generate_batch_conformity_excel(analyses: List[Dict]) -> bytes:
         pie_chart.add_data(data_ref, titles_from_data=True)
         pie_chart.set_categories(cats_ref)
 
-        chart_colors = {"OK": "28a745", "NOK": "dc3545", "NA": "6c757d", "EMPTY": "e9ecef"}
-        cats_in_order = [c for c in ("OK", "NOK", "NA", "EMPTY") if stats.get(c, 0) > 0]
+        chart_colors = {"OK": "28a745", "NOK": "dc3545", "DEVIATION": "e6a817", "NA": "6c757d", "EMPTY": "e9ecef"}
+        cats_in_order = [c for c in ("OK", "NOK", "DEVIATION", "NA", "EMPTY") if stats.get(c, 0) > 0]
         for i, cat in enumerate(cats_in_order):
             pt = DataPoint(idx=i)
             pt.graphicalProperties.solidFill = chart_colors[cat]

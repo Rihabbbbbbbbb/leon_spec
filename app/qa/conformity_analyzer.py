@@ -520,6 +520,8 @@ _OK_VALUES = {"ok", "conforme", "conform", "c", "yes", "oui", "/", "ko→ok"}
 _NOK_VALUES = {"nok", "non conforme", "non conform", "nc", "no", "non", "ko"}
 _NA_VALUES = {"na", "n/a", "not applicable", "non applicable", "non app",
               "non implémenté", "non implemente", "non implante"}
+_DEV_VALUES = {"deviation", "déviation", "deviation accepted", "écart",
+               "ecart", "waiver", "waived", "dev"}
 
 # Stellantis domain responsibility codes — when these appear alone (without ": ok"),
 # they are just domain assignments (EMPTY — no conformity assessment yet).
@@ -534,7 +536,7 @@ _DOMAIN_CODES = {
 def classify_conformity(value: str, is_assessment: bool = True) -> str:
     """
     Classify a conformity value into a normalized category.
-    Returns one of: OK, NOK, NA, EMPTY
+    Returns one of: OK, NOK, NA, DEVIATION, EMPTY
 
     Handles Stellantis-specific patterns:
     - "/" = conform (OK)
@@ -557,6 +559,14 @@ def classify_conformity(value: str, is_assessment: bool = True) -> str:
     # Check NOK first (before OK, since "NOK" contains "OK")
     if norm in _NOK_VALUES or norm.startswith("nok"):
         return "NOK"
+
+    # Declared supplier deviation (accepted gap vs the original requirement)
+    if norm in _DEV_VALUES or norm.startswith("deviation") or norm.startswith("déviation"):
+        return "DEVIATION"
+    if re.search(r"\b(deviation|d[ée]viation|[ée]cart)\b", norm) and not re.search(
+        r"\b(no|sans|without)\s+(deviation|d[ée]viation|[ée]cart)\b", norm
+    ):
+        return "DEVIATION"
 
     # Domain-specific OK patterns: "EE: ok", "SW: ok", "TP: ok", "ME: ok", "OPT: OK"
     # Also "EE: ok SW: ok" (multi-domain), "DQ: ok", "CG 20260316:OK"
@@ -691,6 +701,7 @@ def _detect_assessment_columns(
 # Category priority for combining multiple column sets (higher = worse)
 _CATEGORY_PRIORITY = {
     "NOK": 6,
+    "DEVIATION": 5,
     "NA": 1,
     "EMPTY": 0,
     "OK": -1,
@@ -2049,6 +2060,7 @@ def analyze_ok_deep(analysis: ConformityAnalysis) -> List[Dict]:
 _CHART_COLORS = {
     "OK": "#28a745",        # Green
     "NOK": "#dc3545",       # Red
+    "DEVIATION": "#e6a817", # Amber
     "NA": "#6c757d",        # Gray
     "EMPTY": "#e9ecef",     # Light gray
 }
@@ -2404,6 +2416,7 @@ def analysis_to_dict(analysis: ConformityAnalysis) -> dict:
             "total": analysis.total_rows,
             "ok": analysis.stats.get("OK", 0),
             "nok": analysis.stats.get("NOK", 0),
+            "deviation": analysis.stats.get("DEVIATION", 0),
             "na": analysis.stats.get("NA", 0),
             "empty": analysis.stats.get("EMPTY", 0),
             "inconsistencies": len(analysis.inconsistencies),

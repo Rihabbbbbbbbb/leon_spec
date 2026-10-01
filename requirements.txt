@@ -22,3 +22,4 @@ fpdf2>=2.7.8
 odfpy>=1.4.1
 openpyxl>=3.1.0
 matplotlib>=3.8.0
+python-pptx>=1.0.0

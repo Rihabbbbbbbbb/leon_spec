@@ -24,12 +24,17 @@ Open this link in any browser (works from anywhere, nothing to install):
 
 > **https://leon-spec-gbexcnefdmakfpdg.francecentral-01.azurewebsites.net/api/conformity-ui**
 
-The interface has two tabs:
+The interface has three tabs:
 
 **📊 Matrice de Conformité**
 1. **Click or drag** your matrix file (`.ods`, `.xlsx`, `.xlsm`) into the upload zone.
 2. Click **📊 Analyser la conformité** — statistics, pie chart, points d'attention and the full requirements table appear on screen.
 3. Click **📗 Rapport Excel** to download the color-coded Excel report.
+
+**🔎 Matrix ↔ TDR (AERIS)**
+1. Upload the supplier conformity matrix **and** the TDR / PPT / PDF technical dossier.
+2. Click **🔎 Cross-check matrix ↔ TDR**. AERIS extracts measurable targets (≤100 mA, >95 % @32°, contrast ≥400:1…), finds the matching slide/page, compares the numbers, and flags when the matrix says OK but the TDR does not.
+3. Download the **📗 Synthesis Excel** (Synthesis / Findings / Top risks / Conditions).
 
 **📄 Validation de Spec**
 1. **Click or drag** a specification file (`.docx`, `.pdf`, `.txt`).

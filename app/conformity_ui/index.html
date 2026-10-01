@@ -23,6 +23,8 @@
       --accent-hover: #1739ab;
       --ok: #157347;
       --nok: #b3261e;
+      --dev: #9a5b00;
+      --partial: #c65911;
       --na: #5b6b7c;
       --empty: #c7cfd9;
       --warn: #9a5b00;
@@ -270,6 +272,8 @@
     .stat-ok .value { color: var(--ok); }
     .stat-nok .value { color: var(--nok); }
     .stat-na .value { color: var(--na); }
+    .stat-dev .value { color: var(--dev); }
+    .stat-partial .value { color: var(--partial); }
     .stat-total .value { color: var(--accent); }
     .stat-inc .value { color: var(--error); }
     .stat-warn .value { color: var(--warn); }
@@ -326,6 +330,27 @@
     .badge-NOK { background: rgba(179,38,30,0.12); color: var(--nok); }
     .badge-NA { background: rgba(91,107,124,0.12); color: var(--na); }
     .badge-EMPTY { background: rgba(91,107,124,0.08); color: var(--muted); }
+    .badge-DEVIATION { background: rgba(154,91,0,0.14); color: var(--dev); }
+    .badge-CONFORME { background: rgba(21,115,71,0.12); color: var(--ok); }
+    .badge-NON_CONFORME { background: rgba(179,38,30,0.12); color: var(--nok); }
+    .badge-PARTIELLEMENT_CONFORME { background: rgba(198,89,17,0.14); color: var(--partial); }
+    .badge-PREUVE_INSUFFISANTE { background: rgba(29,78,216,0.10); color: var(--accent); }
+    .badge-MANQUANT { background: rgba(91,107,124,0.10); color: var(--muted); }
+    .badge-ALIGNED { background: rgba(21,115,71,0.12); color: var(--ok); }
+    .badge-MATRIX_TOO_OPTIMISTIC { background: rgba(179,38,30,0.12); color: var(--nok); }
+    .badge-MATRIX_TOO_PESSIMISTIC { background: rgba(154,91,0,0.14); color: var(--dev); }
+    .badge-UNVERIFIABLE { background: rgba(29,78,216,0.10); color: var(--accent); }
+    .badge-MATRIX_SILENT { background: rgba(198,89,17,0.14); color: var(--partial); }
+    .badge-VERY_HIGH, .badge-HIGH { background: rgba(21,115,71,0.12); color: var(--ok); }
+    .badge-MEDIUM { background: rgba(154,91,0,0.14); color: var(--dev); }
+    .badge-LOW, .badge-NONE { background: rgba(91,107,124,0.10); color: var(--muted); }
+    .dual-upload { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    @media (max-width: 800px) { .dual-upload { grid-template-columns: 1fr; } }
+    .risk-chip {
+      display: inline-block; padding: 6px 12px; margin: 0 8px 8px 0;
+      border-radius: 8px; background: var(--panel-2); border: 1px solid var(--border);
+      font-size: 12px;
+    }
 
     /* Inconsistency cards */
     .inc-card {
@@ -479,7 +504,7 @@
 <body>
   <header>
     <h1>LEON — Quality Analysis
-      <small>FNR Conformity Matrix · Spec Validation · AI Analysis · Excel/Word Reports · Stellantis Mechatronics Engineering</small>
+      <small>FNR Conformity Matrix · Matrix ↔ TDR Cross-Check · Spec Validation · Stellantis Mechatronics Engineering</small>
     </h1>
     <span id="health-badge" class="health-badge health-err">Checking…</span>
   </header>
@@ -488,6 +513,7 @@
   <!-- Tabs -->
   <div class="tabs">
     <button class="tab active" data-tab="analyze" onclick="switchTab('analyze')">📊 Conformity Matrix</button>
+    <button class="tab" data-tab="aeris" onclick="switchTab('aeris')">🔎 Matrix ↔ TDR</button>
     <button class="tab" data-tab="validator" onclick="switchTab('validator')">📄 Spec Validation</button>
   </div>
 
@@ -566,6 +592,7 @@
           <button class="filter-btn active" data-filter="ALL" onclick="setFilter('ALL')">All</button>
           <button class="filter-btn" data-filter="OK" onclick="setFilter('OK')">✅ OK</button>
           <button class="filter-btn" data-filter="NOK" onclick="setFilter('NOK')">❌ NOK</button>
+          <button class="filter-btn" data-filter="DEVIATION" onclick="setFilter('DEVIATION')">⚠ Deviation</button>
           <button class="filter-btn" data-filter="NA" onclick="setFilter('NA')">⬜ NA</button>
           <button class="filter-btn" data-filter="EMPTY" onclick="setFilter('EMPTY')">⬜ EMPTY</button>
         </div>
@@ -584,6 +611,96 @@
           </table>
         </div>
         <div class="muted mt-16" id="items-count"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════════════ -->
+  <!-- TAB: AERIS Matrix ↔ TDR -->
+  <!-- ═══════════════════════════════════════════════════════════════ -->
+  <div id="tab-aeris" class="hidden">
+    <div class="panel">
+      <h2>AERIS — prove each matrix row against the supplier TDR</h2>
+      <p class="muted mb-16">
+        Upload the conformity matrix <strong>and</strong> the supplier technical dossier
+        (PPT / PDF / DOCX / TXT). AERIS extracts measurable targets (≤100&nbsp;mA, &gt;95&nbsp;% @32°,
+        contrast ≥400:1…), finds the matching evidence slide/page, compares the numbers,
+        and flags when the matrix says OK but the TDR does not.
+      </p>
+      <div class="dual-upload">
+        <div>
+          <h2>1. Conformity matrix</h2>
+          <div class="upload-zone" id="aeris-matrix-zone" onclick="document.getElementById('aeris-matrix-input').click()">
+            <div class="upload-icon">📊</div>
+            <p><strong>Click or drag the matrix</strong></p>
+            <p>.ods, .xlsx, .xlsm</p>
+            <input type="file" id="aeris-matrix-input" accept=".ods,.xlsx,.xlsm" />
+          </div>
+          <div id="aeris-matrix-info"></div>
+        </div>
+        <div>
+          <h2>2. Supplier TDR / evidence</h2>
+          <div class="upload-zone" id="aeris-evidence-zone" onclick="document.getElementById('aeris-evidence-input').click()">
+            <div class="upload-icon">📑</div>
+            <p><strong>Click or drag the TDR</strong></p>
+            <p>.pptx, .ppt, .pdf, .docx, .txt — several files allowed</p>
+            <input type="file" id="aeris-evidence-input" accept=".pptx,.ppt,.pdf,.docx,.txt" multiple />
+          </div>
+          <div id="aeris-evidence-info"></div>
+        </div>
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-primary" id="aeris-btn" disabled onclick="doAeris()">
+          🔎 Cross-check matrix ↔ TDR
+        </button>
+        <button class="btn btn-secondary" id="aeris-excel-btn" disabled onclick="downloadAerisExcel()">
+          📗 Synthesis Excel
+        </button>
+      </div>
+    </div>
+
+    <div class="loading" id="loading-aeris">
+      <div class="spinner"></div>
+      <p style="margin-top:12px" id="loading-aeris-text">Matching requirements to TDR evidence…</p>
+    </div>
+
+    <div class="results" id="results-aeris">
+      <div class="panel">
+        <h2>1. Synthesis</h2>
+        <div class="stats-grid" id="aeris-stats-grid"></div>
+        <p class="muted" id="aeris-meta" style="font-size:12px;margin-top:8px"></p>
+        <div id="aeris-notes" class="muted mt-16"></div>
+        <div id="aeris-risks" class="mt-16"></div>
+      </div>
+      <div class="panel">
+        <h2>2. Requirement ↔ evidence findings</h2>
+        <div class="filter-bar">
+          <input type="text" class="search-box" id="aeris-search" placeholder="Search REQ-ID, target, evidence…" oninput="filterAerisTable()" />
+          <button class="filter-btn active" data-afilter="ALL" onclick="setAerisFilter('ALL')">All</button>
+          <button class="filter-btn" data-afilter="NON_CONFORME" onclick="setAerisFilter('NON_CONFORME')">Non-conforme</button>
+          <button class="filter-btn" data-afilter="PARTIELLEMENT_CONFORME" onclick="setAerisFilter('PARTIELLEMENT_CONFORME')">Partial</button>
+          <button class="filter-btn" data-afilter="DEVIATION" onclick="setAerisFilter('DEVIATION')">Deviation</button>
+          <button class="filter-btn" data-afilter="CONFORME" onclick="setAerisFilter('CONFORME')">Conforme</button>
+          <button class="filter-btn" data-afilter="MANQUANT" onclick="setAerisFilter('MANQUANT')">Missing</button>
+          <button class="filter-btn" data-afilter="PREUVE_INSUFFISANTE" onclick="setAerisFilter('PREUVE_INSUFFISANTE')">Weak proof</button>
+        </div>
+        <div class="table-container">
+          <table id="aeris-table">
+            <thead>
+              <tr>
+                <th>REQ-ID</th>
+                <th>Verdict</th>
+                <th>Matrix</th>
+                <th>Coherence</th>
+                <th>Target</th>
+                <th>Supplier result</th>
+                <th>Evidence</th>
+              </tr>
+            </thead>
+            <tbody id="aeris-tbody"></tbody>
+          </table>
+        </div>
+        <div class="muted mt-16" id="aeris-count"></div>
       </div>
     </div>
   </div>
@@ -686,6 +803,7 @@ function switchTab(tab) {
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
   document.querySelector(`[data-tab="${tab}"]`).classList.add('active');
   document.getElementById('tab-analyze').classList.toggle('hidden', tab !== 'analyze');
+  document.getElementById('tab-aeris').classList.toggle('hidden', tab !== 'aeris');
   document.getElementById('tab-validator').classList.toggle('hidden', tab !== 'validator');
 }
 
@@ -935,6 +1053,7 @@ function renderStats(a) {
     {cls:'stat-total', val:s.total, label:'Total'},
     {cls:'stat-ok', val:s.ok, label:'OK'},
     {cls:'stat-nok', val:s.nok, label:'NOK'},
+    {cls:'stat-dev', val:(s.deviation||0), label:'Deviation'},
     {cls:'stat-na', val:s.na, label:'NA'},
     {cls:'stat-warn', val:(s.okDeepFindings||0), label:'Points of Attention'},
   ];
@@ -1268,6 +1387,173 @@ function downloadAnnotatedSpec() {
     (specValidation.fileName || 'spec').replace(/\.(docx|pdf|txt)$/i, '') + '_highlighted.docx'
   );
   toast('Highlighted spec downloaded — ' + (specValidation.annotatedSpecHighlightCount || 0) + ' passage(s) marked in purple');
+}
+
+// ═══════════════════════════════════════════════════════════════
+// AERIS MATRIX ↔ TDR TAB
+// ═══════════════════════════════════════════════════════════════
+let aerisMatrix = null;
+let aerisEvidence = [];
+let aerisReport = null;
+let aerisExcel = null;
+let aerisFilter = 'ALL';
+
+function _bindDrop(zone, input, onFiles) {
+  input.addEventListener('change', () => { if (input.files.length) onFiles(input.files); });
+  zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('dragover'); });
+  zone.addEventListener('dragleave', () => zone.classList.remove('dragover'));
+  zone.addEventListener('drop', e => {
+    e.preventDefault();
+    zone.classList.remove('dragover');
+    if (e.dataTransfer.files.length) onFiles(e.dataTransfer.files);
+  });
+}
+_bindDrop(document.getElementById('aeris-matrix-zone'), document.getElementById('aeris-matrix-input'), files => {
+  const file = files[0];
+  const ext = file.name.split('.').pop().toLowerCase();
+  if (!['ods','xlsx','xlsm'].includes(ext)) { toast('Matrix must be .ods / .xlsx / .xlsm', 'error'); return; }
+  aerisMatrix = file;
+  document.getElementById('aeris-matrix-info').innerHTML =
+    `<div class="file-info"><span>📊</span><span class="name">${file.name}</span>
+     <span class="size">${(file.size/1024).toFixed(0)} KB</span>
+     <button class="remove" onclick="clearAerisMatrix()">×</button></div>`;
+  _aerisReady();
+});
+_bindDrop(document.getElementById('aeris-evidence-zone'), document.getElementById('aeris-evidence-input'), files => {
+  const accepted = ['pptx','ppt','pdf','docx','txt'];
+  for (const file of files) {
+    const ext = file.name.split('.').pop().toLowerCase();
+    if (!accepted.includes(ext)) { toast('Ignored ' + file.name + ' — use PPT/PDF/DOCX/TXT', 'error'); continue; }
+    if (!aerisEvidence.some(f => f.name === file.name && f.size === file.size)) aerisEvidence.push(file);
+  }
+  document.getElementById('aeris-evidence-info').innerHTML = aerisEvidence.map((file, i) =>
+    `<div class="file-info"><span>📑</span><span class="name">${file.name}</span>
+     <span class="size">${(file.size/1024).toFixed(0)} KB</span>
+     <button class="remove" onclick="removeAerisEvidence(${i})">×</button></div>`
+  ).join('');
+  _aerisReady();
+});
+function clearAerisMatrix() {
+  aerisMatrix = null;
+  document.getElementById('aeris-matrix-input').value = '';
+  document.getElementById('aeris-matrix-info').innerHTML = '';
+  _aerisReady();
+}
+function removeAerisEvidence(i) {
+  aerisEvidence.splice(i, 1);
+  document.getElementById('aeris-evidence-info').innerHTML = aerisEvidence.map((file, idx) =>
+    `<div class="file-info"><span>📑</span><span class="name">${file.name}</span>
+     <span class="size">${(file.size/1024).toFixed(0)} KB</span>
+     <button class="remove" onclick="removeAerisEvidence(${idx})">×</button></div>`
+  ).join('');
+  _aerisReady();
+}
+function _aerisReady() {
+  document.getElementById('aeris-btn').disabled = !(aerisMatrix && aerisEvidence.length);
+}
+
+async function doAeris() {
+  if (!aerisMatrix || !aerisEvidence.length) return;
+  showLoading('loading-aeris', true, 'Matching requirements to TDR evidence…');
+  document.getElementById('results-aeris').classList.remove('show');
+  const form = new FormData();
+  form.append('matrix', aerisMatrix);
+  for (const f of aerisEvidence) form.append('evidence', f);
+  try {
+    const res = await fetch(apiUrl('/aeris-crosscheck'), { method: 'POST', body: form });
+    const data = await res.json();
+    if (!res.ok || !data.summary) {
+      toast('Error: ' + (data.detail || data.answer || 'cross-check failed'), 'error');
+      return;
+    }
+    aerisReport = data;
+    aerisExcel = data.reportExcel || null;
+    document.getElementById('aeris-excel-btn').disabled = !aerisExcel;
+    renderAeris(data);
+    document.getElementById('results-aeris').classList.add('show');
+    toast('AERIS synthesis — ' + (data.summary.conformityRate || 0) + '% conforme on judged items');
+  } catch (e) {
+    toast('Network error: ' + e.message, 'error');
+  } finally {
+    showLoading('loading-aeris', false);
+  }
+}
+
+function renderAeris(data) {
+  const s = data.summary || {};
+  const cards = [
+    {cls:'stat-total', val:s.total||0, label:'Requirements'},
+    {cls:'stat-ok', val:s.conforme||0, label:'Conforme'},
+    {cls:'stat-nok', val:s.nonConforme||0, label:'Non-conforme'},
+    {cls:'stat-partial', val:s.partiel||0, label:'Partial'},
+    {cls:'stat-dev', val:s.deviation||0, label:'Deviation'},
+    {cls:'stat-warn', val:s.preuveInsuffisante||0, label:'Weak proof'},
+    {cls:'stat-na', val:s.manquant||0, label:'Missing'},
+    {cls:'stat-total', val:(s.conformityRate||0)+'%', label:'Conformity rate'},
+  ];
+  document.getElementById('aeris-stats-grid').innerHTML = cards.map(c =>
+    `<div class="stat-card ${c.cls}"><div class="value">${c.val}</div><div class="label">${c.label}</div></div>`
+  ).join('');
+  const ev = (data.evidenceFiles || []).join(', ');
+  document.getElementById('aeris-meta').innerHTML =
+    `Matrix: <strong>${data.matrixFile || ''}</strong> · Evidence: <strong>${ev}</strong>` +
+    ` · Coverage: ${s.evidenceCoverage || 0}% · Matrix too optimistic: ${s.matrixTooOptimistic || 0}`;
+  document.getElementById('aeris-notes').innerHTML = (data.notes || []).map(n => `<p>${n}</p>`).join('');
+  document.getElementById('aeris-risks').innerHTML = (data.topRisks || []).length
+    ? '<h2 style="margin-bottom:8px">Top risks</h2>' + data.topRisks.map((r, i) =>
+        `<span class="risk-chip"><strong>${i+1}. ${r.domain}</strong> — ${r.hardFails} hard / ${r.count} items`
+        + (r.examples && r.examples.length ? ` (${r.examples.join(', ')})` : '') + '</span>'
+      ).join('')
+    : '';
+  setAerisFilter('ALL');
+}
+
+function setAerisFilter(f) {
+  aerisFilter = f;
+  document.querySelectorAll('#results-aeris .filter-btn').forEach(b => b.classList.remove('active'));
+  const btn = document.querySelector(`#results-aeris [data-afilter="${f}"]`);
+  if (btn) btn.classList.add('active');
+  filterAerisTable();
+}
+
+function filterAerisTable() {
+  const items = (aerisReport && aerisReport.items) || [];
+  const q = (document.getElementById('aeris-search').value || '').toLowerCase();
+  const filtered = items.filter(it => {
+    if (aerisFilter !== 'ALL' && it.final_status !== aerisFilter) return false;
+    if (!q) return true;
+    const blob = [it.req_id, it.description, it.target, it.supplier_result, it.evidence_excerpt, it.rationale].join(' ').toLowerCase();
+    return blob.includes(q);
+  });
+  const maxRows = 400;
+  document.getElementById('aeris-tbody').innerHTML = filtered.slice(0, maxRows).map(it => `
+    <tr>
+      <td><strong style="font-family:var(--mono)">${it.req_id || ''}</strong></td>
+      <td><span class="badge badge-${it.final_status}">${it.final_status}</span>
+          <div class="muted" style="font-size:11px">${it.confidence || ''}</div></td>
+      <td><span class="badge badge-${it.matrix_status}">${it.matrix_status}</span></td>
+      <td><span class="badge badge-${it.coherence}">${it.coherence}</span></td>
+      <td>${it.target || '<span class="muted">—</span>'}</td>
+      <td>${it.supplier_result || '<span class="muted">—</span>'}
+          ${it.gap ? `<div class="muted">gap ${it.gap}</div>` : ''}</td>
+      <td>${it.evidence_location ? `<strong>${it.evidence_location}</strong>` : '<span class="muted">—</span>'}
+          ${it.evidence_excerpt ? `<div class="muted" style="font-size:12px">${it.evidence_excerpt.substring(0,160)}</div>` : ''}
+          ${it.rationale ? `<div class="muted" style="font-size:11px;margin-top:4px">${it.rationale}</div>` : ''}</td>
+    </tr>`).join('');
+  document.getElementById('aeris-count').textContent =
+    filtered.length > maxRows
+      ? `${filtered.length} findings (showing first ${maxRows})`
+      : `${filtered.length} findings`;
+}
+
+function downloadAerisExcel() {
+  if (!aerisExcel) return;
+  _downloadB64(
+    aerisExcel,
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    (aerisReport && aerisReport.reportFileName) || 'AERIS_synthesis.xlsx'
+  );
+  toast('AERIS synthesis downloaded');
 }
 
 // ── Utils ─────────────────────────────────────────────────────
