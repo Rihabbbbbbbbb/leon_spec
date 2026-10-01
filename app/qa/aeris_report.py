@@ -104,6 +104,13 @@ def generate_aeris_excel(report: dict) -> bytes:
     ws["B20"] = summary.get("matrixTooPessimistic", 0)
     ws["A21"] = "Unverifiable"
     ws["B21"] = summary.get("unverifiable", 0)
+    ws["A22"] = "Contradictions (review queue)"
+    ws["A22"].font = Font(bold=True, color="9C0006")
+    ws["B22"] = summary.get("contradictions", 0)
+    ws["A23"] = "  of which critical"
+    ws["B23"] = summary.get("contradictionsCritical", 0)
+    ws["A24"] = "  of which high"
+    ws["B24"] = summary.get("contradictionsHigh", 0)
 
     # Pie source (hidden-ish) + chart
     ws["D8"] = "Status"
@@ -132,20 +139,55 @@ def generate_aeris_excel(report: dict) -> bytes:
 
     notes = report.get("notes") or []
     if notes:
-        ws["A23"] = "Notes"
-        ws["A23"].font = Font(bold=True)
-        ws["A24"] = " ".join(notes)
-        ws["A24"].alignment = wrap
+        ws["A26"] = "Notes"
+        ws["A26"].font = Font(bold=True)
+        ws["A27"] = " ".join(notes)
+        ws["A27"].alignment = wrap
 
     ws.column_dimensions["A"].width = 48
     ws.column_dimensions["B"].width = 55
     ws.column_dimensions["D"].width = 28
 
+    # ── Contradictions (auditor worklist — open this first) ───────
+    _SEV_FILL = {
+        "critical": "FFC7CE",
+        "high": "FCE4D6",
+        "medium": "FFF2CC",
+        "info": "DDEBF7",
+    }
+    wcq = wb.create_sheet("Contradictions", 1)
+    cq_headers = [
+        "Severity", "Type", "REQ-ID", "Title", "Matrix", "TDR verdict",
+        "Target", "Claimed", "Evidenced", "Location", "Action", "Domain",
+    ]
+    for ci, h in enumerate(cq_headers, 1):
+        cell = wcq.cell(1, ci, h)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.border = thin
+    contradictions = report.get("contradictions") or []
+    cq_keys = [
+        "severity", "type", "req_id", "title", "matrix_status", "evidence_status",
+        "target", "claimed", "evidenced", "location", "action", "domain",
+    ]
+    for ri, row in enumerate(contradictions, 2):
+        fill = PatternFill("solid", fgColor=_SEV_FILL.get(row.get("severity", ""), "FFFFFF"))
+        for ci, key in enumerate(cq_keys, 1):
+            cell = wcq.cell(ri, ci, row.get(key, ""))
+            cell.fill = fill
+            cell.border = thin
+            cell.alignment = wrap
+    for i, w in enumerate([12, 26, 18, 48, 12, 22, 22, 36, 36, 16, 50, 22], 1):
+        wcq.column_dimensions[get_column_letter(i)].width = w
+    wcq.freeze_panes = "A2"
+    if contradictions:
+        wcq.auto_filter.ref = f"A1:L{len(contradictions) + 1}"
+
     # ── Findings ──────────────────────────────────────────────────
     wf = wb.create_sheet("Findings")
     headers = [
         "REQ-ID", "Final status", "Matrix", "Evidence", "Coherence",
-        "Confidence", "Target", "Supplier result", "Gap",
+        "Contradiction", "Severity", "Confidence", "Target", "Supplier result", "Gap",
         "Location", "Evidence file", "Rationale", "Description",
     ]
     for ci, h in enumerate(headers, 1):
@@ -156,6 +198,7 @@ def generate_aeris_excel(report: dict) -> bytes:
 
     keys = [
         "req_id", "final_status", "matrix_status", "evidence_status", "coherence",
+        "contradiction_type", "contradiction_severity",
         "confidence", "target", "supplier_result", "gap",
         "evidence_location", "evidence_file", "rationale", "description",
     ]
@@ -174,12 +217,12 @@ def generate_aeris_excel(report: dict) -> bytes:
         if coh in _COHERENCE_FILL:
             wf.cell(ri, 5).fill = PatternFill("solid", fgColor=_COHERENCE_FILL[coh])
 
-    widths = [18, 24, 12, 24, 24, 12, 28, 40, 16, 16, 28, 60, 40]
+    widths = [18, 24, 12, 24, 22, 26, 12, 12, 22, 36, 14, 16, 28, 50, 36]
     for i, w in enumerate(widths, 1):
         wf.column_dimensions[get_column_letter(i)].width = w
     wf.freeze_panes = "A2"
     if items:
-        wf.auto_filter.ref = f"A1:M{len(items) + 1}"
+        wf.auto_filter.ref = f"A1:O{len(items) + 1}"
     wf.row_dimensions[1].height = 22
 
     # ── Risks ─────────────────────────────────────────────────────

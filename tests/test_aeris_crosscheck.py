@@ -28,6 +28,7 @@ from app.qa.aeris_constraints import (
     extract_measurements,
     summarize_verdicts,
 )
+from app.qa.aeris_contradictions import classify_contradiction, tdr_polarity
 from app.qa.aeris_crosscheck import crosscheck_analysis, report_to_dict, run_crosscheck
 from app.qa.aeris_evidence import parse_evidence_bytes
 from app.qa.aeris_report import generate_aeris_excel
@@ -144,6 +145,34 @@ class TestNumericCompare:
         assert summarize_verdicts(vs) == "NON_CONFORME"
 
 
+class TestContradictionRules:
+
+    def test_tdr_polarity(self):
+        assert tdr_polarity("Typ 119.9 mA NOK, Deviation") == "FAIL"
+        assert tdr_polarity("CPU estimation = 50% meets the target") == "PASS"
+        assert tdr_polarity("no polarity here 50 mA") == "NONE"
+
+    def test_claimed_ok_no_evidence_is_an_assertion(self):
+        c = classify_contradiction(
+            req_id="REQ-1", matrix_status="OK", evidence_status="MANQUANT",
+            coherence="UNVERIFIABLE", target="<=0.3 mm", supplier_result="",
+            comment="OK", evidence_excerpt="", evidence_location="",
+            domain="Mechanical", confidence="NONE",
+            constraints=[], measurements=[],
+        )
+        assert c and c.type == "CLAIM_OK_NO_EVIDENCE"
+
+    def test_claimed_nok_but_tdr_passes(self):
+        c = classify_contradiction(
+            req_id="REQ-2", matrix_status="NOK", evidence_status="CONFORME",
+            coherence="MATRIX_TOO_PESSIMISTIC", target="<70 %",
+            supplier_result="50 %", comment="NOK", evidence_excerpt="CPU 50%",
+            evidence_location="Slide 30", domain="Software / CPU",
+            confidence="HIGH", constraints=[], measurements=[],
+        )
+        assert c and c.type == "CLAIM_NOK_EVIDENCE_PASSES"
+
+
 class TestDeviationClassification:
 
     def test_plain_deviation(self):
@@ -184,6 +213,13 @@ CPU estimation = 50%
 Slide 41: Thermal
 Display temperature 41.6°C
 Deviation
+
+Slide 50: Idle current
+Idle current Typ 80 mA
+NOK
+
+Slide 55: EMC immunity
+EMC immunity test NOK Deviation
 """
 
 
@@ -217,6 +253,12 @@ def _build_matrix(path: Path) -> Path:
         ("REQ-0309004", "SYS",
          "Diagnostic session is not applicable on this variant",
          "NA", "NA"),
+        ("REQ-0309100", "EE",
+         "Idle current ≤50mA",
+         "OK", "Typ 40 mA — OK"),
+        ("REQ-0309200", "EMC",
+         "EMC immunity shall be compliant",
+         "OK", "OK"),
     ]
     for req, ref, desc, status, comment in rows:
         ws.append([req, ref, "", "", "", desc, status, comment])
@@ -286,6 +328,31 @@ class TestAerisPipeline:
         assert mech.final_status in ("MANQUANT", "PREUVE_INSUFFISANTE")
         assert mech.coherence == "UNVERIFIABLE"
 
+    def test_contradiction_queue_flags_claimed_ok_vs_tdr(self, tianma_pair):
+        matrix, tdr = tianma_pair
+        report = run_crosscheck(str(matrix), [(tdr.name, tdr.read_bytes())], matrix.name)
+        by_id = {c.req_id: c for c in report.contradictions}
+
+        thermal = by_id["REQ-0309002"]
+        assert thermal.type == "CLAIM_OK_EVIDENCE_FAILS"
+        assert thermal.severity == "critical"
+
+        contrast = by_id["REQ-0308444"]
+        assert contrast.type == "CLAIM_OK_PARTIAL"
+
+        idle = by_id["REQ-0309100"]
+        assert idle.type == "CLAIM_OK_EVIDENCE_FAILS"
+
+        mech = by_id["REQ-0309003"]
+        assert mech.type == "CLAIM_OK_NO_EVIDENCE"
+
+        emc = by_id["REQ-0309200"]
+        assert emc.type == "CLAIM_OK_TDR_SAYS_NOK"
+
+        # Honest NOK in the matrix that the TDR confirms is NOT a contradiction.
+        assert "REQ-0308287" not in by_id
+        assert "REQ-0307942" not in by_id
+
     def test_na_stays_na(self, tianma_pair):
         matrix, tdr = tianma_pair
         report = run_crosscheck(str(matrix), [(tdr.name, tdr.read_bytes())], matrix.name)
@@ -297,19 +364,24 @@ class TestAerisPipeline:
         report = run_crosscheck(str(matrix), [(tdr.name, tdr.read_bytes())], matrix.name)
         payload = report_to_dict(report)
         s = payload["summary"]
-        assert s["total"] == 7
+        assert s["total"] == 9
         assert s["nonConforme"] + s["deviation"] >= 3
         assert s["conforme"] >= 1
         assert s["partiel"] >= 1
         assert s["matrixTooOptimistic"] >= 2
+        assert s["contradictions"] >= 3
+        assert s["contradictionsCritical"] >= 1
         assert payload["topRisks"]
+        assert payload["contradictions"]
 
         xlsx = generate_aeris_excel(payload)
         wb = load_workbook(io.BytesIO(xlsx))
         assert "Synthesis" in wb.sheetnames
+        assert "Contradictions" in wb.sheetnames
         assert "Findings" in wb.sheetnames
         assert "Top risks" in wb.sheetnames
         assert wb["Synthesis"]["B5"].value.endswith("%")
+        assert wb["Contradictions"].cell(2, 1).value  # at least one queued row
 
     def test_pptx_fallback_xml_roundtrip(self, tmp_path, tianma_pair):
         """A minimal PPTX (zip/XML) is readable even without python-pptx shapes."""
@@ -361,7 +433,7 @@ class TestAerisRoute:
             )
         assert res.status_code == 200, res.text
         body = res.json()
-        assert body["summary"]["total"] == 7
+        assert body["summary"]["total"] == 9
         assert body["reportExcel"]
         ids = {i["req_id"] for i in body["items"]}
         assert "REQ-0308287" in ids

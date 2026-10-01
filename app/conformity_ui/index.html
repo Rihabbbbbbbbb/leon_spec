@@ -672,8 +672,16 @@
         <div id="aeris-notes" class="muted mt-16"></div>
         <div id="aeris-risks" class="mt-16"></div>
       </div>
+      <div class="panel" id="aeris-contra-panel">
+        <h2>2. Review queue — matrix vs TDR contradictions</h2>
+        <p class="muted mb-16">
+          A matrix OK is a <em>claim</em>. The TDR is the evidence. This list is what a
+          quality reviewer should open first: declared yes/no that the dossier contradicts.
+        </p>
+        <div id="aeris-contra-list"></div>
+      </div>
       <div class="panel">
-        <h2>2. Requirement ↔ evidence findings</h2>
+        <h2>3. Requirement ↔ evidence findings</h2>
         <div class="filter-bar">
           <input type="text" class="search-box" id="aeris-search" placeholder="Search REQ-ID, target, evidence…" oninput="filterAerisTable()" />
           <button class="filter-btn active" data-afilter="ALL" onclick="setAerisFilter('ALL')">All</button>
@@ -1490,6 +1498,8 @@ function renderAeris(data) {
     {cls:'stat-warn', val:s.preuveInsuffisante||0, label:'Weak proof'},
     {cls:'stat-na', val:s.manquant||0, label:'Missing'},
     {cls:'stat-total', val:(s.conformityRate||0)+'%', label:'Conformity rate'},
+    {cls:'stat-nok', val:s.contradictions||0, label:'Contradictions'},
+    {cls:'stat-nok', val:s.contradictionsCritical||0, label:'Critical'},
   ];
   document.getElementById('aeris-stats-grid').innerHTML = cards.map(c =>
     `<div class="stat-card ${c.cls}"><div class="value">${c.val}</div><div class="label">${c.label}</div></div>`
@@ -1505,7 +1515,33 @@ function renderAeris(data) {
         + (r.examples && r.examples.length ? ` (${r.examples.join(', ')})` : '') + '</span>'
       ).join('')
     : '';
+  renderAerisContradictions(data.contradictions || []);
   setAerisFilter('ALL');
+}
+
+function renderAerisContradictions(list) {
+  const box = document.getElementById('aeris-contra-list');
+  if (!list.length) {
+    box.innerHTML = '<p class="muted">No declaration↔evidence contradiction detected on judged rows.</p>';
+    return;
+  }
+  box.innerHTML = list.map(c => {
+    const sev = (c.severity || 'medium').toLowerCase();
+    const color = sev === 'critical' ? 'var(--nok)' : sev === 'high' ? 'var(--partial)' : 'var(--dev)';
+    return `<div class="inc-card" style="border-left-color:${color}">
+      <div class="header">
+        <span class="badge" style="background:rgba(28,43,58,0.07);color:${color}">${(c.severity||'').toUpperCase()}</span>
+        <span class="req-id">${c.req_id || ''}</span>
+        <span class="muted" style="font-size:11px">${c.type || ''}</span>
+      </div>
+      <div class="explanation">${c.title || ''}</div>
+      <div class="meta">Matrix: ${c.matrix_status || ''} · TDR: ${c.evidence_status || ''}
+        ${c.target ? ' · Target: ' + c.target : ''}
+        ${c.evidenced ? ' · Evidence: ' + String(c.evidenced).substring(0,140) : ''}
+        ${c.location ? ' · ' + c.location : ''}</div>
+      ${c.action ? `<div class="meta">Action: ${c.action}</div>` : ''}
+    </div>`;
+  }).join('');
 }
 
 function setAerisFilter(f) {

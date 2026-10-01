@@ -46,6 +46,14 @@ from app.qa.aeris_constraints import (
     operator_symbol,
     summarize_verdicts,
 )
+from app.qa.aeris_contradictions import (
+    Contradiction,
+    build_review_queue,
+    classify_contradiction,
+    contradiction_summary,
+    contradictions_to_dicts,
+    tdr_polarity,
+)
 from app.qa.aeris_evidence import EvidenceChunk, EvidenceDocument, parse_evidence_bytes
 from app.qa.conformity_analyzer import (
     ConformityAnalysis,
@@ -71,6 +79,7 @@ _RISK_DOMAINS = [
     ("Functional safety", r"fusa|asil|iso\s*26262|safety"),
     ("Software / CPU", r"\bcpu\b|software|sw\b|load|aspice"),
     ("Hardware / EE", r"\bee\b|hardware|voltage|hw\b"),
+    ("EMC", r"\bemc\b|immunity|emission|radiat"),
 ]
 
 
@@ -94,6 +103,10 @@ class CrossCheckItem:
     domain: str
     condition_verdicts: List[Dict] = field(default_factory=list)
     match_score: float = 0.0
+    contradiction_type: str = ""
+    contradiction_severity: str = ""
+    recommended_action: str = ""
+    tdr_polarity: str = "NONE"
 
 
 @dataclass
@@ -106,6 +119,8 @@ class CrossCheckReport:
     matrix_analysis: Dict = field(default_factory=dict)
     evidence_meta: List[Dict] = field(default_factory=list)
     notes: List[str] = field(default_factory=list)
+    contradictions: List[Contradiction] = field(default_factory=list)
+    contradiction_summary: Dict = field(default_factory=dict)
 
 
 def run_crosscheck(
@@ -154,18 +169,26 @@ def crosscheck_analysis(
         )
 
     items: List[CrossCheckItem] = []
+    found: List[Contradiction] = []
     for req in analysis.items:
         if not req.req_id and not req.description:
             continue
-        items.append(_check_one(req, chunks))
+        item, contra = _check_one(req, chunks)
+        items.append(item)
+        if contra:
+            found.append(contra)
 
     report.items = items
-    report.summary = _build_summary(items)
+    report.contradictions = build_review_queue(found)
+    report.contradiction_summary = contradiction_summary(report.contradictions)
+    report.summary = _build_summary(items, report.contradiction_summary)
     report.top_risks = _rank_risks(items)
     return report
 
 
-def _check_one(req: ConformityItem, chunks: List[EvidenceChunk]) -> CrossCheckItem:
+def _check_one(
+    req: ConformityItem, chunks: List[EvidenceChunk]
+) -> Tuple[CrossCheckItem, Optional[Contradiction]]:
     blob = " ".join(p for p in (req.description, req.comment, req.reference) if p)
     constraints = extract_constraints(req.description or "", source="requirement")
     if not constraints and req.comment:
@@ -253,7 +276,24 @@ def _check_one(req: ConformityItem, chunks: List[EvidenceChunk]) -> CrossCheckIt
         if len(excerpt) > 420:
             excerpt = excerpt[:417] + "…"
 
-    return CrossCheckItem(
+    polarity = tdr_polarity(evidence_text)
+    contradiction = classify_contradiction(
+        req_id=req.req_id,
+        matrix_status=req.conformity_category,
+        evidence_status=evidence_status,
+        coherence=coherence,
+        target=target,
+        supplier_result=supplier_result,
+        comment=req.comment or "",
+        evidence_excerpt=excerpt,
+        evidence_location=evidence_loc,
+        domain=domain,
+        confidence=confidence,
+        constraints=constraints,
+        measurements=measurements,
+    )
+
+    item = CrossCheckItem(
         req_id=req.req_id,
         description=(req.description or "")[:240],
         comment=(req.comment or "")[:240],
@@ -272,7 +312,12 @@ def _check_one(req: ConformityItem, chunks: List[EvidenceChunk]) -> CrossCheckIt
         domain=domain,
         condition_verdicts=condition_verdicts,
         match_score=round(match_score, 3),
+        contradiction_type=contradiction.type if contradiction else "",
+        contradiction_severity=contradiction.severity if contradiction else "",
+        recommended_action=contradiction.action if contradiction else "",
+        tdr_polarity=polarity,
     )
+    return item, contradiction
 
 
 def _retrieve(
@@ -462,7 +507,7 @@ def _rationale(
     return " ".join(parts)
 
 
-def _build_summary(items: List[CrossCheckItem]) -> Dict:
+def _build_summary(items: List[CrossCheckItem], contra: Optional[Dict] = None) -> Dict:
     counts = Counter(i.final_status for i in items)
     coherence = Counter(i.coherence for i in items)
     total = len(items)
@@ -488,6 +533,10 @@ def _build_summary(items: List[CrossCheckItem]) -> Dict:
         "matrixTooPessimistic": coherence.get("MATRIX_TOO_PESSIMISTIC", 0),
         "aligned": coherence.get("ALIGNED", 0),
         "unverifiable": coherence.get("UNVERIFIABLE", 0),
+        "contradictions": (contra or {}).get("total", 0),
+        "contradictionsCritical": (contra or {}).get("critical", 0),
+        "contradictionsHigh": (contra or {}).get("high", 0),
+        "contradictionTypes": (contra or {}).get("byType", {}),
     }
 
 
@@ -517,6 +566,8 @@ def report_to_dict(report: CrossCheckReport) -> dict:
         "evidenceFiles": report.evidence_files,
         "summary": report.summary,
         "topRisks": report.top_risks,
+        "contradictions": contradictions_to_dicts(report.contradictions),
+        "contradictionSummary": report.contradiction_summary,
         "items": [asdict(i) for i in report.items],
         "matrixAnalysis": {
             "fileName": report.matrix_analysis.get("fileName"),

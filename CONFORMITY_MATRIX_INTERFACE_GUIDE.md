@@ -33,7 +33,7 @@ The interface has three tabs:
 
 **🔎 Matrix ↔ TDR (AERIS)**
 1. Upload the supplier conformity matrix **and** the TDR / PPT / PDF technical dossier.
-2. Click **🔎 Cross-check matrix ↔ TDR**. AERIS extracts measurable targets (≤100 mA, >95 % @32°, contrast ≥400:1…), finds the matching slide/page, compares the numbers, and flags when the matrix says OK but the TDR does not.
+2. Click **🔎 Cross-check matrix ↔ TDR**. AERIS extracts measurable targets, finds the matching slide/page, compares the numbers, and opens a **review queue** of contradictions (matrix OK but TDR fails, comment vs TDR mismatch, OK with no proof).
 3. Download the **📗 Synthesis Excel** (Synthesis / Findings / Top risks / Conditions).
 
 **📄 Validation de Spec**
