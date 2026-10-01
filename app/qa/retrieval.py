@@ -195,6 +195,33 @@ def build_index(root: Optional[Path] = None) -> List[Chunk]:
 
 
 # ── Uploaded file text extraction ──────────────────────────────────
+# Legacy .doc (Word 97-2003 binary format) is deliberately NOT supported:
+# unlike .docx (a zip/XML package parsed structurally by python-docx), .doc
+# has no reliable pure-Python parser that preserves table structure, and
+# this validator's analysis depends heavily on tables (requirement tables,
+# I/O tables). A lossy text-only extraction would silently degrade
+# accuracy, so .doc is rejected upfront with guidance instead.
+ACCEPTED_UPLOAD_EXTENSIONS = {".txt", ".docx", ".pdf"}
+
+
+def unsupported_file_type_message(suffix: str) -> str:
+    """Build a clear, actionable rejection message for an upload extension.
+
+    Shared by every upload endpoint (app/qa/route.py, azure_handler.py) so
+    a legacy .doc upload gets specific guidance instead of a generic
+    "unsupported type" message with no next step.
+    """
+    if suffix == ".doc":
+        return (
+            "Legacy .doc files (Word 97-2003 format) are not supported — only the "
+            "modern .docx format can be read reliably. Please re-save this file as "
+            ".docx (Word: File > Save As > Word Document (.docx); LibreOffice: File > "
+            "Save As > Word 2007-365 (.docx); or open it in Google Docs and download "
+            "as .docx), then upload the .docx version."
+        )
+    return f"File type '{suffix}' not accepted. Use .txt, .docx, or .pdf."
+
+
 def extract_text_from_file(path: Path) -> str:
     """
     Extract plain text from an uploaded specification file.

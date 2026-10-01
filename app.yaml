@@ -1,0 +1,12 @@
+# Databricks App manifest for LEON.
+#
+# This file is used when deploying DIRECTLY with the CLI:
+#   databricks apps deploy leon-spec --profile leon
+#
+# NOTE: when deploying with Databricks Asset Bundles (databricks.yml — the
+# recommended path, see DATABRICKS_DEPLOY.md), the `config` block in
+# databricks.yml is the single source of truth and overrides what is set
+# here. That is why this file stays minimal on purpose.
+command:
+  - python
+  - databricks_main.py

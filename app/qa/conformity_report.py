@@ -152,6 +152,21 @@ def generate_conformity_pdf(analysis_dict: dict) -> bytes:
     pdf.cell(col_w, row_h, "", border=1, align="C")
     pdf.ln(row_h)
 
+    # Requirement vs document breakdown (the "OK" total above includes
+    # applicable-document/category rows, not only REQ- requirements).
+    total_req = summary.get("totalRequirements")
+    if total_req is not None:
+        pdf.ln(1)
+        pdf.set_font("Helvetica", "I", 8)
+        pdf.set_text_color(90, 90, 90)
+        pdf.multi_cell(
+            0, 4,
+            _clean(f"Breakdown — Requirements: {total_req} "
+                   f"(OK {summary.get('okRequirements', 0)}, NOK {summary.get('nokRequirements', 0)}) | "
+                   f"Documents/references: {summary.get('totalDocuments', 0)}"),
+            new_x="LMARGIN", new_y="NEXT",
+        )
+
     pdf.ln(4)
 
     # ── Camembert pie chart (integrated in summary) ────────
@@ -439,6 +454,26 @@ def generate_conformity_excel(analysis_dict: dict) -> bytes:
         cell.font = Font(bold=True)
         cell.border = thin_border
 
+    # Requirement vs document breakdown (the OK/NOK counts above include
+    # applicable-document/category rows, not only REQ- requirements).
+    summary = analysis_dict.get("summary", {})
+    if summary.get("totalRequirements") is not None:
+        row_idx += 2
+        ws_summary[f"A{row_idx}"] = "Requirements (REQ-):"
+        ws_summary[f"B{row_idx}"] = summary.get("totalRequirements", 0)
+        ws_summary[f"A{row_idx}"].font = Font(bold=True)
+        ws_summary[f"B{row_idx}"].font = Font(bold=True)
+        row_idx += 1
+        ws_summary[f"A{row_idx}"] = "  - OK requirements"
+        ws_summary[f"B{row_idx}"] = summary.get("okRequirements", 0)
+        row_idx += 1
+        ws_summary[f"A{row_idx}"] = "  - NOK requirements"
+        ws_summary[f"B{row_idx}"] = summary.get("nokRequirements", 0)
+        row_idx += 1
+        ws_summary[f"A{row_idx}"] = "Documents / references:"
+        ws_summary[f"B{row_idx}"] = summary.get("totalDocuments", 0)
+        row_idx += 1
+
     # Column widths
     ws_summary.column_dimensions["A"].width = 25
     ws_summary.column_dimensions["B"].width = 15
@@ -549,8 +584,7 @@ def generate_conformity_excel(analysis_dict: dict) -> bytes:
         ws_ok = wb.create_sheet("Deep-Dive OK Analysis")
 
         ok_headers = ["Severity", "Req ID", "Reference", "Conformity",
-                       "Signals", "Comment",
-                       "AI Analysis"]
+                       "Comment", "AI Analysis"]
         for ci, header in enumerate(ok_headers, 1):
             cell = ws_ok.cell(row=1, column=ci, value=header)
             cell.fill = header_fill
@@ -576,7 +610,6 @@ def generate_conformity_excel(analysis_dict: dict) -> bytes:
                 finding.get("reqId", ""),
                 finding.get("reference", ""),
                 finding.get("conformity", ""),
-                ", ".join(finding.get("signals", [])),
                 finding.get("comment", ""),
                 finding.get("aiComment", ""),
             ]
@@ -585,14 +618,14 @@ def generate_conformity_excel(analysis_dict: dict) -> bytes:
                 cell.fill = sev_fill
                 cell.font = sev_font
                 cell.border = thin_border
-                if ci in (6, 7):
+                if ci in (5, 6):
                     cell.alignment = wrap_align
 
-        ok_widths = [12, 20, 20, 20, 20, 50, 60]
+        ok_widths = [12, 20, 20, 20, 50, 60]
         for ci, width in enumerate(ok_widths, 1):
             ws_ok.column_dimensions[get_column_letter(ci)].width = width
         ws_ok.freeze_panes = "A2"
-        ws_ok.auto_filter.ref = f"A1:G{len(ok_findings) + 1}"
+        ws_ok.auto_filter.ref = f"A1:F{len(ok_findings) + 1}"
 
     # ── Save to bytes ───────────────────────────────────────
     buf = io.BytesIO()
@@ -659,7 +692,7 @@ def _write_deepok_sheet(ws, findings: list, header_fill, header_font, thin_borde
     from openpyxl.utils import get_column_letter
 
     ok_headers = ["Severity", "Req ID", "Reference", "Conformity",
-                  "Signals", "Comment", "AI Analysis"]
+                  "Comment", "AI Analysis"]
     for ci, header in enumerate(ok_headers, 1):
         cell = ws.cell(row=1, column=ci, value=header)
         cell.fill = header_fill
@@ -682,7 +715,6 @@ def _write_deepok_sheet(ws, findings: list, header_fill, header_font, thin_borde
             finding.get("reqId", ""),
             finding.get("reference", ""),
             finding.get("conformity", ""),
-            ", ".join(finding.get("signals", [])),
             finding.get("comment", ""),
             finding.get("aiComment", ""),
         ]
@@ -691,14 +723,14 @@ def _write_deepok_sheet(ws, findings: list, header_fill, header_font, thin_borde
             cell.fill = sev_fill
             cell.font = sev_font
             cell.border = thin_border
-            if ci in (6, 7):
+            if ci in (5, 6):
                 cell.alignment = wrap_align
 
-    ok_widths = [12, 20, 20, 20, 20, 50, 60]
+    ok_widths = [12, 20, 20, 20, 50, 60]
     for ci, width in enumerate(ok_widths, 1):
         ws.column_dimensions[get_column_letter(ci)].width = width
     ws.freeze_panes = "A2"
-    ws.auto_filter.ref = f"A1:G{len(findings) + 1}"
+    ws.auto_filter.ref = f"A1:F{len(findings) + 1}"
 
 
 def generate_batch_conformity_excel(analyses: List[Dict]) -> bytes:
@@ -746,53 +778,117 @@ def generate_batch_conformity_excel(analyses: List[Dict]) -> bytes:
     ws_ov.title = "Overview"
     ws_ov["A1"] = f"LEON — Combined Analysis of {len(analyses)} Conformity Matrix(es)"
     ws_ov["A1"].font = title_font
-    ws_ov.merge_cells("A1:H1")
+    ws_ov.merge_cells("A1:J1")
+    ws_ov.row_dimensions[1].height = 22
 
-    ov_headers = ["#", "File", "Sheet", "Total", "OK", "NOK", "NA",
-                  "Flagged Items"]
+    ws_ov["A2"] = ("One row per uploaded matrix — counts are colour-coded. "
+                   "A pie chart per matrix is plotted below the table.")
+    ws_ov["A2"].font = Font(italic=True, size=9, color="595959")
+    ws_ov.merge_cells("A2:J2")
+
+    ov_headers = ["#", "File", "Sheet", "Total", "OK", "NOK", "NA", "Empty",
+                  "Flagged", "OK %"]
     for ci, header in enumerate(ov_headers, 1):
         cell = ws_ov.cell(row=3, column=ci, value=header)
         cell.fill = header_fill
         cell.font = header_font
         cell.border = thin_border
+        cell.alignment = Alignment(horizontal="center", vertical="center",
+                                   wrap_text=True)
+    ws_ov.row_dimensions[3].height = 20
 
     used_sheet_names = {"Overview"}
     row = 4
+    totals = {"total": 0, "OK": 0, "NOK": 0, "NA": 0, "EMPTY": 0, "flagged": 0}
     for idx, analysis in enumerate(analyses, 1):
         stats = analysis.get("stats", {})
+        total = analysis.get("totalRows", 0)
+        flagged = len(analysis.get("okDeepFindings", []))
         row_data = [
             idx,
             analysis.get("fileName", f"Matrix {idx}"),
             analysis.get("sheetName", ""),
-            analysis.get("totalRows", 0),
+            total,
             stats.get("OK", 0),
             stats.get("NOK", 0),
             stats.get("NA", 0),
-            len(analysis.get("okDeepFindings", [])),
+            stats.get("EMPTY", 0),
+            flagged,
+            (stats.get("OK", 0) / total) if total else 0,
         ]
         for ci, val in enumerate(row_data, 1):
             cell = ws_ov.cell(row=row, column=ci, value=val)
             cell.border = thin_border
+            cell.alignment = Alignment(vertical="center")
+        # Colour-code the four engagement counters (E..H = columns 5..8) so the
+        # Overview reads at a glance, exactly like the single-matrix report.
+        for ci, cat in ((5, "OK"), (6, "NOK"), (7, "NA"), (8, "EMPTY")):
+            cell = ws_ov.cell(row=row, column=ci)
+            cell.fill = _category_fill(cat)
+            cell.font = _category_font(cat)
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+        for ci in (1, 4, 9, 10):
+            ws_ov.cell(row=row, column=ci).alignment = Alignment(
+                horizontal="center", vertical="center")
+        ws_ov.cell(row=row, column=10).number_format = "0.0%"
+
+        totals["total"] += total
+        totals["flagged"] += flagged
+        for cat in ("OK", "NOK", "NA", "EMPTY"):
+            totals[cat] += stats.get(cat, 0)
         row += 1
 
-    col_widths_ov = [4, 45, 20, 10, 8, 8, 8, 18]
+    # ── TOTAL row ──────────────────────────────────────────
+    total_fill = PatternFill(start_color="D9E1F2", end_color="D9E1F2",
+                             fill_type="solid")
+    total_font = Font(bold=True, color="003366")
+    ws_ov.merge_cells(start_row=row, start_column=1, end_row=row, end_column=2)
+    tc = ws_ov.cell(row=row, column=1, value="TOTAL")
+    tc.font = total_font
+    tc.fill = total_fill
+    tc.alignment = Alignment(horizontal="center", vertical="center")
+    for ci, val in ((3, ""), (4, totals["total"]), (5, totals["OK"]),
+                    (6, totals["NOK"]), (7, totals["NA"]),
+                    (8, totals["EMPTY"]), (9, totals["flagged"])):
+        c = ws_ov.cell(row=row, column=ci, value=val)
+        c.font = total_font
+        c.fill = total_fill
+        c.border = thin_border
+        c.alignment = Alignment(horizontal="center", vertical="center")
+    pct = ws_ov.cell(row=row, column=10,
+                     value=(totals["OK"] / totals["total"]) if totals["total"] else 0)
+    pct.font = total_font
+    pct.fill = total_fill
+    pct.border = thin_border
+    pct.number_format = "0.0%"
+    pct.alignment = Alignment(horizontal="center", vertical="center")
+
+    last_row = row - 1  # last data row — the TOTAL row stays out of the filter
+
+    col_widths_ov = [4, 46, 26, 9, 8, 8, 8, 9, 9, 8]
     for ci, width in enumerate(col_widths_ov, 1):
         ws_ov.column_dimensions[get_column_letter(ci)].width = width
     ws_ov.freeze_panes = "A4"
-    last_row = row - 1
-    ws_ov.auto_filter.ref = f"A3:H{last_row}"
+    ws_ov.auto_filter.ref = f"A3:J{last_row}"
 
-    # ── Camembert (pie chart) PER FILE — one independent chart per matrix,
-    # not a single chart aggregating all of them. Each chart's own source
-    # data lives in a small hidden-ish table off to the right (columns
-    # starting at DATA_COL); the charts themselves are laid out in a grid
-    # below the main table so they stay readable with many files.
-    DATA_COL = 11  # column K onward — out of the way of the visible table
-    CHARTS_PER_ROW = 3
-    CHART_COL_SPAN = 9
-    CHART_ROW_SPAN = 16
+    # ── Camembert (pie chart) PER FILE — one independent chart per matrix, not
+    # one chart aggregating every file. The chart source data lives on its own
+    # HIDDEN worksheet, so the Overview sheet contains nothing but the summary
+    # table and the charts. Hiding a *worksheet* does not affect charts, unlike
+    # hiding rows/columns — that would need Excel's "plot data in hidden cells"
+    # flag, which openpyxl cannot serialise (ChartBase has no plotVisOnly
+    # property; assigning it silently does nothing and the pies come out blank).
+    ws_data = wb.create_sheet("_chart_data")
+    ws_data.sheet_state = "hidden"
+    used_sheet_names.add("_chart_data")
+    CHART_DATA_CAT_COL = 1   # A — the "Engagement" labels
+    CHART_DATA_VAL_COL = 2   # B — the counts
 
-    grid_start_row = last_row + 3
+    CHARTS_PER_ROW = 2
+    CHART_COL_SPAN = 6
+    CHART_ROW_SPAN = 17
+
+    grid_start_row = row + 3  # row = TOTAL row: blank row, heading, then charts
     ws_ov.cell(row=grid_start_row - 1, column=1,
               value="Conformity Engagement Distribution — one pie chart per matrix").font = Font(bold=True, size=11, color="003366")
 
@@ -800,18 +896,16 @@ def generate_batch_conformity_excel(analyses: List[Dict]) -> bytes:
         file_name = analysis.get("fileName", f"Matrix {idx + 1}")
         stats = analysis.get("stats", {})
 
-        data_row0 = 3 + idx * 6  # 1 header + up to 4 categories + 1 blank, per file
-        ws_ov.cell(row=data_row0, column=DATA_COL, value="Engagement").font = Font(bold=True, size=8)
-        ws_ov.cell(row=data_row0, column=DATA_COL + 1, value="Total").font = Font(bold=True, size=8)
+        data_row0 = 1 + idx * 6  # 1 title row + up to 4 categories + 1 spacer
+        ws_data.cell(row=data_row0, column=CHART_DATA_CAT_COL, value="Engagement")
+        ws_data.cell(row=data_row0, column=CHART_DATA_VAL_COL, value=file_name[:31])
         data_row = data_row0 + 1
         for cat in ("OK", "NOK", "NA", "EMPTY"):
             count = stats.get(cat, 0)
             if count <= 0:
                 continue
-            ws_ov.cell(row=data_row, column=DATA_COL, value=cat).fill = _category_fill(cat)
-            ws_ov.cell(row=data_row, column=DATA_COL + 1, value=count).fill = _category_fill(cat)
-            ws_ov.cell(row=data_row, column=DATA_COL).font = _category_font(cat)
-            ws_ov.cell(row=data_row, column=DATA_COL + 1).font = _category_font(cat)
+            ws_data.cell(row=data_row, column=CHART_DATA_CAT_COL, value=cat)
+            ws_data.cell(row=data_row, column=CHART_DATA_VAL_COL, value=count)
             data_row += 1
 
         if data_row == data_row0 + 1:
@@ -819,10 +913,12 @@ def generate_batch_conformity_excel(analyses: List[Dict]) -> bytes:
 
         pie_chart = PieChart()
         pie_chart.title = file_name if len(file_name) <= 40 else file_name[:37] + "…"
-        pie_chart.width = 10
-        pie_chart.height = 7.5
-        data_ref = Reference(ws_ov, min_col=DATA_COL + 1, min_row=data_row0, max_row=data_row - 1)
-        cats_ref = Reference(ws_ov, min_col=DATA_COL, min_row=data_row0 + 1, max_row=data_row - 1)
+        pie_chart.width = 11
+        pie_chart.height = 8
+        data_ref = Reference(ws_data, min_col=CHART_DATA_VAL_COL,
+                             min_row=data_row0, max_row=data_row - 1)
+        cats_ref = Reference(ws_data, min_col=CHART_DATA_CAT_COL,
+                             min_row=data_row0 + 1, max_row=data_row - 1)
         pie_chart.add_data(data_ref, titles_from_data=True)
         pie_chart.set_categories(cats_ref)
 
@@ -1057,3 +1153,298 @@ def generate_powerbi_dataset(analysis_dict: dict) -> dict:
         "sheetName": analysis_dict.get("sheetName", ""),
         "timestamp": __import__("datetime").datetime.now().isoformat(),
     }
+
+
+# ═══════════════════════════════════════════════════════════════════
+# COVERAGE & TRACEABILITY EXCEL (spec ↔ matrix)
+# ═══════════════════════════════════════════════════════════════════
+
+def generate_coverage_excel(coverage) -> bytes:
+    """Excel workbook for the spec↔matrix coverage & traceability report.
+
+    Sheets:
+      1. "Coverage"       — summary block + full traceability table
+         (answered rows coloured, pending rows "NO ANSWER", missing rows red)
+      2. "Pending"        — spec requirements present in the matrix but with
+         no supplier verdict yet (EMPTY)
+      3. "Missing"        — spec requirements with no matrix row at all
+      4. "Unmatched Rows" — matrix rows that match no spec requirement
+    """
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+
+    wb = Workbook()
+    header_fill = PatternFill(start_color="003366", end_color="003366", fill_type="solid")
+    header_font = Font(color="FFFFFF", bold=True, size=11)
+    title_font = Font(color="003366", bold=True, size=14)
+    thin_border = Border(
+        left=Side(style="thin"), right=Side(style="thin"),
+        top=Side(style="thin"), bottom=Side(style="thin"),
+    )
+    wrap = Alignment(wrap_text=True, vertical="top")
+    nok_fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
+    nok_font = Font(color="9C0006", bold=True)
+    pend_fill = PatternFill(start_color="FFEB9C", end_color="FFEB9C", fill_type="solid")
+    pend_font = Font(color="9C6500", bold=True)
+
+    # ── Sheet 1: Coverage ───────────────────────────────────
+    ws = wb.active
+    ws.title = "Coverage"
+    ws["A1"] = "LEON — Spec ↔ Matrix Coverage & Traceability"
+    ws["A1"].font = title_font
+    ws.merge_cells("A1:G1")
+
+    summary = [
+        ("Specification", coverage.spec_name or "(inline text)"),
+        ("Matrix", coverage.matrix_name or "(analysis)"),
+        ("Spec requirements (with ID)", coverage.spec_with_id),
+        ("In the matrix (traced)", f"{coverage.matched}  ({coverage.coverage_rate * 100:.1f}%)"),
+        ("Answered by the supplier (OK/NOK/NA)",
+         f"{coverage.answered}  ({coverage.answer_rate * 100:.1f}%)"),
+        ("In the matrix, not answered yet", coverage.pending),
+        ("Missing from the matrix", coverage.missing),
+        ("Spec requirements (no ID)", coverage.spec_without_id),
+        ("Matrix requirement rows", coverage.matrix_requirement_rows),
+        ("Matrix rows with no match", len(coverage.unmatched_rows)),
+    ]
+    r = 3
+    for label, value in summary:
+        ws.cell(row=r, column=1, value=label).font = Font(bold=True)
+        ws.cell(row=r, column=2, value=value)
+        r += 1
+
+    headers = ["Spec Req ID", "Spec Requirement", "Matrix Req ID", "Matrix Reference",
+               "Status", "Comment", "Matched By"]
+    hr = r + 1
+    for ci, h in enumerate(headers, 1):
+        cell = ws.cell(row=hr, column=ci, value=h)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.border = thin_border
+    row = hr + 1
+    for m in coverage.matches:
+        cat = m["category"]
+        status_text = cat if cat in ("OK", "NOK", "NA") else "NO ANSWER"
+        vals = [m["specReqId"], m["specText"], m["matrixReqId"], m["matrixReference"],
+                status_text, m["comment"], m["matchedBy"]]
+        for ci, v in enumerate(vals, 1):
+            cell = ws.cell(row=row, column=ci, value=v)
+            cell.border = thin_border
+            if ci in (2, 6):
+                cell.alignment = wrap
+        sc = ws.cell(row=row, column=5)
+        if cat in ("OK", "NOK", "NA"):
+            sc.fill = _category_fill(cat)
+            sc.font = _category_font(cat)
+        else:
+            sc.fill = pend_fill
+            sc.font = pend_font
+        row += 1
+    for u in coverage.missing_list:
+        vals = [u["reqId"], u["text"], "", "", "MISSING", "", ""]
+        for ci, v in enumerate(vals, 1):
+            cell = ws.cell(row=row, column=ci, value=v)
+            cell.border = thin_border
+            if ci in (2, 6):
+                cell.alignment = wrap
+        ws.cell(row=row, column=5).fill = nok_fill
+        ws.cell(row=row, column=5).font = nok_font
+        row += 1
+
+    for ci, w in enumerate([18, 50, 16, 30, 12, 45, 12], 1):
+        ws.column_dimensions[get_column_letter(ci)].width = w
+    ws.freeze_panes = f"A{hr + 1}"
+    ws.auto_filter.ref = f"A{hr}:G{row - 1}"
+
+    # ── Sheet 2: Pending (in the matrix, no verdict yet) ────
+    pending = [m for m in coverage.matches if m["category"] not in ("OK", "NOK", "NA")]
+    ws2 = wb.create_sheet("Pending")
+    ws2["A1"] = f"In the matrix, not answered yet — {len(pending)}"
+    ws2["A1"].font = title_font
+    for ci, h in enumerate(["Spec Req ID", "Requirement", "Matrix Req ID"], 1):
+        cell = ws2.cell(row=3, column=ci, value=h)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.border = thin_border
+    for i, u in enumerate(pending, 4):
+        ws2.cell(row=i, column=1, value=u["specReqId"]).border = thin_border
+        c = ws2.cell(row=i, column=2, value=u["specText"])
+        c.border = thin_border
+        c.alignment = wrap
+        ws2.cell(row=i, column=3, value=u["matrixReqId"]).border = thin_border
+    ws2.column_dimensions["A"].width = 18
+    ws2.column_dimensions["B"].width = 80
+    ws2.column_dimensions["C"].width = 16
+
+    # ── Sheet 3: Missing (no matrix row) ────────────────────
+    ws3 = wb.create_sheet("Missing")
+    ws3["A1"] = f"Missing from the matrix — {len(coverage.missing_list)}"
+    ws3["A1"].font = title_font
+    for ci, h in enumerate(["Req ID", "Requirement"], 1):
+        cell = ws3.cell(row=3, column=ci, value=h)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.border = thin_border
+    for i, u in enumerate(coverage.missing_list, 4):
+        ws3.cell(row=i, column=1, value=u["reqId"]).border = thin_border
+        c = ws3.cell(row=i, column=2, value=u["text"])
+        c.border = thin_border
+        c.alignment = wrap
+    ws3.column_dimensions["A"].width = 18
+    ws3.column_dimensions["B"].width = 90
+
+    # ── Sheet 4: Unmatched rows ─────────────────────────────
+    ws4 = wb.create_sheet("Unmatched Rows")
+    ws4["A1"] = f"Matrix rows with no spec match — {len(coverage.unmatched_rows)}"
+    ws4["A1"].font = title_font
+    for ci, h in enumerate(["Req ID", "Reference", "Status", "Comment"], 1):
+        cell = ws4.cell(row=3, column=ci, value=h)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.border = thin_border
+    for i, u in enumerate(coverage.unmatched_rows, 4):
+        vals = [u["reqId"], u["reference"], u["category"], u["comment"]]
+        for ci, v in enumerate(vals, 1):
+            cell = ws4.cell(row=i, column=ci, value=v)
+            cell.border = thin_border
+            if ci == 4:
+                cell.alignment = wrap
+    for ci, w in enumerate([18, 40, 12, 60], 1):
+        ws4.column_dimensions[get_column_letter(ci)].width = w
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf.read()
+
+
+# ═══════════════════════════════════════════════════════════════════
+# VERSION-TO-VERSION DELTA EXCEL
+# ═══════════════════════════════════════════════════════════════════
+
+def generate_delta_excel(comparison) -> bytes:
+    """Excel workbook for the version-to-version delta report.
+
+    Sheets:
+      1. "Delta Overview"   — one row per consecutive step (v1→v2, v2→v3, …)
+      2. "Status Changes"   — NOK→OK / OK→NOK / … with improvement flag
+      3. "New & Removed"    — requirements added or removed per step
+      4. "Comment Changes"  — rows whose comment changed (regardless of status)
+    """
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+
+    wb = Workbook()
+    header_fill = PatternFill(start_color="003366", end_color="003366", fill_type="solid")
+    header_font = Font(color="FFFFFF", bold=True, size=11)
+    title_font = Font(color="003366", bold=True, size=14)
+    thin_border = Border(
+        left=Side(style="thin"), right=Side(style="thin"),
+        top=Side(style="thin"), bottom=Side(style="thin"),
+    )
+    wrap = Alignment(wrap_text=True, vertical="top")
+
+    # ── Sheet 1: Delta Overview ─────────────────────────────
+    ws = wb.active
+    ws.title = "Delta Overview"
+    ws["A1"] = "LEON — Version-to-Version Delta"
+    ws["A1"].font = title_font
+    ws.merge_cells("A1:J1")
+    headers = ["Step", "From", "To", "Status Changes", "New", "Removed",
+               "Comment Changes", "Version Changes", "Answers Before", "Answers After"]
+    for ci, h in enumerate(headers, 1):
+        cell = ws.cell(row=3, column=ci, value=h)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.border = thin_border
+    for i, s in enumerate(comparison.steps, 4):
+        vals = [s["step"], s["matrix1"], s["matrix2"], s["statusChanges"],
+                s["new"], s["removed"], s["commentChanges"], s["versionChanges"],
+                s.get("answeredBefore", ""), s.get("answeredAfter", "")]
+        for ci, v in enumerate(vals, 1):
+            cell = ws.cell(row=i, column=ci, value=v)
+            cell.border = thin_border
+    for ci, w in enumerate([6, 40, 40, 14, 8, 10, 16, 16, 15, 15], 1):
+        ws.column_dimensions[get_column_letter(ci)].width = w
+
+    # ── Sheet 2: Status Changes ─────────────────────────────
+    ws2 = wb.create_sheet("Status Changes")
+    headers2 = ["Step", "Req ID", "Reference", "From", "To", "Type"]
+    for ci, h in enumerate(headers2, 1):
+        cell = ws2.cell(row=1, column=ci, value=h)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.border = thin_border
+    type_labels = {"added": "NEW ANSWER", "removed": "ANSWER REMOVED",
+                   "improved": "IMPROVED", "regressed": "REGRESSED"}
+    for i, c in enumerate(comparison.status_changes, 2):
+        vals = [c["step"], c.get("reqId", ""), c.get("reference", ""),
+                c["from"], c["to"],
+                type_labels.get(c.get("changeType"),
+                                "improvement" if c["improvement"] else "regression")]
+        for ci, v in enumerate(vals, 1):
+            cell = ws2.cell(row=i, column=ci, value=v)
+            cell.border = thin_border
+        ws2.cell(row=i, column=4).fill = _category_fill(c["from"])
+        ws2.cell(row=i, column=5).fill = _category_fill(c["to"])
+    for ci, w in enumerate([6, 18, 30, 10, 10, 12], 1):
+        ws2.column_dimensions[get_column_letter(ci)].width = w
+    ws2.auto_filter.ref = f"A1:F{max(1, len(comparison.status_changes) + 1)}"
+
+    # ── Sheet 3: New & Removed ──────────────────────────────
+    ws3 = wb.create_sheet("New & Removed")
+    for ci, h in enumerate(["Step", "Req ID / Reference", "Action"], 1):
+        cell = ws3.cell(row=1, column=ci, value=h)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.border = thin_border
+    row = 2
+    for step_key in sorted(comparison.new_in, key=int):
+        for key in comparison.new_in[step_key]:
+            ws3.cell(row=row, column=1, value=int(step_key)).border = thin_border
+            ws3.cell(row=row, column=2, value=key).border = thin_border
+            ws3.cell(row=row, column=3, value="NEW").border = thin_border
+            row += 1
+    for step_key in sorted(comparison.removed_in, key=int):
+        for key in comparison.removed_in[step_key]:
+            ws3.cell(row=row, column=1, value=int(step_key)).border = thin_border
+            ws3.cell(row=row, column=2, value=key).border = thin_border
+            ws3.cell(row=row, column=3, value="REMOVED").border = thin_border
+            row += 1
+    if row == 2:
+        # Nothing was added or removed — say so instead of leaving a bare header.
+        c = ws3.cell(row=2, column=2,
+                     value="No requirements were added or removed between these versions.")
+        c.font = Font(italic=True, color="808080")
+        row = 3
+    for ci, w in enumerate([6, 40, 10], 1):
+        ws3.column_dimensions[get_column_letter(ci)].width = w
+
+    # ── Sheet 4: Comment Changes ────────────────────────────
+    ws4 = wb.create_sheet("Comment Changes")
+    for ci, h in enumerate(["Step", "Req ID", "Reference", "From Comment", "To Comment"], 1):
+        cell = ws4.cell(row=1, column=ci, value=h)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.border = thin_border
+    for i, c in enumerate(comparison.comment_changes, 2):
+        vals = [c["step"], c.get("reqId", ""), c.get("reference", ""),
+                c["fromComment"], c["toComment"]]
+        for ci, v in enumerate(vals, 1):
+            cell = ws4.cell(row=i, column=ci, value=v)
+            cell.border = thin_border
+            if ci in (4, 5):
+                cell.alignment = wrap
+    if not comparison.comment_changes:
+        c = ws4.cell(row=2, column=2,
+                     value="No comment changes — every requirement kept the same comment.")
+        c.font = Font(italic=True, color="808080")
+    for ci, w in enumerate([6, 18, 30, 45, 45], 1):
+        ws4.column_dimensions[get_column_letter(ci)].width = w
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf.read()

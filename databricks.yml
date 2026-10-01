@@ -1,0 +1,113 @@
+# Databricks Asset Bundle — LEON on Databricks Apps
+#
+#   Validate : databricks bundle validate --profile leon
+#   Deploy   : databricks bundle deploy --profile leon
+#   Open app : databricks bundle open leon-spec --profile leon
+#
+# Full step-by-step guide: DATABRICKS_DEPLOY.md
+# Single source of truth for app config = the `config` block below
+# (it overrides app.yaml when deploying with bundles).
+
+bundle:
+  name: leon-spec
+
+workspace:
+  host: https://adb-5678659344564033.13.azuredatabricks.net
+
+# ---------------------------------------------------------------------------
+# Sync: ship ONLY what the app needs at runtime (~46 files, ~4 MB).
+# Everything else (tests, azure_function layer, deploy scratch, local docs,
+# .venv, local secrets) stays on your machine and never reaches the cloud.
+# ---------------------------------------------------------------------------
+sync:
+  exclude:
+    # tooling / env
+    - .venv
+    - .git
+    - .databricks
+    - .pytest_cache
+    - .pytest_cache/
+    - .vscode
+    - .claude
+    - .streamlit
+    - __pycache__
+    - node_modules
+    # layers not needed on Databricks (UIs use app/qa/route.py directly)
+    - azure_function
+    - tests
+    - scripts
+    # regenerable deploy scratch (Linux wheels, packaging dirs)
+    - linux_packages
+    - linux_packages_311
+    - data/uploads
+    # NEVER sync — secrets / credentials
+    - .env
+    - publish_profile.xml
+    # root-level junk (scratch scripts, logs, Office lock files, notes)
+    - _*
+    - "~$*"
+    - "*.zip"
+    - "*.pyc"
+    - "*.md"
+    - "*.bat"
+    - "*.pptx"
+    - run_tests.py
+    - leon-api-openapi2.json
+    - LEON_Spec_Custom_Connector.json
+
+targets:
+  dev:
+    default: true
+
+resources:
+  apps:
+    leon-spec:
+      name: leon-spec
+      description: >-
+        LEON — AI quality analysis for Stellantis mechatronics CTS
+        specifications (Q&A Assistant + Conformity Matrix Analyzer UIs)
+      source_code_path: .
+      # Deploy the app in started mode so `bundle deploy` does not leave it stopped.
+      lifecycle:
+        started: true
+      # Secrets are pulled from the `leon` secret scope (create it first —
+      # see DATABRICKS_DEPLOY.md). Only the resource NAME is referenced here.
+      resources:
+        - name: azure-openai-key
+          secret:
+            scope: leon
+            key: azure-openai-api-key
+            permission: READ
+        - name: azure-search-key
+          secret:
+            scope: leon
+            key: azure-search-api-key
+            permission: READ
+      config:
+        command:
+          - python
+          - databricks_main.py
+        env:
+          # --- Azure OpenAI (MUST be the same resource that built the 3072-dim index) ---
+          # Verified 2026-09-23 against the working local .env. The code does
+          #   OpenAI(api_key=..., base_url=AZURE_OPENAI_ENDPOINT)
+          # so this must be the full OpenAI-compatible base URL, not just the host.
+          # This is an Azure AI Services (Foundry) v1-style endpoint.
+          - name: AZURE_OPENAI_ENDPOINT
+            value: https://Ragchatbotemwh.services.ai.azure.com/openai/v1/
+          - name: AZURE_OPENAI_LLM_DEPLOYMENT
+            value: gpt-4o
+          - name: AZURE_OPENAI_EMBEDDING_DEPLOYMENT
+            value: text-embedding-3-large
+          - name: AZURE_OPENAI_API_KEY
+            value_from: azure-openai-key
+          # --- Azure AI Search (hybrid vector+text retrieval) ---
+          - name: AZURE_SEARCH_ENDPOINT
+            value: https://leon-spec-search-915f.search.windows.net
+          - name: AZURE_SEARCH_INDEX_NAME
+            value: leon-specs-index
+          - name: AZURE_SEARCH_API_KEY
+            value_from: azure-search-key
+          # --- beStandard: Stellantis intranet, unreachable from Databricks ---
+          - name: BESTANDARD_AUTO_RESOLVE
+            value: "false"

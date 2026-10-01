@@ -29,9 +29,11 @@ from app.qa.spec_to_matrix import (
     COL_DESCRIPTION,
     COL_REQ_ID,
     Requirement,
+    MatrixCoverage,
     extract_requirements,
     generate_conformity_matrix,
     spec_to_matrix,
+    verify_matrix_coverage,
 )
 
 
@@ -123,6 +125,76 @@ class TestExtraction:
         matches = [r for r in reqs if r.req_id == "REQ-1111111"]
         assert len(matches) == 1
         assert "real thing" in matches[0].text
+
+    def test_removed_requirement_mention_is_excluded_entirely(self):
+        """
+        Regression: a requirement listed under a "Removed requirements:"
+        change-history heading was deleted from the document body — unlike
+        "New"/"Modified" mentions, there is no real definition anywhere
+        later in the spec to fill in the placeholder. It must never appear
+        in the matrix at all (not even with an empty description), since
+        real ASU spec evidence showed "REF-ASU-CD-MAINT-0021" (a genuinely
+        removed id) permanently leaking through as a phantom empty row.
+        """
+        text = (
+            "Table of updates\n"
+            "2 | 2025/12/23 | A. Author | Removed requirements:\n"
+            "REF-ASU-CD-MAINT-0021(0)\n"
+            "[MATDIAG] no longer applicable\n"
+            "Modified requirements:\n"
+            "PURPOSE\n"
+            "REQUIREMENTS\n"
+            "REF-ASU-CD-MAINT-0022(0) | The unit shall survive 5 cycles of assembly. | [M1]\n"
+        )
+        reqs = extract_requirements(text)
+        ids = {r.req_id for r in reqs}
+        assert "REF-ASU-CD-MAINT-0021" not in ids
+        assert "REF-ASU-CD-MAINT-0022" in ids
+
+    def test_zero_gap_anchor_between_two_real_rows_is_not_captured(self):
+        """
+        Regression: a stray second "Input requirement" reference sitting
+        alone on its own line, immediately followed (zero gap) by the NEXT
+        row's own complete "id | desc | upstream" line — e.g.
+        "REF-TF-TFD-MVEL-0108(1)" between two real ASU requirements — has
+        no content of its own at all (every real requirement has some body
+        text) and must never become its own row.
+        """
+        text = (
+            "REF-ASU-CD-MAINT-0022(0) | FILL_FAULT_INFO_FRAME shall be activated in all functional states | REQ-0508543 A\n"
+            "REF-TF-TFD-MVEL-0108(1)\n"
+            "REF-ASU-CD-MAINT-0023(0) | FILL_FAULT_INFO_FRAME shall send in a functional frame the information. | REQ-0508544\n"
+        )
+        reqs = extract_requirements(text)
+        ids = {r.req_id: r for r in reqs}
+        assert "REF-TF-TFD-MVEL-0108" not in ids
+        assert "shall be activated" in ids["REF-ASU-CD-MAINT-0022"].text
+        assert "shall send" in ids["REF-ASU-CD-MAINT-0023"].text
+
+    def test_version_bump_changelog_mention_never_blocks_the_real_definition(self):
+        """
+        Regression: "REF-X-0020(0) changed to REF-X-0020(1)" in the change
+        history resolves to the SAME rid on both sides (the "(v)" suffix
+        isn't part of the id) and sits near the top of the document — left
+        unfiltered, it would permanently win the "first non-empty text
+        wins" race against the id's real, much more complete definition
+        that appears later, since the changelog sentence itself contains no
+        shall/must to lose a fairness tiebreak against a real statement
+        that also lacks one (a legitimate diagnostic-mapping entry with no
+        "shall" wording of its own).
+        """
+        text = (
+            "Modified requirements:\n"
+            "REF-ASU-CD-MAINT-0020(0) changed to REF-ASU-CD-MAINT-0020(1)\n"
+            "PURPOSE\n"
+            "REQUIREMENTS\n"
+            "Requirement No. (V) | Description of the requirement | Input requirement (v)\n"
+            "REF-ASU-CD-MAINT-0020(1) | Diagnostic messaging is applicable and includes the description of the data exchanged with the protocol. | [DIAG5]\n"
+        )
+        reqs = extract_requirements(text)
+        req = {r.req_id: r for r in reqs}["REF-ASU-CD-MAINT-0020"]
+        assert "changed to" not in req.text
+        assert "Diagnostic messaging is applicable" in req.text
 
     def test_broken_ref_spacing_repaired(self):
         text = "REF- ASU-CD-MAINT-0017(0) | The unit must survive 5 cycles of assembly. | [M1]"
@@ -240,6 +312,50 @@ class TestExtraction:
         reqs2 = extract_requirements(text2)
         assert reqs2[0].req_id == "REF-ASU-CD-Safety-0001"
 
+    def test_orphaned_bracket_tag_line_is_not_captured_as_a_requirement(self):
+        """
+        Regression: a real ASU-spec table sometimes flattens the "Input
+        requirement" cell of one row onto its OWN line, e.g.
+        "[M11] REF-CONN-CDC-DOC.0012 (0) [M11]" — a cross-document
+        traceability reference with no real requirement prose at all. This
+        must never become its own row, and the requirement whose real
+        continuation text sits on the line BEFORE it (which used to get
+        misattributed to this same orphaned id) must keep its own full text.
+        """
+        text = (
+            "APP-ASU-CD-ENV-0003(0) | << if the location justifies it >>\n"
+            "the component shall comply to the standard [N47] overall the lifetime duration | REF-B217130-ST-CL16(0) [M15]\n"
+            "[M11] REF-CONN-CDC-DOC.0012 (0) [M11]\n"
+            "REF-ASU-CD-ENV-0004(0) | The connectors should respect the requirements of the E2 sealing class.\n"
+        )
+        reqs = extract_requirements(text)
+        ids = {r.req_id: r for r in reqs}
+        assert "REF-CONN-CDC-DOC.0012" not in ids
+        assert "REF-B217130-ST-CL16" not in ids
+        assert "the component shall comply" in ids["APP-ASU-CD-ENV-0003"].text
+        assert "REF-ASU-CD-ENV-0004" in ids
+
+    def test_fmea_row_without_leading_id_does_not_capture_trailing_input_requirement(self):
+        """
+        Regression: a quantitative FMEA failure-mode row with NO leading id
+        of its own — "Flow: X | failure mode | PPM value | GEN-xxx(0)" (4
+        columns) — used to fall into the "desc | id" no-leading-id pattern
+        and treat the trailing "Input requirement" reference as if it were
+        this row's own identifier. That pattern is only valid for a genuine
+        2-column "description | id" row (see
+        test_desc_then_id_layout_captured); anything wider is raw table
+        data, and the id must stay out of the matrix entirely.
+        """
+        text = (
+            "REF-ASU-CD-SdF-0003(0) | The reference duration for validating occurrence is 3 years. | GEN-ALM-CDC-SDF_004(0)\n"
+            "Flow: LIN COMMUNICATION | Loss of communication | 100 | GEN-ALM-CDC-SDF_004(0)\n"
+            "REF-ASU-CD-SdF-0008(0) | Failure mode | Physical failure mode | Maximum value\n"
+        )
+        reqs = extract_requirements(text)
+        ids = {r.req_id for r in reqs}
+        assert "GEN-ALM-CDC-SDF_004" not in ids
+        assert "REF-ASU-CD-SdF-0003" in ids
+
     def test_doors_id_does_not_swallow_a_separate_later_requirement(self):
         """
         Regression: a trailing "REQ-… C" (DOORS export id) that concludes
@@ -297,6 +413,116 @@ class TestExtraction:
         assert "REQ-0999999" not in ids
         assert "REF-A-CD-FUNC-010" in ids
         assert "REF-A-CD-FUNC-011" in ids
+
+    def test_heading_after_table_is_not_glued_onto_preceding_description(self):
+        """
+        Regression (2026 audit): a subsection heading immediately following
+        a table — e.g. "LIN 2.1 Physical Layers" — is NOT all-caps, so it
+        silently got absorbed as if it were more of the PRECEDING
+        requirement's description. Confirmed on the real spec across ~20
+        requirements. The heading must stop the continuation, whether the
+        preceding sentence ends in real punctuation or on a bare reference
+        tag/version marker (this document's own style often has no period
+        at all before a reference tag).
+        """
+        text = (
+            "REF-A-CD-LIN-0005(0) | The FNR must observe the requirements on communication errors as defined in the ST [LIN2].\n"
+            "LIN 2.1 Physical Layers\n"
+            "Requirement Number (v) | Description of the requirement | Input requirement (v)\n"
+            "REF-A-CD-LIN-0006(0) | The table below defines the requirements applicable of the document [LIN5]\n"
+            "LIN 2.1 communication rules\n"
+            "Requirement Number (v) | Description of the requirement | Input requirement (v)\n"
+            "REF-A-CD-LIN-0007(0) | Some other requirement text follows. | [X]\n"
+        )
+        reqs = extract_requirements(text)
+        by_id = {r.req_id: r for r in reqs}
+        assert "LIN 2.1 Physical Layers" not in by_id["REF-A-CD-LIN-0005"].text
+        assert by_id["REF-A-CD-LIN-0005"].text.endswith("[LIN2].")
+        # No terminal punctuation at all before the heading (bare reference
+        # tag ending) — still must not absorb it.
+        assert "LIN 2.1 communication rules" not in by_id["REF-A-CD-LIN-0006"].text
+        assert by_id["REF-A-CD-LIN-0006"].text.endswith("[LIN5]")
+
+    def test_heading_lookahead_does_not_over_truncate_real_multiline_content(self):
+        """
+        Regression: the heading-detection lookahead must only fire when the
+        VERY NEXT line is a table header — a wider lookahead window can see
+        PAST a real intervening heading and wrongly truncate legitimate
+        multi-line content (confirmed: this happened to
+        REF-ASU-CD-FAB-0004's real 3-line description with a 3-line
+        lookahead window; narrowing to 1 line fixed it without losing the
+        heading-detection benefit).
+        """
+        text = (
+            "REF-A-CD-FAB-0004(0) | <<For an actuator only>>\n"
+            "The consumption of the actuator is higher than 10 mA\n"
+            "To allow the checking of the disconnection by current measurement (CONTEV)\n"
+            "Marking of the Components or Parts\n"
+            "Requirement Number (v) | Description of the requirement | Input requirement (v)\n"
+            "REF-A-CD-MARQ-0001(0) | For any requirement that involves an indelible inscription: | [X]\n"
+        )
+        reqs = extract_requirements(text)
+        by_id = {r.req_id: r for r in reqs}
+        fab_text = by_id["REF-A-CD-FAB-0004"].text
+        assert "The consumption of the actuator is higher than 10 mA" in fab_text
+        assert "CONTEV" in fab_text
+        assert "Marking of the Components or Parts" not in fab_text
+        assert "For any requirement that involves an indelible inscription" \
+            not in fab_text
+
+    def test_nested_subtable_header_row_does_not_collapse_distinct_requirements(self):
+        """
+        Regression (2026 audit): a nested sub-table's own column-header row
+        ("Flow | Label | Detection criteria | Disappearing criteria | Life
+        sequence | Component") was treated as the CLOSING line of the cell,
+        so the loop grabbed only its first cell ("Flow") and stopped —
+        confirmed on the real ASU spec to make 6 distinct DTC requirements
+        (MAINT-0001..0006) all collapse to the identical, uninformative
+        "...below: Flow". The real distinguishing content (the actual fault
+        name on the NEXT row) must be preserved instead.
+        """
+        text = (
+            "REF-A-CD-MAINT-0001(0) | The ASU shall record a DTC with the parameters below:\n"
+            "Flow | Label | Detection criteria | Disappearing criteria | Life sequence | Component\n"
+            "Circuit short to battery or open | Range TBD | Range TBD | All phases | ASU\n"
+            "@diag :mit_021 Circuit short to battery or open | [EEAD_AUE]\n"
+            "REF-A-CD-MAINT-0002(0) | The ASU shall record a DTC with the parameters below:\n"
+            "Flow | Label | Detection criteria | Disappearing criteria | Life sequence | Component\n"
+            "Circuit short to ground or open | Range TBD | Range TBD | All phases | ASU\n"
+            "@diag :mit_022 Circuit short to ground or open | [EEAD_AUE]\n"
+        )
+        reqs = extract_requirements(text)
+        by_id = {r.req_id: r for r in reqs}
+        assert "Circuit short to battery or open" in by_id["REF-A-CD-MAINT-0001"].text
+        assert "Circuit short to ground or open" in by_id["REF-A-CD-MAINT-0002"].text
+        # The two requirements must no longer be identical.
+        assert by_id["REF-A-CD-MAINT-0001"].text != by_id["REF-A-CD-MAINT-0002"].text
+        assert not by_id["REF-A-CD-MAINT-0001"].text.endswith("Flow")
+
+    def test_generic_column_labels_never_fabricate_a_description(self):
+        """
+        Regression (2026 audit): a fault-list row whose OWN line is just
+        "id | Requirement description | Appearance/Disappearance criteria |
+        Life phase" (both middle segments are literal, generic TEMPLATE
+        COLUMN LABELS, not real content) used to pick the longer of the two
+        labels ("Appearance/Disappearance criteria") and present it as if
+        it were the requirement's real description — confirmed on 3 real
+        ASU-spec rows that are otherwise genuinely blank. The real
+        distinguishing content (the fault name on the next row) must be
+        used instead of a fabricated label.
+        """
+        text = (
+            "Requirement Number (v) | Description of the requirement | Input requirement (v)\n"
+            "REF-A-CD-MAINT-0017(0) | Requirement description | Appearance/Disappearance criteria | Life phase\n"
+            "Vehicle battery disconnection | A: Detection of a break-in by battery cut | Without contact\n"
+        )
+        reqs = extract_requirements(text)
+        by_id = {r.req_id: r for r in reqs}
+        text_0017 = by_id["REF-A-CD-MAINT-0017"].text
+        assert "Appearance/Disappearance criteria" not in text_0017
+        assert "Requirement description" not in text_0017
+        assert "Vehicle battery disconnection" in text_0017
+        assert not text_0017.startswith(" ")  # no stray leading space
 
     def test_real_asu_spec_matrix_has_no_empty_input_requirement_rows(self):
         """
@@ -386,15 +612,16 @@ class TestGeneration:
 
 # ── 4. Full pipeline on the real ASU spec ─────────────────────────
 
-class TestRealSpec:
+@pytest.fixture(scope="module")
+def asu_result():
+    if not ASU_PATH.exists():
+        pytest.skip("ASU spec not found")
+    from app.qa.retrieval import extract_text_from_file
+    text = extract_text_from_file(ASU_PATH)
+    return spec_to_matrix(text, ASU_PATH.name)
 
-    @pytest.fixture(scope="class")
-    def asu_result(self):
-        if not ASU_PATH.exists():
-            pytest.skip("ASU spec not found")
-        from app.qa.retrieval import extract_text_from_file
-        text = extract_text_from_file(ASU_PATH)
-        return spec_to_matrix(text, ASU_PATH.name)
+
+class TestRealSpec:
 
     def test_extracts_many_requirements(self, asu_result):
         assert asu_result["requirementsCount"] >= 200
@@ -441,3 +668,91 @@ class TestRealSpec:
             if rid == "REQ-0937326":
                 assert "Timing Performances" not in desc
         assert found_exifunc003, "REF-ASU-CD-EXIFUNC-003 not found in generated matrix"
+
+
+# ── 5. Round-trip coverage check ──────────────────────────────────
+
+class TestCoverage:
+
+    def _reqs(self):
+        return [
+            Requirement("REQ-0000001", "The system shall do A."),
+            Requirement("REF-X-CD-Y-002", "The system shall do B."),
+            Requirement("", "The system shall do C without an ID."),
+        ]
+
+    def test_round_trip_is_complete(self):
+        """A matrix generated from the requirements must contain every one
+        of them — no missing requirements, no ghost rows."""
+        reqs = self._reqs()
+        xlsx = generate_conformity_matrix(reqs, "test")
+        cov = verify_matrix_coverage(reqs, xlsx)
+        assert cov.total_requirements == 3
+        assert cov.matched_requirements == 3
+        assert cov.missing_requirements == []
+        assert cov.ghost_rows == []
+        assert cov.coverage_rate == 1.0
+        assert cov.complete is True
+
+    def test_ghost_row_is_flagged(self):
+        """A matrix row that matches no spec requirement must be reported
+        as a ghost row."""
+        reqs = self._reqs()
+        xlsx = generate_conformity_matrix(reqs, "test")
+        from openpyxl import load_workbook
+        wb = load_workbook(io.BytesIO(xlsx))
+        ws = wb["new version"]
+        ws.cell(row=20, column=COL_DESCRIPTION, value="This row has no matching requirement.")
+        ws.cell(row=20, column=COL_REQ_ID, value="REQ-GHOST-999")
+        buf = io.BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+        cov = verify_matrix_coverage(reqs, buf.read())
+        assert len(cov.ghost_rows) == 1
+        assert cov.ghost_rows[0]["reqId"] == "REQ-GHOST-999"
+        assert cov.ghost_rows[0]["row"] == 20
+        assert cov.complete is False
+
+    def test_missing_requirement_is_flagged(self):
+        """A spec requirement absent from the matrix must be reported as
+        missing (generation lost it)."""
+        reqs = self._reqs()
+        subset = reqs[:2]  # drop the no-ID requirement
+        xlsx = generate_conformity_matrix(subset, "test")
+        cov = verify_matrix_coverage(reqs, xlsx)
+        assert cov.matched_requirements == 2
+        assert len(cov.missing_requirements) == 1
+        assert cov.missing_requirements[0]["reqId"] == ""
+        assert "do C without an ID" in cov.missing_requirements[0]["text"]
+        assert cov.complete is False
+
+    def test_id_matching_is_normalized(self):
+        """Requirement IDs must match regardless of case / whitespace /
+        trailing version suffix ('(0)')."""
+        reqs = [Requirement("REF-X-CD-Y-002(0)", "The system shall do B.")]
+        xlsx = generate_conformity_matrix(reqs, "test")
+        cov = verify_matrix_coverage(reqs, xlsx)
+        assert cov.complete is True
+
+    def test_spec_to_matrix_includes_coverage(self):
+        """The full pipeline must return the coverage check in its dict."""
+        result = spec_to_matrix(
+            "REF-X-CD-Y-002 | The system shall do B. | [UP]\n"
+            "REQ-0000001 | The system shall do A. | [UP]\n"
+        )
+        cov = result["coverage"]
+        assert cov["totalRequirements"] == result["requirementsCount"]
+        assert cov["matchedRequirements"] == cov["totalRequirements"]
+        assert cov["missingRequirements"] == []
+        assert cov["ghostRows"] == []
+        assert cov["complete"] is True
+
+    def test_real_asu_pipeline_coverage_complete(self, asu_result):
+        """On the real ASU spec the generated matrix must contain every
+        extracted requirement with no ghost rows."""
+        cov = asu_result["coverage"]
+        assert cov["totalRequirements"] == asu_result["requirementsCount"]
+        assert cov["matchedRequirements"] == cov["totalRequirements"]
+        assert cov["missingRequirements"] == []
+        assert cov["ghostRows"] == []
+        assert cov["complete"] is True

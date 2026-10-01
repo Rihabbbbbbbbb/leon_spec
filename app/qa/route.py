@@ -49,6 +49,7 @@ from app.qa.prompt import (
 from app.qa.retrieval import (
     retrieve, build_index, Chunk, RetrievalResult,
     save_uploaded_file, delete_uploaded_file, extract_text_from_file,
+    ACCEPTED_UPLOAD_EXTENSIONS, unsupported_file_type_message,
 )
 from app.qa.mock_data import mock_answer
 from app.qa.spec_validator import validate_specification, report_to_dict
@@ -81,6 +82,11 @@ class AskResponse(BaseModel):
     metrics: Optional[dict] = None  # per-answer quality indicators
 
 
+class EvidenceReportRequest(BaseModel):
+    """Evidence analysis payload used to regenerate its Excel review report."""
+    analysis: dict
+
+
 # Cache the chunk index in memory (rebuilt on first call or after uploads)
 _index_cache: Optional[List[Chunk]] = None
 
@@ -99,7 +105,7 @@ def _reset_index() -> None:
 
 
 # Accepted upload extensions
-_ACCEPTED_EXT = {".txt", ".docx", ".pdf"}
+_ACCEPTED_EXT = ACCEPTED_UPLOAD_EXTENSIONS
 _MAX_UPLOAD_BYTES = 25 * 1024 * 1024  # 25 MB
 
 
@@ -589,10 +595,7 @@ async def upload_file(file: UploadFile = File(...)) -> dict:
 
     suffix = Path(file.filename).suffix.lower()
     if suffix not in _ACCEPTED_EXT:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unsupported file type '{suffix}'. Accepted: {sorted(_ACCEPTED_EXT)}",
-        )
+        raise HTTPException(status_code=400, detail=unsupported_file_type_message(suffix))
 
     content = await file.read()
     if not content:
@@ -695,11 +698,8 @@ async def upload_and_validate(file: UploadFile = File(...)) -> dict:
         raise HTTPException(status_code=400, detail="No file name provided")
 
     suffix = _Path(file.filename).suffix.lower()
-    if suffix not in (".txt", ".docx", ".pdf"):
-        raise HTTPException(
-            status_code=400,
-            detail=f"File type '{suffix}' not accepted. Use .txt, .docx, or .pdf.",
-        )
+    if suffix not in ACCEPTED_UPLOAD_EXTENSIONS:
+        raise HTTPException(status_code=400, detail=unsupported_file_type_message(suffix))
 
     content = await file.read()
     if not content:
@@ -788,11 +788,8 @@ async def spec_to_matrix_endpoint(file: UploadFile = File(...)) -> dict:
         raise HTTPException(status_code=400, detail="No file name provided")
 
     suffix = _Path(file.filename).suffix.lower()
-    if suffix not in (".txt", ".docx", ".pdf"):
-        raise HTTPException(
-            status_code=400,
-            detail=f"File type '{suffix}' not accepted. Use .txt, .docx, or .pdf.",
-        )
+    if suffix not in ACCEPTED_UPLOAD_EXTENSIONS:
+        raise HTTPException(status_code=400, detail=unsupported_file_type_message(suffix))
 
     content = await file.read()
     if not content:
@@ -811,6 +808,7 @@ async def spec_to_matrix_endpoint(file: UploadFile = File(...)) -> dict:
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f"Matrix generation failed: {str(exc)}")
 
+    coverage = result.get("coverage", {})
     return {
         "status": "answered",
         "fileName": saved_path.name,
@@ -819,11 +817,19 @@ async def spec_to_matrix_endpoint(file: UploadFile = File(...)) -> dict:
         "withIdCount": result["withIdCount"],
         "withoutIdCount": result["withoutIdCount"],
         "sampleIds": result["sampleIds"],
+        "coverage": coverage,
         "answer": (
             f"Matrice de conformité générée depuis '{saved_path.name}' : "
             f"{result['requirementsCount']} exigences extraites "
             f"({result['withIdCount']} avec identifiant, "
-            f"{result['withoutIdCount']} sans identifiant)."
+            f"{result['withoutIdCount']} sans identifiant). "
+            f"Couverture : {coverage.get('matchedRequirements', 0)}/"
+            f"{coverage.get('totalRequirements', 0)} exigences dans la matrice"
+            + (
+                f", {len(coverage.get('ghostRows', []))} ligne(s) fantôme(s)."
+                if coverage.get("ghostRows")
+                else " — aucune ligne fantôme."
+            )
         ),
     }
 
@@ -1267,6 +1273,188 @@ def conformity_compare(req: CompareRequest) -> dict:
 
     try:
         comparison = compare_matrices(file_paths, req.fileNames)
-        return comparison_to_dict(comparison)
+        result = comparison_to_dict(comparison)
+        import base64 as _b64
+        from app.qa.conformity_report import generate_delta_excel
+        result["reportExcel"] = _b64.b64encode(generate_delta_excel(comparison)).decode("utf-8")
+        return result
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f"Comparison failed: {str(exc)}")
+
+
+# ── Spec ↔ Matrix Coverage & Traceability ──────────────────────────
+@router.post("/conformity-coverage")
+async def conformity_coverage(
+    spec: UploadFile = File(...),
+    matrix: UploadFile = File(...),
+) -> dict:
+    """
+    Upload a specification (.docx/.pdf/.txt) AND a supplier conformity matrix
+    (.ods/.xlsx/.xlsm) and get the coverage & traceability report:
+
+    - how many spec requirements were answered in the matrix
+    - which spec requirements were never answered
+    - which matrix rows match no spec requirement
+    - the full traceability table (spec req → matrix row → status → comment)
+
+    Returns JSON plus a downloadable Excel workbook (`reportExcel`, base64).
+    """
+    from pathlib import Path as _Path
+    import base64 as _b64
+    from app.qa.retrieval import extract_text_from_file
+    from app.qa.conformity_analyzer import extract_conformity_data
+    from app.qa.conformity_coverage import build_coverage_report, coverage_to_dict
+    from app.qa.conformity_report import generate_coverage_excel
+
+    if not spec.filename or not matrix.filename:
+        raise HTTPException(status_code=400, detail="Both a spec and a matrix file are required.")
+
+    upload_dir = _Path("data/uploads")
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    spec_path = upload_dir / spec.filename
+    matrix_path = upload_dir / matrix.filename
+    spec_path.write_bytes(await spec.read())
+    matrix_path.write_bytes(await matrix.read())
+
+    try:
+        spec_text = extract_text_from_file(spec_path)
+        if not spec_text.strip():
+            raise HTTPException(
+                status_code=422,
+                detail="Could not extract text from the specification file.",
+            )
+        analysis = extract_conformity_data(str(matrix_path), matrix.filename)
+        coverage = build_coverage_report(
+            spec_text,
+            analysis,
+            spec_name=spec.filename,
+            matrix_name=matrix.filename,
+        )
+        result = coverage_to_dict(coverage)
+        result["reportExcel"] = _b64.b64encode(generate_coverage_excel(coverage)).decode("utf-8")
+        return result
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Coverage analysis failed: {str(exc)}")
+
+
+@router.post("/conformity-pdf-evidence")
+async def conformity_pdf_evidence(
+    matrix: UploadFile = File(...),
+    tdr: UploadFile = File(...),
+) -> dict:
+    """Return page-cited PDF evidence candidates for matrix requirements.
+
+    The endpoint preserves the matrix supplier status as a declaration and
+    never generates a system compliance verdict.
+    """
+    import tempfile
+    from app.qa.conformity_analyzer import extract_conformity_data
+    from app.qa.pdf_evidence import analyze_matrix_against_pdf
+    from app.qa.conformity_evidence_report import generate_evidence_excel
+
+    try:
+        if not matrix.filename or Path(matrix.filename).suffix.lower() not in {".ods", ".xlsx", ".xlsm"}:
+            raise HTTPException(status_code=400, detail="Matrix must be an ODS, XLSX, or XLSM file.")
+        if not tdr.filename or Path(tdr.filename).suffix.lower() != ".pdf":
+            raise HTTPException(status_code=400, detail="TDR must be a PDF file.")
+        matrix_bytes = await matrix.read(_MAX_UPLOAD_BYTES + 1)
+        tdr_bytes = await tdr.read(_MAX_UPLOAD_BYTES + 1)
+        if len(matrix_bytes) > _MAX_UPLOAD_BYTES or len(tdr_bytes) > _MAX_UPLOAD_BYTES:
+            raise HTTPException(status_code=413, detail="Each file must be 25 MB or smaller.")
+        if not matrix_bytes or not tdr_bytes:
+            raise HTTPException(status_code=400, detail="Both uploaded files must be non-empty.")
+
+        # Client filenames never become filesystem paths.
+        matrix_suffix = Path(matrix.filename).suffix.lower()
+        with tempfile.TemporaryDirectory(prefix="leon-evidence-") as temp_dir:
+            matrix_path = Path(temp_dir) / f"matrix{matrix_suffix}"
+            pdf_path = Path(temp_dir) / "tdr.pdf"
+            matrix_path.write_bytes(matrix_bytes)
+            pdf_path.write_bytes(tdr_bytes)
+            try:
+                analysis = extract_conformity_data(str(matrix_path), Path(matrix.filename).name)
+                result = analyze_matrix_against_pdf(analysis, pdf_path)
+                result["tdrFile"] = Path(tdr.filename).name
+                result["matrixFile"] = Path(matrix.filename).name
+                result.setdefault("decisionSummary", {"supplierDeclared": {}})
+                for item in result.get("requirements", []):
+                    for candidate in item.get("evidence", []):
+                        candidate["file_name"] = result["tdrFile"]
+                import base64
+                result["reportExcel"] = base64.b64encode(generate_evidence_excel(result)).decode("ascii")
+            except HTTPException:
+                raise
+            except Exception as exc:
+                raise HTTPException(status_code=422, detail=f"Evidence analysis failed: {exc}") from exc
+    finally:
+        await matrix.close()
+        await tdr.close()
+
+    return result
+
+
+@router.post("/conformity-pptx-evidence")
+async def conformity_pptx_evidence(
+    matrix: UploadFile = File(...),
+    pptx: UploadFile = File(...),
+) -> dict:
+    """Return slide-cited candidate evidence and a downloadable Excel report."""
+    import base64
+    import tempfile
+    from app.qa.conformity_analyzer import extract_conformity_data
+    from app.qa.pptx_evidence_matching import analyze_matrix_against_pptx
+    from app.qa.conformity_evidence_report import generate_evidence_excel
+
+    try:
+        if not matrix.filename or Path(matrix.filename).suffix.lower() not in {".ods", ".xlsx", ".xlsm"}:
+            raise HTTPException(status_code=400, detail="Matrix must be an ODS, XLSX, or XLSM file.")
+        if not pptx.filename or Path(pptx.filename).suffix.lower() != ".pptx":
+            raise HTTPException(status_code=400, detail="Presentation must be a .pptx file; convert legacy .ppt files first.")
+        matrix_bytes = await matrix.read(_MAX_UPLOAD_BYTES + 1)
+        pptx_bytes = await pptx.read(_MAX_UPLOAD_BYTES + 1)
+        if len(matrix_bytes) > _MAX_UPLOAD_BYTES or len(pptx_bytes) > _MAX_UPLOAD_BYTES:
+            raise HTTPException(status_code=413, detail="Each file must be 25 MB or smaller.")
+        if not matrix_bytes or not pptx_bytes:
+            raise HTTPException(status_code=400, detail="Both uploaded files must be non-empty.")
+        if not pptx_bytes.startswith(b"PK"):
+            raise HTTPException(status_code=400, detail="The uploaded file is not a valid .pptx package.")
+        with tempfile.TemporaryDirectory(prefix="leon-evidence-") as temp_dir:
+            matrix_path = Path(temp_dir) / f"matrix{Path(matrix.filename).suffix.lower()}"
+            pptx_path = Path(temp_dir) / "presentation.pptx"
+            matrix_path.write_bytes(matrix_bytes)
+            pptx_path.write_bytes(pptx_bytes)
+            try:
+                analysis = extract_conformity_data(str(matrix_path), Path(matrix.filename).name)
+                result = analyze_matrix_against_pptx(analysis, pptx_path)
+                result["matrixFile"] = Path(matrix.filename).name
+                result["presentationFile"] = Path(pptx.filename).name
+                result.setdefault("decisionSummary", {"supplierDeclared": {}})
+                for item in result.get("requirements", []):
+                    for candidate in item.get("evidence", []):
+                        candidate["file_name"] = result["presentationFile"]
+                result["reportExcel"] = base64.b64encode(generate_evidence_excel(result)).decode("ascii")
+            except HTTPException:
+                raise
+            except Exception as exc:
+                raise HTTPException(status_code=422, detail=f"Evidence analysis failed: {exc}") from exc
+    finally:
+        await matrix.close()
+        await pptx.close()
+    return result
+
+
+@router.post("/conformity-pdf-evidence/report")
+async def conformity_pdf_evidence_report(request: EvidenceReportRequest) -> dict:
+    """Regenerate an evidence workbook from an existing analysis response."""
+    import base64
+    from app.qa.conformity_evidence_report import generate_evidence_excel
+
+    try:
+        report = generate_evidence_excel(request.analysis)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Evidence report generation failed: {exc}") from exc
+    return {"reportExcel": base64.b64encode(report).decode("ascii")}
+
+

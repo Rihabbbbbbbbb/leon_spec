@@ -376,11 +376,11 @@ def handle_upload_and_validate(file_name: str, file_bytes: bytes) -> func.HttpRe
     """Upload a file, index it, then validate it — all in one call."""
 
     # Validate extension
-    allowed_ext = {".txt", ".docx", ".pdf"}
+    from app.qa.retrieval import ACCEPTED_UPLOAD_EXTENSIONS, unsupported_file_type_message
     suffix = Path(file_name).suffix.lower()
-    if suffix not in allowed_ext:
+    if suffix not in ACCEPTED_UPLOAD_EXTENSIONS:
         return _response(
-            f"File type '{suffix}' not accepted. Use .txt, .docx, or .pdf.",
+            unsupported_file_type_message(suffix),
             status="error", status_code=400
         )
 
@@ -522,11 +522,11 @@ def handle_upload_and_validate(file_name: str, file_bytes: bytes) -> func.HttpRe
 def handle_upload_and_validate_pdf(file_name: str, file_bytes: bytes) -> func.HttpResponse:
     """Upload a file, validate it, and return a PDF report."""
 
-    allowed_ext = {".txt", ".docx", ".pdf"}
+    from app.qa.retrieval import ACCEPTED_UPLOAD_EXTENSIONS, unsupported_file_type_message
     suffix = Path(file_name).suffix.lower()
-    if suffix not in allowed_ext:
+    if suffix not in ACCEPTED_UPLOAD_EXTENSIONS:
         return _response(
-            f"File type '{suffix}' not accepted. Use .txt, .docx, or .pdf.",
+            unsupported_file_type_message(suffix),
             status="error", status_code=400
         )
 
@@ -638,16 +638,16 @@ def handle_validate_url(file_url: str, file_name: str = "") -> func.HttpResponse
         file_name = urllib.parse.unquote(file_name)
 
     # Validate file extension
-    allowed_ext = {".txt", ".docx", ".pdf"}
+    from app.qa.retrieval import ACCEPTED_UPLOAD_EXTENSIONS, unsupported_file_type_message
     suffix = Path(file_name).suffix.lower()
-    if suffix not in allowed_ext:
+    if suffix not in ACCEPTED_UPLOAD_EXTENSIONS:
         # If no recognizable extension, default to .docx
         if not suffix:
             file_name = file_name + ".docx"
         else:
             return func.HttpResponse(
                 body=json.dumps({
-                    "answer": f"File type '{suffix}' not accepted. Use .txt, .docx, or .pdf.",
+                    "answer": unsupported_file_type_message(suffix),
                     "status": "error",
                 }, ensure_ascii=False),
                 status_code=400,
@@ -861,11 +861,11 @@ def handle_upload(file_name: str, file_bytes: bytes) -> func.HttpResponse:
     """Save an uploaded spec file, index it to Azure AI Search, and rebuild local index."""
 
     # Validate extension
-    allowed_ext = {".txt", ".docx", ".pdf"}
+    from app.qa.retrieval import ACCEPTED_UPLOAD_EXTENSIONS, unsupported_file_type_message
     suffix = Path(file_name).suffix.lower()
-    if suffix not in allowed_ext:
+    if suffix not in ACCEPTED_UPLOAD_EXTENSIONS:
         return _response(
-            f"File type '{suffix}' not accepted. Use .txt, .docx, or .pdf.",
+            unsupported_file_type_message(suffix),
             status="error", status_code=400
         )
 
@@ -1248,11 +1248,11 @@ def handle_spec_to_matrix(file_name: str, file_bytes: bytes) -> func.HttpRespons
 
     logging.info(f"handle_spec_to_matrix: {file_name}, {len(file_bytes)} bytes")
 
-    allowed_ext = {".txt", ".docx", ".pdf"}
+    from app.qa.retrieval import ACCEPTED_UPLOAD_EXTENSIONS, unsupported_file_type_message
     suffix = Path(file_name).suffix.lower()
-    if suffix not in allowed_ext:
+    if suffix not in ACCEPTED_UPLOAD_EXTENSIONS:
         return _response(
-            f"File type '{suffix}' not accepted. Use .txt, .docx, or .pdf.",
+            unsupported_file_type_message(suffix),
             status="error", status_code=400
         )
 
@@ -1281,11 +1281,19 @@ def handle_spec_to_matrix(file_name: str, file_bytes: bytes) -> func.HttpRespons
         )
 
     xlsx_b64 = base64.b64encode(result["xlsxBytes"]).decode("ascii")
+    coverage = result.get("coverage", {})
     answer = (
         f"Matrice de conformite generee depuis '{file_name}' : "
         f"{result['requirementsCount']} exigences extraites "
         f"({result['withIdCount']} avec identifiant, "
-        f"{result['withoutIdCount']} sans identifiant)."
+        f"{result['withoutIdCount']} sans identifiant). "
+        f"Couverture : {coverage.get('matchedRequirements', 0)}/"
+        f"{coverage.get('totalRequirements', 0)} exigences dans la matrice"
+        + (
+            f", {len(coverage.get('ghostRows', []))} ligne(s) fantome(s)."
+            if coverage.get("ghostRows")
+            else " - aucune ligne fantome."
+        )
     )
     body = {
         "answer": answer,
@@ -1297,6 +1305,7 @@ def handle_spec_to_matrix(file_name: str, file_bytes: bytes) -> func.HttpRespons
         "withIdCount": result["withIdCount"],
         "withoutIdCount": result["withoutIdCount"],
         "sampleIds": result["sampleIds"],
+        "coverage": coverage,
     }
     return func.HttpResponse(
         body=json.dumps(body, ensure_ascii=False, default=str),

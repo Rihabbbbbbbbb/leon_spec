@@ -22,9 +22,9 @@ from __future__ import annotations
 
 import io
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from app.config import REFS_DIR
 
@@ -81,16 +81,197 @@ class Requirement:
     line_no: int = 0   # source line (traceability)
 
 
+@dataclass
+class MatrixCoverage:
+    """Result of verifying a generated matrix against the source spec.
+
+    The matrix is generated FROM the spec, so in the healthy case every
+    extracted requirement appears in the matrix and there are no ghost rows.
+    This check is the QA round-trip that proves it: it reads the generated
+    workbook back and confirms (a) no requirement was lost during generation
+    and (b) no unexpected row (template residue, corruption, a generation
+    bug) slipped in.
+    """
+    total_requirements: int = 0
+    matched_requirements: int = 0
+    missing_requirements: List[Dict] = field(default_factory=list)
+    ghost_rows: List[Dict] = field(default_factory=list)
+    coverage_rate: float = 0.0
+
+    @property
+    def complete(self) -> bool:
+        """True when every spec requirement is in the matrix AND there are
+        no ghost rows."""
+        return not self.missing_requirements and not self.ghost_rows
+
+    def to_dict(self) -> dict:
+        return {
+            "totalRequirements": self.total_requirements,
+            "matchedRequirements": self.matched_requirements,
+            "missingRequirements": self.missing_requirements,
+            "ghostRows": self.ghost_rows,
+            "coverageRate": round(self.coverage_rate, 4),
+            "complete": self.complete,
+        }
+
+
+def _normalize_id(text: str) -> str:
+    """Canonical form of a requirement ID: uppercase, no whitespace, no
+    trailing version suffix like '(0)'."""
+    if not text:
+        return ""
+    t = re.sub(r"\s+", "", str(text)).upper()
+    t = re.sub(r"\(\d{1,3}\)$", "", t)
+    return t
+
+
+def _normalize_text(text: str) -> str:
+    """Canonical form of a description for matching: collapse whitespace
+    (incl. line breaks) to single spaces and trim."""
+    return re.sub(r"\s+", " ", (text or "")).strip()
+
+
+def verify_matrix_coverage(
+    requirements: List[Requirement],
+    xlsx_bytes: bytes,
+) -> MatrixCoverage:
+    """Read a generated matrix back and verify it against the source spec.
+
+    Matching is deterministic:
+      - a requirement WITH an ID is matched to the matrix row whose
+        'Numéro de l'exigence' cell normalizes to the same ID;
+      - a requirement WITHOUT an ID is matched to the row whose description
+        normalizes to the same text (the generator writes req.text verbatim,
+        so an exact normalized match is the correct contract).
+
+    Returns a MatrixCoverage with:
+      - missing_requirements: spec requirements absent from the matrix
+        (generation lost them — a bug);
+      - ghost_rows: matrix data rows that match no spec requirement
+        (template residue, corruption, or a generation bug).
+    """
+    from openpyxl import load_workbook
+
+    wb = load_workbook(io.BytesIO(xlsx_bytes))
+    ws = wb["new version"]
+
+    # Read every non-empty data row of the generated matrix.
+    matrix_rows: List[Dict] = []
+    for r in range(DATA_START_ROW, ws.max_row + 1):
+        rid = ws.cell(row=r, column=COL_REQ_ID).value
+        desc = ws.cell(row=r, column=COL_DESCRIPTION).value
+        if not (rid or desc):
+            continue
+        matrix_rows.append({
+            "row": r,
+            "req_id": str(rid).strip() if rid else "",
+            "text": str(desc).strip() if desc else "",
+        })
+
+    # Index matrix rows by normalized ID and by normalized text so each
+    # spec requirement can be located in O(1).
+    by_id: Dict[str, List[int]] = {}
+    by_text: Dict[str, List[int]] = {}
+    for mi, mrow in enumerate(matrix_rows):
+        rid = _normalize_id(mrow["req_id"])
+        if rid:
+            by_id.setdefault(rid, []).append(mi)
+        key = _normalize_text(mrow["text"])
+        if key:
+            by_text.setdefault(key, []).append(mi)
+
+    used: set = set()          # matrix row indices already claimed
+    missing: List[Dict] = []
+
+    for req in requirements:
+        rid = _normalize_id(req.req_id)
+        candidates: List[int] = []
+        if rid:
+            candidates = [mi for mi in by_id.get(rid, []) if mi not in used]
+        if not candidates:
+            key = _normalize_text(req.text)
+            if key:
+                candidates = [mi for mi in by_text.get(key, []) if mi not in used]
+        if candidates:
+            used.add(candidates[0])
+        else:
+            missing.append({
+                "reqId": req.req_id,
+                "text": req.text,
+                "lineNo": req.line_no,
+            })
+
+    # Ghost rows: matrix rows never claimed by any spec requirement.
+    ghost: List[Dict] = []
+    for mi, mrow in enumerate(matrix_rows):
+        if mi not in used:
+            ghost.append({
+                "row": mrow["row"],
+                "reqId": mrow["req_id"],
+                "text": mrow["text"],
+            })
+
+    total = len(requirements)
+    matched = total - len(missing)
+    return MatrixCoverage(
+        total_requirements=total,
+        matched_requirements=matched,
+        missing_requirements=missing,
+        ghost_rows=ghost,
+        coverage_rate=(matched / total) if total else 1.0,
+    )
+
+
 def _clean_segment(seg: str) -> str:
     """Normalize a text segment extracted from a (possibly table) line."""
     seg = re.sub(r"\s+", " ", seg).strip(" |·-–—\t")
     return seg.strip()
 
 
+# Bracket reference tags ("[M11]", "[SSD_AUE]") and short version markers
+# ("(0)") are "Input requirement" column content, never requirement prose.
+# A table cell that's ONLY this — no real sentence — is an orphaned upstream
+# reference that ended up on its own line during table flattening (e.g.
+# "[M11] REF-CONN-CDC-DOC.0012 (0) [M11]"), not a description.
+_REFERENCE_NOISE_RE = re.compile(r"\[[^\[\]]{1,20}\]|\(\d{1,3}\)")
+
+
+def _is_reference_noise(text: str) -> bool:
+    """True when `text` has no real requirement prose — only reference
+    tags/version markers — so it must never be accepted as a description.
+    A 2-letter fragment ("SI", "IF", "ASU") still counts as real content:
+    these are genuine opening tokens of a multi-line cell (the real
+    description follows on a later line), not reference-tag noise."""
+    stripped = _REFERENCE_NOISE_RE.sub(" ", text)
+    return not re.search(r"[A-Za-z]{2,}", stripped)
+
+
+# Column-header labels from nested sub-tables (DTC parameter tables, fault-
+# list tables) — e.g. "Flow | Label | Detection criteria | Disappearing
+# criteria | Life sequence | Component" repeated inside a description cell
+# before the actual data row. These are never real requirement content, but
+# unlike _TABLE_HEADER_RE (the top-level "Requirement Number (v) | ..."
+# header) they're short enough to otherwise pass _MIN_DESC_CHARS and get
+# mistaken for the description itself — confirmed on the real ASU spec to
+# make 6 distinct DTC requirements (MAINT-0001..0006) collapse to the
+# identical, uninformative "...below: Flow", and 3 fault-list requirements
+# (MAINT-0017..0019) fabricate "Appearance/Disappearance criteria" as if it
+# were their description when the row is genuinely blank otherwise.
+_GENERIC_TABLE_LABEL_RE = re.compile(
+    r"^(?:requirement\s+description|appearance\s*/\s*disappearance\s+criteria"
+    r"|life\s+phase|flow|label|detection\s+criteria|disappearing\s+criteria"
+    r"|life\s+sequence|component)$",
+    re.IGNORECASE,
+)
+
+
 def _best_description(segments: List[str]) -> str:
     """Pick the requirement description among table-cell segments:
     prefer the segment containing 'shall', else the longest one."""
-    candidates = [s for s in segments if len(s) >= _MIN_DESC_CHARS]
+    candidates = [
+        s for s in segments
+        if len(s) >= _MIN_DESC_CHARS and not _GENERIC_TABLE_LABEL_RE.match(s)
+    ]
     if not candidates:
         return ""
     shall_segs = [s for s in candidates if _SHALL_RE.search(s)]
@@ -123,6 +304,20 @@ _TEMPLATE_EXAMPLE_RE = re.compile(
     r"|<do something>|<expected functional performance|shall\s*…\s*$"
     r"|the requirement engineering template shall|<\s*be made of",
     re.IGNORECASE,
+)
+
+# A change-history "version bump" mention — "REF-X-0020(0) changed to
+# REF-X-0020(1)" — resolves to the SAME rid on both sides (the "(0)"/"(1)"
+# version suffix isn't part of the id), leaving just "(0) changed to (1)"
+# once the ids are stripped. This is never a requirement description, but
+# unlike a bare change-history heading it can't be caught by
+# _is_reference_noise (real English words, "changed"/"to", not tag noise) —
+# it must be filtered explicitly so it can never block the id's real,
+# current definition from being recorded (changelogs sit near the top of
+# the document, so left unfiltered this always wins the "first text wins"
+# race against the real definition that follows later).
+_VERSION_TRANSITION_RE = re.compile(
+    r"^\(\d{1,3}\)\s*changed\s+to\s*\(\d{1,3}\)$", re.IGNORECASE
 )
 
 # Change-history headings ("New requirements:", "Removed requirements: …")
@@ -222,6 +417,10 @@ def extract_requirements(text: str) -> List[Requirement]:
         # A change-history heading is not a description
         if desc and _HISTORY_HEADING_RE.search(desc):
             desc = ""
+        # A bare "(0) changed to (1)" version-bump mention is not a
+        # description either — see _VERSION_TRANSITION_RE.
+        if desc and _VERSION_TRANSITION_RE.match(desc):
+            desc = ""
         # A "REQ-…" (DOORS export id) block that never got a real
         # requirement statement merged into it — because the next anchor
         # turned out to be a genuinely separate, unrelated requirement,
@@ -234,9 +433,34 @@ def extract_requirements(text: str) -> List[Requirement]:
             desc = ""
         if rid:
             if rid in by_id:
-                # Prefer the occurrence that has a description
-                if desc and not by_id[rid].text:
-                    by_id[rid].text = desc
+                # Prefer the occurrence that has a description — and, once
+                # both have one, prefer whichever contains a real shall/must
+                # statement over one that doesn't. Without this second rule,
+                # a change-history sentence that happens to mention this same
+                # id (e.g. "REF-X-0020(0) changed to REF-X-0020(1)" — the
+                # "(0)"/"(1)" version suffix isn't part of the id, so both
+                # sides resolve to the same rid) can win permanently just by
+                # sitting earlier in the document than the id's real, current
+                # definition, since changelogs are always near the top.
+                existing = by_id[rid]
+                existing_has_shall = bool(existing.text) and bool(_SHALL_RE.search(existing.text))
+                new_has_shall = bool(desc) and bool(_SHALL_RE.search(desc))
+                if desc and not existing.text:
+                    existing.text = desc
+                elif new_has_shall and not existing_has_shall:
+                    existing.text = desc
+                elif (desc and not existing_has_shall and not new_has_shall
+                        and len(desc) > len(existing.text) * 2):
+                    # Neither side is a real shall/must statement — prefer
+                    # the substantially longer, more complete text. A real
+                    # multi-version id (like a diagnostic mapping entry that
+                    # legitimately has no "shall" wording at all) can have
+                    # its OLD, superseded version's table produce a short
+                    # column-label fragment ("Appearance/Disappearance
+                    # criteria") that would otherwise permanently block the
+                    # id's real, current, much more substantial definition
+                    # appearing later in the document.
+                    existing.text = desc
                 return
             req = Requirement(req_id=rid, text=desc, line_no=line_no)
             by_id[rid] = req
@@ -255,14 +479,14 @@ def extract_requirements(text: str) -> List[Requirement]:
         i for i, l in enumerate(lines) if _ANCHOR_RE.match(l.strip())
     ]
 
-    def _is_history_mention(i: int) -> bool:
-        """Anchor listed under a change-history heading ('New requirements:')
-        — register the ID but take no description from that region; the
-        real definition later in the document will fill it."""
+    def _history_heading_kind(i: int) -> str:
+        """'new'/'modified'/'removed' if anchor `i` is listed directly under
+        that change-history heading, else ''."""
         for k in (i - 1, i - 2):
             if k >= 0 and lines[k].strip():
-                return bool(_HISTORY_HEADING_RE.search(lines[k].strip()))
-        return False
+                m = _HISTORY_HEADING_RE.search(lines[k].strip())
+                return m.group(1).lower() if m else ""
+        return ""
 
     # Coalesce DOORS + internal anchors: in CTS requirement tables the
     # "REQ-… C" (DOORS id) anchor is immediately followed by the internal
@@ -312,7 +536,17 @@ def extract_requirements(text: str) -> List[Requirement]:
             continue
         rid = _ANCHOR_RE.match(lines[i].strip()).group(1)
 
-        if _is_history_mention(i):
+        history_kind = _history_heading_kind(i)
+        if history_kind == "removed":
+            # A requirement explicitly listed as REMOVED in the change
+            # history was deleted from the document body — unlike "new" or
+            # "modified" mentions, there is no real definition anywhere
+            # later in the spec to supersede this placeholder (that's what
+            # "removed" means). Registering it anyway leaves a permanent
+            # phantom entry with no content, so it must be dropped entirely.
+            consumed[i] = True
+            continue
+        if history_kind:
             _add(rid, "", i + 1)
             consumed[i] = True
             continue
@@ -335,6 +569,19 @@ def extract_requirements(text: str) -> List[Requirement]:
                 break
 
         block = lines[i + 1:end]
+        if not block:
+            # An anchor immediately followed (zero gap) by the next
+            # anchor/row has NO content of its own at all — every real
+            # requirement in this spec has at least some body text. This is
+            # a stray "Input requirement" reference (e.g. a second/historical
+            # DOORS reference stacked in the same table cell as another
+            # row's own upstream column — "REF-TF-TFD-MVEL-0108(1)" sitting
+            # alone right before the NEXT row's own complete "id | desc |
+            # upstream" line) that happened to match the anchor pattern —
+            # not a requirement of this spec, and must never become its own
+            # row, empty or otherwise.
+            consumed[i] = True
+            continue
         internal_ref, desc = _parse_block_description(block)
         if internal_ref and internal_ref != rid and desc:
             desc = f"[{internal_ref}] {desc}"
@@ -366,6 +613,54 @@ def extract_requirements(text: str) -> List[Requirement]:
                 and any(c.isalpha() for c in s)
                 and s.strip() not in _LOGIC_KEYWORDS)
         )
+
+    def _looks_like_heading_not_continuation(
+        prev_text: str, s: str, upcoming: Optional[List[str]] = None
+    ) -> bool:
+        """
+        A subsection heading that immediately follows a table (e.g. "LIN 2.1
+        Physical Layers", "Time requirements", "Self-test procedure and
+        operator control in assembly phase") is NOT all-caps, so the plain
+        _is_boundary() check above misses it — confirmed during a 2026 audit
+        to silently glue ~20 real subsection headings onto the END of the
+        PRECEDING requirement's description, across mixed heading styles
+        (Title Case, sentence case) too inconsistent for a pure
+        capitalization-pattern match.
+
+        Instead, use the CONTEXT: a genuine continuation either keeps
+        writing the same unterminated sentence, or is itself real prose
+        (ends with punctuation, or contains "shall"/"must"). A short,
+        capitalized fragment with NO terminal punctuation and NO
+        requirement verb is treated as a heading, not a continuation, when
+        EITHER the accumulated description already reads as a complete,
+        terminated sentence (ends in punctuation or a closing bracket), OR
+        the very NEXT line is itself the requirement TABLE header — the
+        latter catches a heading whose preceding sentence happens to end on
+        a bare word with no closing marker at all (the document's own prose
+        is sometimes this abrupt), since a heading directly adjacent to the
+        table it introduces is unambiguous regardless of how the previous
+        sentence happened to end. Deliberately narrow (only the immediate
+        next line, not a wider lookahead window) — a wider window can see
+        PAST an intervening real heading/table and wrongly treat unrelated
+        earlier prose as if it were what introduces that later table.
+        """
+        s = s.strip()
+        if not s or len(s) > 80 or not s[0].isupper():
+            return False
+        if s[-1] in ".!?:":
+            return False
+        if _SHALL_RE.search(s):
+            return False
+        prev = prev_text.strip()
+        # A reference tag "[STA20]" or version marker "(0)" closing the
+        # accumulated text also reads as "finished", not mid-sentence —
+        # this document's own style routinely ends a requirement sentence
+        # on a bare reference tag with no period at all.
+        if bool(prev) and prev[-1] in ".!?])":
+            return True
+        if upcoming and any(_TABLE_HEADER_RE.search(u) for u in upcoming):
+            return True
+        return False
 
     n = len(lines)
     i = 0
@@ -423,10 +718,34 @@ def extract_requirements(text: str) -> List[Requirement]:
                     (pre_ids if si <= desc_seg_idx else post_ids).append(rid)
             # "id | desc | upstream" rows: trailing ids are upstream refs of
             # OTHER requirements → excluded. "desc | id" rows have no leading
-            # id: the trailing id IS the requirement's own identifier.
-            req_ids = pre_ids if pre_ids else post_ids
-            for rid in req_ids:
-                _add(rid, desc, i + 1)
+            # id: the trailing id IS the requirement's own identifier — but
+            # ONLY for a clean 2-column shape (exactly one pipe). A row with
+            # MORE columns and no leading id is raw multi-column table data
+            # (e.g. an FMEA failure-mode row "Flow: X | failure mode | PPM
+            # value | GEN-xxx(0)") whose trailing id is that row's own
+            # "Input requirement" reference, not a fresh anchor of this spec.
+            if pre_ids:
+                req_ids = pre_ids
+            elif len(raw_segments) <= 2:
+                req_ids = post_ids
+            else:
+                req_ids = []
+            # A line whose ENTIRE content (every segment, ids stripped) is
+            # reference-tag/version-marker noise — e.g. an orphaned "Input
+            # requirement" cell like "[M11] REF-CONN-CDC-DOC.0012 (0) [M11]"
+            # that ended up on its own line during table flattening — carries
+            # no real requirement content anywhere: its id is a
+            # cross-document reference, not an anchor of THIS spec, and must
+            # never become its own row. This must check the WHOLE line, not
+            # just the selected `desc`: a short-but-real opening fragment
+            # like "REF-ASU-CD-DOC-0004(0) | ASU" is a genuine anchor whose
+            # real description is still to come via continuation merging —
+            # "ASU" is real content, just too short to BE the description yet.
+            combined_clean = " ".join(seg_clean).strip()
+            line_is_pure_noise = not combined_clean or _is_reference_noise(combined_clean)
+            if not line_is_pure_noise:
+                for rid in req_ids:
+                    _add(rid, desc, i + 1)
 
             # ── Continuation merging ──
             # When the row has no upstream cell after the description, the
@@ -446,20 +765,48 @@ def extract_requirements(text: str) -> List[Requirement]:
                     if not nxt:
                         j += 1
                         continue  # blank line inside the same cell
-                    if consumed[j] or _is_boundary(nxt, noise_is_boundary=False):
+                    if (consumed[j] or _is_boundary(nxt, noise_is_boundary=False)
+                            or _looks_like_heading_not_continuation(
+                                req_obj.text, nxt, lines[j + 1:j + 2])):
                         break
                     if "|" in nxt:
                         pre_part, post_part = nxt.split("|", 1)
-                        # "description | GEN-…-041(0)" is a NEW requirement
-                        # row (own id in the trailing cell) — leave it for
-                        # normal processing, do not absorb it.
-                        if (_REQ_ID_RE.search(post_part)
-                                and not post_part.lstrip().startswith("[")):
-                            break
-                        # Closing line of the cell: "…rest of desc | [M20]"
                         pre = _clean_segment(pre_part)
+                        # "Description of a NEW requirement | GEN-…-041(0)"
+                        # (own id in the trailing cell, a fresh capitalized
+                        # sentence with no id of its own before the pipe) is
+                        # a genuinely separate row — leave it for normal
+                        # processing, do not absorb it. But when `pre`
+                        # continues the CURRENTLY open sentence (starts
+                        # lowercase — a real spec requirement always opens
+                        # with a capitalized "The/A/..."), the trailing id is
+                        # simply this same cell's closing "Input requirement"
+                        # reference, not a new anchor — it must be absorbed,
+                        # never treated as a fresh row (that previously
+                        # misattributed this requirement's own continuation
+                        # text to an unrelated upstream-reference id).
+                        starts_new_sentence = bool(pre) and pre[0].isupper()
+                        if (_REQ_ID_RE.search(post_part)
+                                and not post_part.lstrip().startswith("[")
+                                and starts_new_sentence):
+                            break
+                        # A nested sub-table's own header row ("Flow | Label
+                        # | Detection criteria | ...") is not real content —
+                        # skip it entirely (don't append, don't stop) so the
+                        # loop reaches the actual DATA row that follows, e.g.
+                        # "Circuit short to battery or open | ..." — the one
+                        # piece of text that actually distinguishes this DTC
+                        # requirement from the next one. Confirmed on the
+                        # real ASU spec: without this, 6 distinct MAINT-000X
+                        # requirements all collapsed to the identical,
+                        # uninformative "...below: Flow".
+                        if pre and _GENERIC_TABLE_LABEL_RE.match(pre):
+                            consumed[j] = True
+                            j += 1
+                            continue
+                        # Closing line of the cell: "…rest of desc | [M20]"
                         if pre and not _REQ_ID_RE.search(pre):
-                            req_obj.text = (req_obj.text + " " + pre)[:_MAX_DESC_CHARS]
+                            req_obj.text = (req_obj.text + " " + pre).strip()[:_MAX_DESC_CHARS]
                             consumed[j] = True
                             j += 1
                         break
@@ -580,23 +927,35 @@ def spec_to_matrix(spec_text: str, spec_name: str = "") -> dict:
     Full pipeline: extract requirements from spec text and produce the
     pre-filled conformity matrix.
 
-    Returns a dict with the XLSX bytes and extraction statistics so the
-    caller (API/UI) can report exactly what was extracted:
+    Returns a dict with the XLSX bytes, extraction statistics AND the
+    round-trip coverage check (every extracted requirement must appear in
+    the generated matrix; any matrix row with no matching requirement is
+    flagged as a ghost row):
       {
         "xlsxBytes": bytes,
         "requirementsCount": int,
         "withIdCount": int,
         "withoutIdCount": int,
         "sampleIds": [str, ...],
+        "coverage": {
+            "totalRequirements": int,
+            "matchedRequirements": int,
+            "missingRequirements": [ {reqId, text, lineNo}, ... ],
+            "ghostRows": [ {row, reqId, text}, ... ],
+            "coverageRate": float,
+            "complete": bool,
+        },
       }
     """
     requirements = extract_requirements(spec_text)
     xlsx_bytes = generate_conformity_matrix(requirements, spec_name)
     with_id = [r for r in requirements if r.req_id]
+    coverage = verify_matrix_coverage(requirements, xlsx_bytes)
     return {
         "xlsxBytes": xlsx_bytes,
         "requirementsCount": len(requirements),
         "withIdCount": len(with_id),
         "withoutIdCount": len(requirements) - len(with_id),
         "sampleIds": [r.req_id for r in with_id[:10]],
+        "coverage": coverage.to_dict(),
     }

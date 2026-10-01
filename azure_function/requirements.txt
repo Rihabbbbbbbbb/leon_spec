@@ -4,6 +4,7 @@
 azure-functions>=1.20.0
 python-docx>=0.8.11
 PyPDF2>=3.0.0
+python-pptx>=1.0.2
 openai>=1.0.0
 azure-core>=1.30.0
 azure-search-documents>=11.6.0
@@ -12,10 +13,9 @@ python-dotenv>=1.0.0
 # PDF report generation
 fpdf2>=2.7.8
 # Conformity matrix analysis (ODS/XLSX reading + charts)
-odfpy>=1.4.1
 openpyxl>=3.1.0
 matplotlib>=3.8.0
 # Azure Blob Storage (for Excel report file delivery)
 azure-storage-blob>=12.19.0
-# lxml (for ODS XML fixing — malformed XML recovery)
+# lxml (for ODS XML parsing)
 lxml>=4.9.0

@@ -489,6 +489,54 @@
   <div class="tabs">
     <button class="tab active" data-tab="analyze" onclick="switchTab('analyze')">📊 Conformity Matrix</button>
     <button class="tab" data-tab="validator" onclick="switchTab('validator')">📄 Spec Validation</button>
+    <button class="tab" data-tab="trace" onclick="switchTab('trace')">� Version Delta</button>
+    <button class="tab" data-tab="evidence" onclick="switchTab('evidence')">🔎 Matrix + TDR Evidence</button>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════════════ -->
+  <!-- TAB: Matrix + TDR evidence -->
+  <!-- ═══════════════════════════════════════════════════════════════ -->
+  <div id="tab-evidence" class="hidden">
+    <div class="panel">
+      <h2>Link matrix requirements to TDR / presentation evidence</h2>
+      <p class="muted" style="margin-bottom:14px">Upload a matrix with a PDF TDR or PowerPoint presentation. Results are cited text candidates, not a conformity decision; missing text is not proof of non-compliance.</p>
+      <div class="upload-zone" id="evidence-matrix-zone" onclick="document.getElementById('evidence-matrix-input').click()">
+        <div class="upload-icon">📊</div>
+        <p><strong>Select the supplier conformity matrix</strong></p>
+        <p>Accepted formats: .ods, .xlsx, .xlsm</p>
+        <input type="file" id="evidence-matrix-input" accept=".ods,.xlsx,.xlsm" onclick="event.stopPropagation()" />
+      </div>
+      <div id="evidence-matrix-info"></div>
+      <div class="upload-zone" id="evidence-pdf-zone" style="margin-top:12px" onclick="document.getElementById('evidence-pdf-input').click()">
+        <div class="upload-icon">📄</div>
+        <p><strong>Select the supplier TDR / technical presentation PDF</strong></p>
+        <p>Text and tables are searched; scanned images and diagrams need human review.</p>
+        <input type="file" id="evidence-pdf-input" accept=".pdf" onclick="event.stopPropagation()" />
+      </div>
+      <div id="evidence-pdf-info"></div>
+      <div class="upload-zone" id="evidence-pptx-zone" style="margin-top:12px" onclick="document.getElementById('evidence-pptx-input').click()">
+        <div class="upload-icon">📽️</div>
+        <p><strong>Or select a technical presentation</strong></p>
+        <p>PowerPoint .pptx text and tables are searched; images, notes and chart data need separate review.</p>
+        <input type="file" id="evidence-pptx-input" accept=".pptx" onclick="event.stopPropagation()" />
+      </div>
+      <div id="evidence-pptx-info"></div>
+      <div class="btn-row">
+        <button class="btn btn-primary" id="evidence-run-btn" disabled onclick="doEvidenceAnalysis()">🔎 Analyze matrix + document</button>
+      </div>
+    </div>
+    <div class="loading" id="loading-evidence"><div class="spinner"></div><p style="margin-top:12px">Extracting matrix rows and source passages…</p></div>
+    <div class="results" id="results-evidence">
+      <div class="panel">
+        <h2>Evidence-linking summary</h2>
+        <div class="stats-grid" id="evidence-stats"></div>
+        <p class="muted" id="evidence-declarations" style="margin-top:12px"></p>
+        <div class="btn-row"><button class="btn btn-secondary" id="evidence-report-btn" disabled onclick="downloadEvidenceReport()">📗 Download review report (.xlsx)</button></div>
+        <p class="muted" style="margin-top:12px">Every match is a retrieval candidate, not proof of conformity. Review exact values, units, test conditions, applicability and source page before deciding.</p>
+      </div>
+      <div class="panel"><h2>Requirement-to-source candidates</h2><div id="evidence-requirements"></div></div>
+      <div class="panel"><h2>Limitations</h2><ul id="evidence-limitations" class="muted" style="padding-left:22px"></ul></div>
+    </div>
   </div>
 
   <!-- ═══════════════════════════════════════════════════════════════ -->
@@ -609,6 +657,7 @@
           📊 Generate the Conformity Matrix
         </button>
       </div>
+      <div id="matrix-coverage" class="hidden" style="margin-top:14px"></div>
     </div>
 
     <div class="loading" id="loading-validate">
@@ -639,6 +688,57 @@
     </div>
   </div>
 
+  <!-- ═══════════════════════════════════════════════════════════════ -->
+  <!-- TAB: Version Delta -->
+  <!-- ═══════════════════════════════════════════════════════════════ -->
+  <div id="tab-trace" class="hidden">
+    <div class="panel">
+      <h2>Version delta — what changed between matrices?</h2>
+      <p class="muted" style="font-size:12px;margin-bottom:12px">
+        Upload two or more successive versions of the same supplier matrix to see
+        what changed between them: status changes (NOK→OK, OK→NOK), new/removed
+        requirements, and comment changes.
+      </p>
+      <div class="upload-zone" id="delta-zone" onclick="document.getElementById('delta-input').click()">
+        <div class="upload-icon">📉</div>
+        <p><strong>Click or drag 2+ matrices here</strong> (same supplier, successive versions)</p>
+        <p>Hold <strong>Ctrl</strong> (or <strong>Shift</strong>) while clicking to select several files at once — or click again to add more.</p>
+        <input type="file" id="delta-input" accept=".ods,.xlsx,.xlsm" multiple onclick="event.stopPropagation()" />
+      </div>
+      <div id="delta-info" style="margin-top:8px"></div>
+      <div class="btn-row">
+        <button class="btn btn-primary" id="delta-btn" disabled onclick="doDelta()">📉 Compare versions</button>
+      </div>
+    </div>
+
+    <div class="loading" id="loading-delta">
+      <div class="spinner"></div>
+      <p style="margin-top:12px">Comparing versions…</p>
+    </div>
+
+    <div class="results" id="results-delta">
+      <div class="panel">
+        <h2>Version delta</h2>
+        <div id="delta-steps" class="muted" style="font-size:13px;margin-bottom:12px"></div>
+        <div class="table-container">
+          <table id="delta-table">
+            <thead>
+              <tr>
+                <th>Step</th>
+                <th>Req ID / Reference</th>
+                <th>From</th>
+                <th>To</th>
+                <th>Type</th>
+              </tr>
+            </thead>
+            <tbody id="delta-tbody"></tbody>
+          </table>
+        </div>
+        <div class="download-links mt-16" id="delta-downloads"></div>
+      </div>
+    </div>
+  </div>
+
 </div>
 
 <div class="toast" id="toast"></div>
@@ -659,11 +759,47 @@ let allItems = [];
 let currentFilter = 'ALL';
 let lastExcel = null; // {name, b64} cached from a single-file analyze call
 let lastBatchExcel = null; // b64 of the combined report from a batch analyze call
+let lastBatchExcels = {}; // {fileName: b64} per-file reports from the batch fallback
+let evidenceMatrixFile = null;
+let evidencePdfFile = null;
+let evidencePptxFile = null;
+let evidenceReportB64 = null;
+
+// Read a fetch Response as JSON *without* ever surfacing the cryptic
+// "Unexpected token '<', "<!DOCTYPE "... is not valid JSON".
+// A gateway/proxy in front of the app answers with an HTML error page when a
+// route is missing (404), the request exceeds the platform timeout (502/504)
+// or the body is too large (413). Translate that into a readable error.
+async function safeJson(res) {
+  const text = await res.text();
+  const ct = (res.headers.get('content-type') || '').toLowerCase();
+  try {
+    return JSON.parse(text);
+  } catch (e) {
+    const looksHtml = /^\s*<(!doctype|html)/i.test(text);
+    const snippet = text.replace(/\s+/g, ' ').trim().slice(0, 160);
+    const err = new Error(
+      looksHtml
+        ? `HTTP ${res.status} — the server returned an HTML page instead of JSON ` +
+          `(endpoint missing on this deployment, or a gateway/proxy timeout). ${snippet}`
+        : `HTTP ${res.status} — invalid JSON response (content-type: ${ct || 'none'}). ${snippet}`
+    );
+    err.status = res.status;
+    err.isHtml = looksHtml;
+    throw err;
+  }
+}
 
 // Back-compat alias: several helpers (downloadExcel, doReport) were written
 // for a single currentFile — keep that name meaning "the one file" when
 // exactly one is selected.
 function _singleFile() { return currentFiles.length === 1 ? currentFiles[0] : null; }
+
+function escapeHtml(value) {
+  const node = document.createElement('span');
+  node.textContent = String(value == null ? '' : value);
+  return node.innerHTML;
+}
 
 // ── Health check ──────────────────────────────────────────────
 async function checkHealth() {
@@ -687,6 +823,121 @@ function switchTab(tab) {
   document.querySelector(`[data-tab="${tab}"]`).classList.add('active');
   document.getElementById('tab-analyze').classList.toggle('hidden', tab !== 'analyze');
   document.getElementById('tab-validator').classList.toggle('hidden', tab !== 'validator');
+  document.getElementById('tab-trace').classList.toggle('hidden', tab !== 'trace');
+  document.getElementById('tab-evidence').classList.toggle('hidden', tab !== 'evidence');
+}
+
+// ── Matrix + TDR PDF evidence candidates ─────────────────────────
+function updateEvidenceSelection() {
+  const selectedEvidenceDocs = Number(Boolean(evidencePdfFile)) + Number(Boolean(evidencePptxFile));
+  document.getElementById('evidence-run-btn').disabled = !evidenceMatrixFile || selectedEvidenceDocs !== 1;
+}
+
+function renderEvidenceFile(inputId, infoId, onFileSelected) {
+  const input = document.getElementById(inputId);
+  input.addEventListener('change', () => {
+    const file = input.files && input.files[0] ? input.files[0] : null;
+    onFileSelected(file);
+    updateEvidenceSelection();
+    document.getElementById(infoId).innerHTML = file
+      ? `<div class="file-info"><span class="name">${escapeHtml(file.name)}</span><span class="size">${(file.size / 1024 / 1024).toFixed(2)} MB</span></div>`
+      : '';
+    document.getElementById('results-evidence').classList.remove('show');
+    evidenceReportB64 = null;
+    document.getElementById('evidence-report-btn').disabled = true;
+  });
+}
+
+renderEvidenceFile('evidence-matrix-input', 'evidence-matrix-info', file => {
+  evidenceMatrixFile = file;
+  evidenceReportB64 = null;
+  document.getElementById('evidence-report-btn').disabled = true;
+  document.getElementById('results-evidence').classList.remove('show');
+});
+renderEvidenceFile('evidence-pdf-input', 'evidence-pdf-info', file => {
+  evidencePdfFile = file;
+  if (file) { evidencePptxFile = null; document.getElementById('evidence-pptx-input').value = ''; document.getElementById('evidence-pptx-info').innerHTML = ''; }
+});
+renderEvidenceFile('evidence-pptx-input', 'evidence-pptx-info', file => {
+  evidencePptxFile = file;
+  if (file) { evidencePdfFile = null; document.getElementById('evidence-pdf-input').value = ''; document.getElementById('evidence-pdf-info').innerHTML = ''; }
+});
+
+async function doEvidenceAnalysis() {
+  if (!evidenceMatrixFile || (!evidencePdfFile && !evidencePptxFile)) return;
+  document.getElementById('loading-evidence').classList.add('show');
+  document.getElementById('results-evidence').classList.remove('show');
+  const form = new FormData();
+  form.append('matrix', evidenceMatrixFile);
+  const isPptx = Boolean(evidencePptxFile);
+  form.append(isPptx ? 'pptx' : 'tdr', isPptx ? evidencePptxFile : evidencePdfFile);
+  try {
+    const response = await fetch(apiUrl(isPptx ? '/conformity-pptx-evidence' : '/conformity-pdf-evidence'), {method: 'POST', body: form});
+    const data = await safeJson(response);
+    if (!response.ok) throw new Error(data.detail || `Analysis failed (${response.status})`);
+    if (response.status === 404 || response.status === 405) {
+      throw new Error(`The running LEON server does not support ${isPptx ? 'PowerPoint' : 'PDF'} evidence analysis. Restart the server using the current workspace version.`);
+    }
+    if (!response.ok) throw new Error(data.detail || `Analysis failed (${response.status})`);
+    if (!Array.isArray(data.requirements) || !data.summary) {
+      const missingFields = ['requirements', 'summary'].filter(key => data[key] == null);
+      throw new Error(`The evidence API response is missing ${missingFields.join(' and ')}. This server build is out of date; restart the LEON conformity server.`);
+    }
+    renderEvidenceResults(data);
+    evidenceReportB64 = data.reportExcel || null;
+    document.getElementById('evidence-report-btn').disabled = !evidenceReportB64;
+    document.getElementById('results-evidence').classList.add('show');
+    toast(`Evidence search complete — ${data.summary.requirementsWithEvidenceCandidates}/${data.summary.requirements} requirements have candidates`);
+  } catch (error) {
+    toast(error.message || 'Evidence analysis failed', 'error');
+  } finally {
+    document.getElementById('loading-evidence').classList.remove('show');
+  }
+}
+
+function renderEvidenceResults(data) {
+  const summary = data.summary;
+  const declared = data.decisionSummary && data.decisionSummary.supplierDeclared || {};
+  document.getElementById('evidence-stats').innerHTML = [
+    ['Matrix requirements', summary.requirements],
+    ['With candidates', summary.requirementsWithEvidenceCandidates],
+    ['No text candidate', summary.requirementsWithoutEvidenceCandidates],
+    [data.tdrFile ? 'PDF pages with text' : 'Slides with text', data.tdrFile ? summary.pagesWithExtractedText : summary.slidesWithExtractedText],
+  ].map(([label, value]) => `<div class="stat-card"><div class="stat-value">${Number(value) || 0}</div><div class="stat-label">${escapeHtml(label)}</div></div>`).join('');
+  document.getElementById('evidence-declarations').textContent =
+    `Supplier-declared requirement statuses (not independently verified): OK ${Number(declared.OK) || 0}, NOK ${Number(declared.NOK) || 0}, NA ${Number(declared.NA) || 0}, EMPTY ${Number(declared.EMPTY) || 0}.`;
+
+  document.getElementById('evidence-limitations').innerHTML = (data.limitations || []).map(text => `<li>${escapeHtml(text)}</li>`).join('');
+  const items = data.requirements || [];
+  document.getElementById('evidence-requirements').innerHTML = items.map(item => {
+    const identifier = item.reqId || item.reference || `Matrix row ${item.matrixRowNumber}`;
+    const candidates = (item.evidence || []).map(candidate => `
+      <div class="inc-card warning">
+        <div class="header"><span class="req-id">${candidate.page_number ? `PDF page ${candidate.page_number}` : `Slide ${candidate.slide_number}`}${candidate.shape_name ? ` · ${escapeHtml(candidate.shape_name)}` : ''}</span><span class="type">${escapeHtml(candidate.matchType)} · retrieval score ${Number(candidate.matchScore).toFixed(2)}</span></div>
+        <div class="explanation" style="white-space:pre-wrap">${escapeHtml(candidate.text)}</div>
+      </div>`).join('') || '<p class="muted">No text candidate found. This does not mean non-compliance; review visual/scanned content and alternate terminology.</p>';
+    return `<details class="inc-card" style="border-left-color:var(--accent);margin-bottom:12px" open>
+      <summary style="cursor:pointer"><strong>${escapeHtml(identifier)}</strong> · matrix row ${item.matrixRowNumber} · supplier status <span class="badge badge-${escapeHtml(item.matrixStatus)}">${escapeHtml(item.matrixStatusRaw || item.matrixStatus || 'EMPTY')}</span></summary>
+      <p style="margin-top:8px">${escapeHtml(item.description || '')}</p>
+      ${item.supplierComment ? `<p class="muted" style="margin-top:6px">Supplier comment: ${escapeHtml(item.supplierComment)}</p>` : ''}
+      <div style="margin-top:10px">${candidates}</div>
+    </details>`;
+  }).join('');
+}
+
+function downloadEvidenceReport() {
+  if (!evidenceReportB64) return;
+  const bytes = atob(evidenceReportB64);
+  const data = new Uint8Array(bytes.length);
+  for (let i = 0; i < bytes.length; i++) data[i] = bytes.charCodeAt(i);
+  const blob = new Blob([data], {type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  const matrixName = evidenceMatrixFile ? evidenceMatrixFile.name.replace(/\.[^.]+$/, '') : 'matrix';
+  link.href = url;
+  link.download = `${matrixName}_evidence_review.xlsx`;
+  link.click();
+  URL.revokeObjectURL(url);
 }
 
 // ── Toast ─────────────────────────────────────────────────────
@@ -730,6 +981,7 @@ function removeFile(index) {
   currentFiles.splice(index, 1);
   lastExcel = null;
   lastBatchExcel = null;
+  lastBatchExcels = {};
   renderFileList();
 }
 
@@ -737,6 +989,7 @@ function clearFile() {
   currentFiles = [];
   lastExcel = null;
   lastBatchExcel = null;
+  lastBatchExcels = {};
   fileInput.value = '';
   renderFileList();
   document.getElementById('results-analyze').classList.remove('show');
@@ -786,8 +1039,10 @@ async function doAnalyzeSingle(file) {
   formData.append('file', file);
 
   try {
-    const res = await fetch(apiUrl('/conformity-excel'), { method: 'POST', body: formData });
-    const data = await res.json();
+    const res = await fetch(apiUrl('/conformity-excel'), {
+      method: 'POST', headers: { 'Accept': 'application/json' }, body: formData,
+    });
+    const data = await safeJson(res);
 
     if (!res.ok || !data.analysis) {
       toast('Error: ' + (data.detail || data.answer || 'analysis failed'), 'error');
@@ -806,7 +1061,7 @@ async function doAnalyzeSingle(file) {
     document.getElementById('results-analyze').classList.add('show');
     toast('Analysis complete — ' + data.analysis.summary.total + ' requirements');
   } catch(e) {
-    toast('Network error: ' + e.message, 'error');
+    toast('Analysis failed: ' + e.message, 'error');
   } finally {
     showLoading('loading-analyze', false);
   }
@@ -821,23 +1076,78 @@ async function doAnalyzeBatch() {
   for (const file of currentFiles) formData.append('files', file);
 
   try {
-    const res = await fetch(apiUrl('/conformity-batch'), { method: 'POST', body: formData });
-    const data = await res.json();
+    const res = await fetch(apiUrl('/conformity-batch'), {
+      method: 'POST', headers: { 'Accept': 'application/json' }, body: formData,
+    });
+    const data = await safeJson(res);
 
     if (!res.ok || !data.reportExcel) {
-      toast('Error: ' + (data.detail || data.answer || 'analysis failed'), 'error');
-      return;
+      throw new Error(data.detail || data.answer || `HTTP ${res.status} — combined report unavailable`);
     }
 
     lastBatchExcel = data.reportExcel;
+    lastBatchExcels = {};
     renderBatchResults(data);
     document.getElementById('results-batch').classList.add('show');
     toast(`Analysis complete — ${data.filesAnalyzed}/${data.filesAnalyzed + data.filesFailed} matrix(es) analyzed`);
   } catch(e) {
-    toast('Network error: ' + e.message, 'error');
+    // The combined endpoint is missing (stale deployment) or too slow for the
+    // gateway in front of it. Fall back to the single-matrix endpoint, which is
+    // proven to work, and combine the results here.
+    toast('Combined report unavailable — analyzing each matrix separately…', 'error');
+    const ok = await analyzeEachSeparately();
+    if (!ok) toast('Batch analysis failed: ' + e.message, 'error');
   } finally {
     showLoading('loading-analyze', false);
   }
+}
+
+// Fallback for doAnalyzeBatch: run the known-good single-matrix endpoint once
+// per file and assemble the same batch table locally. Each individual request is
+// far shorter than the combined one, so this also survives proxy timeouts.
+async function analyzeEachSeparately() {
+  const rows = [];
+  const failed = [];
+  const excels = {};
+
+  for (const file of currentFiles) {
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const res = await fetch(apiUrl('/conformity-excel'), {
+        method: 'POST', headers: { 'Accept': 'application/json' }, body: fd,
+      });
+      const data = await safeJson(res);
+      if (!res.ok || !data.analysis) {
+        throw new Error(data.detail || data.answer || `HTTP ${res.status}`);
+      }
+      const a = data.analysis;
+      rows.push({
+        fileName: file.name,
+        totalRows: a.summary?.total ?? 0,
+        summary: a.summary || {},
+        okDeepFindingsCount: (a.okDeepFindings || []).length,
+      });
+      if (data.reportExcel) excels[file.name] = data.reportExcel;
+    } catch (err) {
+      failed.push({ fileName: file.name, error: err.message });
+    }
+  }
+
+  if (!rows.length) return false;
+
+  lastBatchExcel = null;
+  lastBatchExcels = excels;
+  renderBatchResults({
+    filesAnalyzed: rows.length,
+    filesFailed: failed.length,
+    files: rows,
+    failed,
+    reportExcel: null,
+  });
+  document.getElementById('results-batch').classList.add('show');
+  toast(`Analyzed ${rows.length}/${currentFiles.length} matrix(es) separately`);
+  return true;
 }
 
 function renderBatchResults(data) {
@@ -861,8 +1171,24 @@ function renderBatchResults(data) {
     </tr>`;
   }).join('');
 
-  document.getElementById('batch-downloads').innerHTML =
-    `<a class="download-link" onclick="downloadBatchExcel()">📦 Download combined report (Excel)</a>`;
+  const dl = document.getElementById('batch-downloads');
+  if (data.reportExcel) {
+    dl.innerHTML = `<a class="download-link" onclick="downloadBatchExcel()">📦 Download combined report (Excel)</a>`;
+  } else {
+    const entries = Object.entries(lastBatchExcels || {});
+    dl.innerHTML = entries.length
+      ? entries.map(([name]) =>
+          `<a class="download-link" onclick="downloadNamedExcel('${encodeURIComponent(name)}')">📗 ${name}</a>`
+        ).join(' ')
+      : '<span class="muted">No per-file Excel reports were returned.</span>';
+  }
+}
+
+function downloadNamedExcel(encodedName) {
+  const name = decodeURIComponent(encodedName);
+  const b64 = (lastBatchExcels || {})[name];
+  if (!b64) { toast('Report not available for ' + name, 'error'); return; }
+  downloadExcel(b64, name);
 }
 
 function downloadBatchExcel() {
@@ -886,7 +1212,11 @@ async function doReport() {
 
   if (currentFiles.length > 1) {
     if (lastBatchExcel) { downloadBatchExcel(); return; }
-    return doAnalyzeBatch().then(() => { if (lastBatchExcel) downloadBatchExcel(); });
+    if (Object.keys(lastBatchExcels).length) { downloadAllPerFile(); return; }
+    await doAnalyzeBatch();
+    if (lastBatchExcel) { downloadBatchExcel(); return; }
+    downloadAllPerFile();
+    return;
   }
 
   const file = currentFiles[0];
@@ -901,8 +1231,10 @@ async function doReport() {
   formData.append('file', file);
 
   try {
-    const res = await fetch(apiUrl('/conformity-excel'), { method: 'POST', body: formData });
-    const data = await res.json();
+    const res = await fetch(apiUrl('/conformity-excel'), {
+      method: 'POST', headers: { 'Accept': 'application/json' }, body: formData,
+    });
+    const data = await safeJson(res);
     if (!res.ok || !data.reportExcel) {
       toast('Error: ' + (data.detail || data.answer || 'generation failed'), 'error');
       return;
@@ -914,7 +1246,7 @@ async function doReport() {
   }
 }
 
-function downloadExcel(b64, fileName) {
+function downloadExcel(b64, fileName, silent) {
   const bytes = atob(b64);
   const arr = new Uint8Array(bytes.length);
   for (let i=0; i<bytes.length; i++) arr[i] = bytes.charCodeAt(i);
@@ -925,7 +1257,15 @@ function downloadExcel(b64, fileName) {
   a.download = fileName.replace(/\.(ods|xlsx|xlsm)$/i, '') + '_report.xlsx';
   a.click();
   URL.revokeObjectURL(url);
-  toast('Excel report downloaded');
+  if (!silent) toast('Excel report downloaded');
+}
+
+// Download every per-file report produced by the batch fallback.
+function downloadAllPerFile() {
+  const entries = Object.entries(lastBatchExcels || {});
+  if (!entries.length) { toast('No Excel report available', 'error'); return; }
+  entries.forEach(([name, b64], i) => setTimeout(() => downloadExcel(b64, name, true), i * 400));
+  toast(`${entries.length} Excel report(s) downloading…`);
 }
 
 // ── Render functions ──────────────────────────────────────────
@@ -1083,6 +1423,10 @@ specZone.addEventListener('drop', e => {
 
 function handleSpecFile(file) {
   const ext = file.name.split('.').pop().toLowerCase();
+  if (ext === 'doc') {
+    toast('Legacy .doc files are not supported — please re-save this file as .docx (Word: File > Save As > Word Document (.docx)) and upload again.', 'error');
+    return;
+  }
   if (!['docx','pdf','txt'].includes(ext)) {
     toast('Unsupported format. Use .docx, .pdf or .txt', 'error');
     return;
@@ -1129,10 +1473,53 @@ async function doSpecToMatrix() {
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       specFile.name.replace(/\.(docx|pdf|txt)$/i, '') + '_Conformity_Matrix.xlsx'
     );
+    renderMatrixCoverage(data);
     toast(`Matrix downloaded — ${data.requirementsCount} requirements (${data.withIdCount} with ID)`);
   } catch(e) {
     toast('Network error: ' + e.message, 'error');
   }
+}
+
+function renderMatrixCoverage(data) {
+  const el = document.getElementById('matrix-coverage');
+  const cov = data.coverage || {};
+  const total = cov.totalRequirements ?? data.requirementsCount ?? 0;
+  const matched = cov.matchedRequirements ?? total;
+  const missing = cov.missingRequirements || [];
+  const ghosts = cov.ghostRows || [];
+  const complete = cov.complete !== false && missing.length === 0 && ghosts.length === 0;
+  const pct = total ? Math.round((matched / total) * 100) : 100;
+
+  const badge = complete
+    ? '<span class="badge badge-OK">✅ Complete</span>'
+    : '<span class="badge badge-NOK">⚠️ Incomplete</span>';
+
+  let rows = '';
+  if (missing.length) {
+    rows += `<div class="meta" style="color:var(--nok);margin-top:6px">❌ ${missing.length} requirement(s) missing from the matrix:</div>`;
+    rows += missing.slice(0, 10).map(m =>
+      `<div class="meta" style="margin-left:12px">• ${m.reqId || '(no ID)'} — ${(m.text || '').substring(0, 80)}</div>`).join('');
+    if (missing.length > 10) rows += `<div class="meta" style="margin-left:12px">… and ${missing.length - 10} more</div>`;
+  }
+  if (ghosts.length) {
+    rows += `<div class="meta" style="color:var(--warn);margin-top:6px">👻 ${ghosts.length} ghost row(s) with no matching requirement:</div>`;
+    rows += ghosts.slice(0, 10).map(g =>
+      `<div class="meta" style="margin-left:12px">• row ${g.row} — ${g.reqId || '(no ID)'} — ${(g.text || '').substring(0, 80)}</div>`).join('');
+    if (ghosts.length > 10) rows += `<div class="meta" style="margin-left:12px">… and ${ghosts.length - 10} more</div>`;
+  }
+
+  el.innerHTML = `
+    <div class="panel" style="padding:12px">
+      <h3 style="margin:0 0 8px">Matrix coverage check ${badge}</h3>
+      <div class="stats-grid" style="grid-template-columns:repeat(auto-fit,minmax(120px,1fr))">
+        <div class="stat-card"><div class="stat-value">${total}</div><div class="stat-label">Requirements</div></div>
+        <div class="stat-card"><div class="stat-value">${matched}</div><div class="stat-label">In matrix</div></div>
+        <div class="stat-card"><div class="stat-value">${pct}%</div><div class="stat-label">Coverage</div></div>
+        <div class="stat-card"><div class="stat-value">${ghosts.length}</div><div class="stat-label">Ghost rows</div></div>
+      </div>
+      ${rows}
+    </div>`;
+  el.classList.remove('hidden');
 }
 
 async function doValidate() {
@@ -1268,6 +1655,143 @@ function downloadAnnotatedSpec() {
     (specValidation.fileName || 'spec').replace(/\.(docx|pdf|txt)$/i, '') + '_highlighted.docx'
   );
   toast('Highlighted spec downloaded — ' + (specValidation.annotatedSpecHighlightCount || 0) + ' passage(s) marked in purple');
+}
+
+// ── Version Delta tab ─────────────────────────────────────────
+let deltaFiles = [];   // {name, size, file} — successive matrix versions
+let lastDeltaExcel = null;
+
+function _deltaAdd(fileList) {
+  const accepted = ['ods', 'xlsx', 'xlsm'];
+  let rejected = 0;
+  for (const file of fileList) {
+    const ext = file.name.split('.').pop().toLowerCase();
+    if (!accepted.includes(ext)) { rejected++; continue; }
+    if (deltaFiles.some(f => f.name === file.name && f.size === file.size)) continue; // dedup
+    deltaFiles.push({ name: file.name, size: file.size, file });
+  }
+  if (rejected) toast(`${rejected} file(s) ignored — accepted: .ods, .xlsx, .xlsm`, 'error');
+  renderDeltaFiles();
+}
+
+document.getElementById('delta-input').addEventListener('change', e => {
+  // APPEND the new selection (users can add more files by clicking again)
+  // instead of replacing the previous one.
+  _deltaAdd(e.target.files || []);
+  e.target.value = '';  // allow re-selecting the same file(s) later
+});
+
+const deltaZone = document.getElementById('delta-zone');
+deltaZone.addEventListener('dragover', e => { e.preventDefault(); deltaZone.classList.add('dragover'); });
+deltaZone.addEventListener('dragleave', () => deltaZone.classList.remove('dragover'));
+deltaZone.addEventListener('drop', e => {
+  e.preventDefault();
+  deltaZone.classList.remove('dragover');
+  if (e.dataTransfer.files.length) _deltaAdd(e.dataTransfer.files);
+});
+
+function removeDeltaFile(i) {
+  deltaFiles.splice(i, 1);
+  lastDeltaExcel = null;
+  renderDeltaFiles();
+}
+
+function renderDeltaFiles() {
+  const container = document.getElementById('delta-info');
+  container.innerHTML = deltaFiles.map((f, i) => `
+    <div class="file-info">
+      <span>📉</span>
+      <span class="name">${f.name}</span>
+      <span class="size">${(f.size/1024).toFixed(0)} KB</span>
+      <button class="remove" onclick="removeDeltaFile(${i})">×</button>
+    </div>`).join('');
+  document.getElementById('delta-btn').disabled = deltaFiles.length < 2;
+}
+
+async function doDelta() {
+  if (deltaFiles.length < 2) return;
+  showLoading('loading-delta', true, 'Comparing versions…');
+  document.getElementById('results-delta').classList.remove('show');
+  try {
+    // Persist the files server-side so the compare endpoint can find them.
+    for (const entry of deltaFiles) {
+      const fd = new FormData();
+      fd.append('file', entry.file);
+      const res = await fetch(apiUrl('/upload-conformity'), {
+        method: 'POST', headers: { 'Accept': 'application/json' }, body: fd,
+      });
+      const up = await safeJson(res);
+      if (!res.ok) throw new Error(up.detail || `HTTP ${res.status}`);
+    }
+
+    const names = deltaFiles.map(f => f.name);
+    const cres = await fetch(apiUrl('/conformity-compare'), {
+      method: 'POST', headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fileNames: names }),
+    });
+    const data = await safeJson(cres);
+    if (!cres.ok) throw new Error(data.detail || `HTTP ${cres.status}`);
+    lastDeltaExcel = data.reportExcel || null;
+    renderDelta(data);
+    document.getElementById('results-delta').classList.add('show');
+    toast(`Delta: ${data.totalChanges} status change(s) across ${data.steps.length} step(s)`);
+  } catch (e) {
+    toast('Delta failed: ' + e.message, 'error');
+  } finally {
+    showLoading('loading-delta', false);
+  }
+}
+
+function renderDelta(d) {
+  const steps = (d.steps || []).map(s => {
+    let comp = '';
+    if (s.answeredBefore !== undefined) {
+      const diff = s.answeredAfter - s.answeredBefore;
+      comp = diff < 0 ? ` — answers: ${s.answeredBefore} → ${s.answeredAfter} (${-diff} lost)`
+           : diff > 0 ? ` — answers: ${s.answeredBefore} → ${s.answeredAfter} (+${diff})`
+           : ` — answers: ${s.answeredBefore} → ${s.answeredAfter}`;
+    }
+    return `Step ${s.step}: ${s.matrix1} → ${s.matrix2} — ${s.statusChanges} status change(s), ` +
+      `${s.new} new, ${s.removed} removed, ${s.commentChanges} comment change(s)${comp}`;
+  }).join('<br>');
+  document.getElementById('delta-steps').innerHTML = steps || 'No steps';
+
+  const typeCell = t => {
+    const map = {
+      added:     ['🟢 NEW ANSWER',    'var(--ok)'],
+      removed:   ['🔴 ANSWER REMOVED','var(--nok)'],
+      improved:  ['✅ IMPROVED',      'var(--ok)'],
+      regressed: ['❌ REGRESSED',     'var(--nok)'],
+    };
+    const [label, color] = map[t] || [String(t || '').toUpperCase(), 'var(--text)'];
+    return `<span style="color:${color};font-weight:600">${label}</span>`;
+  };
+
+  const rows = (d.statusChanges || []).map(c => [
+    c.step, c.reqId || c.reference || '', c.from, c.to,
+    c.changeType || (c.improvement ? 'improved' : 'regressed'),
+  ]);
+  const badge = c => `<span class="badge badge-${c}">${c}</span>`;
+  document.getElementById('delta-tbody').innerHTML = rows.slice(0, 500).map(r => `
+    <tr>
+      <td>${r[0]}</td>
+      <td>${r[1]}</td>
+      <td>${badge(r[2])}</td>
+      <td>${badge(r[3])}</td>
+      <td>${typeCell(r[4])}</td>
+    </tr>`).join('') || '<tr><td colspan="5" class="muted">No status changes</td></tr>';
+
+  document.getElementById('delta-downloads').innerHTML = lastDeltaExcel
+    ? `<a class="download-link" onclick="downloadDeltaExcel()">📉 Download delta report (Excel)</a>`
+    : '';
+}
+
+function downloadDeltaExcel() {
+  if (!lastDeltaExcel) return;
+  _downloadB64(lastDeltaExcel,
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'conformity_version_delta.xlsx');
+  toast('Delta report downloaded');
 }
 
 // ── Utils ─────────────────────────────────────────────────────
