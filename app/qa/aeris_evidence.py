@@ -8,7 +8,9 @@ an empty chunk list so the engine can mark requirements MANQUANT.
 from __future__ import annotations
 
 import io
+import os
 import re
+import tempfile
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -89,36 +91,45 @@ def _extract_pptx(content: bytes, file_name: str) -> List[EvidenceChunk]:
     Prefer python-pptx when installed (notes + tables). Fall back to a
     zip/XML reader so Azure Functions still work without the extra wheel.
     """
+    chunks: List[EvidenceChunk] = []
     try:
         from pptx import Presentation  # type: ignore
         from pptx.enum.shapes import MSO_SHAPE_TYPE
-    except Exception:
-        return _extract_pptx_xml(content, file_name)
 
-    prs = Presentation(io.BytesIO(content))
-    chunks: List[EvidenceChunk] = []
-    for i, slide in enumerate(prs.slides, 1):
-        parts: List[str] = []
-        for shape in slide.shapes:
-            parts.extend(_shape_text(shape, MSO_SHAPE_TYPE))
-        notes = ""
-        try:
-            if slide.has_notes_slide and slide.notes_slide.notes_text_frame:
-                notes = slide.notes_slide.notes_text_frame.text or ""
-        except Exception:
+        prs = Presentation(io.BytesIO(content))
+        for i, slide in enumerate(prs.slides, 1):
+            parts: List[str] = []
+            for shape in slide.shapes:
+                parts.extend(_shape_text(shape, MSO_SHAPE_TYPE))
             notes = ""
-        if notes.strip():
-            parts.append("Notes: " + notes.strip())
-        text = _clean_block("\n".join(p for p in parts if p and p.strip()))
-        if text:
-            chunks.append(EvidenceChunk(
-                file_name=file_name,
-                location=f"Slide {i}",
-                text=text,
-                chunk_id=i,
-                kind="slide",
-            ))
-    return chunks or _extract_pptx_xml(content, file_name)
+            try:
+                if slide.has_notes_slide and slide.notes_slide.notes_text_frame:
+                    notes = slide.notes_slide.notes_text_frame.text or ""
+            except Exception:
+                notes = ""
+            if notes.strip():
+                parts.append("Notes: " + notes.strip())
+            text = _clean_block("\n".join(p for p in parts if p and p.strip()))
+            if text:
+                chunks.append(EvidenceChunk(
+                    file_name=file_name,
+                    location=f"Slide {i}",
+                    text=text,
+                    chunk_id=i,
+                    kind="slide",
+                ))
+    except Exception:
+        # Un PPTX exporté par un outil tiers, ou un .ppt renommé, fait
+        # échouer python-pptx. Sans ce repli, le TDR entier serait lu
+        # comme vide et toutes les exigences deviendraient "sans preuve".
+        chunks = []
+
+    if chunks:
+        return chunks
+    try:
+        return _extract_pptx_xml(content, file_name)
+    except Exception:
+        return []
 
 
 def _shape_text(shape, MSO_SHAPE_TYPE) -> List[str]:
@@ -175,9 +186,9 @@ def _extract_pptx_xml(content: bytes, file_name: str) -> List[EvidenceChunk]:
 def _extract_pdf(content: bytes, file_name: str) -> List[EvidenceChunk]:
     try:
         from PyPDF2 import PdfReader
+        reader = PdfReader(io.BytesIO(content))
     except Exception:
         return []
-    reader = PdfReader(io.BytesIO(content))
     chunks: List[EvidenceChunk] = []
     for i, page in enumerate(reader.pages, 1):
         try:
@@ -196,18 +207,27 @@ def _extract_pdf(content: bytes, file_name: str) -> List[EvidenceChunk]:
 
 
 def _extract_docx(content: bytes, file_name: str) -> List[EvidenceChunk]:
-    tmp = Path("/tmp") / f"aeris_{re.sub(r'[^A-Za-z0-9._-]', '_', file_name)}"
+    # Nom de fichier unique : deux analyses simultanées portant le même
+    # nom de TDR écrivaient au même endroit.
+    suffix = Path(file_name).suffix or ".docx"
+    handle, tmp_name = tempfile.mkstemp(prefix="aeris_", suffix=suffix)
+    tmp = Path(tmp_name)
+    text = ""
     try:
-        tmp.write_bytes(content)
+        with os.fdopen(handle, "wb") as fh:
+            fh.write(content)
         from app.qa.retrieval import extract_text_from_file, _split_into_chunks
         text = extract_text_from_file(tmp)
+    except Exception:
+        text = ""
     finally:
         try:
             tmp.unlink(missing_ok=True)
         except Exception:
             pass
     if not text:
-        return []
+        return _extract_docx_xml(content, file_name)
+    from app.qa.retrieval import _split_into_chunks
     inner = _split_into_chunks(text, file_name)
     return [
         EvidenceChunk(
@@ -218,6 +238,36 @@ def _extract_docx(content: bytes, file_name: str) -> List[EvidenceChunk]:
             kind="section",
         )
         for c in inner if c.text.strip()
+    ]
+
+
+def _extract_docx_xml(content: bytes, file_name: str) -> List[EvidenceChunk]:
+    """Repli DOCX : lire les runs w:t directement dans word/document.xml."""
+    try:
+        with zipfile.ZipFile(io.BytesIO(content)) as zf:
+            if "word/document.xml" not in zf.namelist():
+                return []
+            root = ET.fromstring(zf.read("word/document.xml"))
+    except Exception:
+        return []
+    ns = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+    paragraphs: List[str] = []
+    for para in root.iter(f"{ns}p"):
+        runs = [el.text for el in para.iter(f"{ns}t") if el.text]
+        line = _clean_block(" ".join(runs))
+        if line:
+            paragraphs.append(line)
+    if not paragraphs:
+        return []
+    return [
+        EvidenceChunk(
+            file_name=file_name,
+            location=f"Paragraph {i}",
+            text=line,
+            chunk_id=i,
+            kind="paragraph",
+        )
+        for i, line in enumerate(paragraphs, 1)
     ]
 
 

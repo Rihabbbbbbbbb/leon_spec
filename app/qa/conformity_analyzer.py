@@ -869,8 +869,10 @@ def extract_conformity_data(filepath: str, file_name: str = "") -> ConformityAna
     # This determines whether domain codes should be classified as NOK or EMPTY
     assessment_cols = _detect_assessment_columns(sheet, conformity_cols, analysis.data_start_row)
 
-    # Find the last row with any data to avoid counting trailing empty rows
-    last_data_row = analysis.data_start_row
+    # Find the last row with any data to avoid counting trailing empty rows.
+    # Clamped to the sheet: a file with headers but no requirement row used
+    # to index past the end and abort the whole analysis.
+    last_data_row = min(analysis.data_start_row, len(sheet) - 1)
     for ri in range(analysis.data_start_row, len(sheet)):
         row = sheet[ri]
         if row and any(c.strip() for c in row if c):

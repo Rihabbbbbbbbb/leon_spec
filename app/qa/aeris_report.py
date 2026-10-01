@@ -15,6 +15,8 @@ PREUVE_INSUFFISANTE…) : chaque ligne est une phrase lisible.
 from __future__ import annotations
 
 import io
+import re
+from copy import copy
 from typing import Dict, List
 
 from openpyxl import Workbook
@@ -276,6 +278,28 @@ def generate_aeris_excel(report: dict) -> bytes:
         wd.auto_filter.ref = f"A1:K{len(items) + 1}"
 
     wb.active = 0
+    _neutralise_formulas(wb)
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+
+# Excel interprète une cellule commençant par = + - @ comme une formule.
+# Le texte vient du dossier d'un fournisseur externe : il ne doit jamais
+# s'exécuter à l'ouverture du rapport (CWE-1236).
+_FORMULA_LEAD = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _neutralise_formulas(wb) -> None:
+    for ws in wb.worksheets:
+        for row in ws.iter_rows():
+            for cell in row:
+                value = cell.value
+                if not isinstance(value, str) or not value.startswith(_FORMULA_LEAD):
+                    continue
+                # "-40 °C" reste un nombre lisible, pas une formule.
+                if value[:1] in ("-", "+") and re.match(r"^[-+]?\d", value):
+                    continue
+                style = copy(cell._style)
+                style.quotePrefix = True
+                cell._style = style
