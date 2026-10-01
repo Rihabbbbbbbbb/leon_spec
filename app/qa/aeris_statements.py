@@ -27,6 +27,7 @@ from app.qa.aeris_constraints import (
     Measurement,
     classify_unit,
     conditions_compatible,
+    quantities_compatible,
     extract_constraints,
     extract_measurements,
     operator_symbol,
@@ -237,7 +238,7 @@ def restated_vs_requirement(
         for c in constraints:
             if t.unit_family != c.unit_family:
                 continue
-            if t.quantity and c.quantity and t.quantity != c.quantity:
+            if not quantities_compatible(t.quantity, c.quantity):
                 continue
             if _numeric_disagree(t.value, c.value, t.unit_family):
                 return display, "WRONG_TARGET"
@@ -255,7 +256,7 @@ def tdr_self_conflicts(tdr_m: Sequence[Measurement]) -> str:
         for b in items[i + 1:]:
             if a.unit_family != b.unit_family:
                 continue
-            if a.quantity and b.quantity and a.quantity != b.quantity:
+            if not quantities_compatible(a.quantity, b.quantity):
                 continue
             if a.unit_family == "angle":
                 continue  # viewing-angle conditions, not product results

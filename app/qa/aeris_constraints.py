@@ -21,26 +21,40 @@ from typing import Dict, List, Optional, Tuple
 class Constraint:
     """A measurable target extracted from a requirement or comment."""
     raw: str
-    value: float
+    value: float             # toujours dans l'unité de référence de la famille
     operator: str            # le, lt, ge, gt, eq
     unit_family: str
     unit: str
     condition: str = ""
     quantity: str = ""
     source: str = "requirement"  # requirement | comment
+    # Unité telle qu'écrite dans le document, pour un affichage fidèle :
+    # une exigence "≤2 A" doit se relire "≤2 A", jamais "≤2000 mA".
+    display_unit: str = ""
+    display_factor: float = 1.0
+
+    def shown(self) -> str:
+        return display_amount(self.value, self.display_unit or self.unit,
+                              self.display_factor)
 
 
 @dataclass
 class Measurement:
     """A measured / declared value extracted from evidence (TDR/PPT/PDF)."""
     raw: str
-    value: float
+    value: float             # toujours dans l'unité de référence de la famille
     unit_family: str
     unit: str
     condition: str = ""
     qualifier: str = ""      # typ | max | min | ""
     location: str = ""       # slide/page label
     quantity: str = ""       # attenuation | cpu_load | contrast | current…
+    display_unit: str = ""
+    display_factor: float = 1.0
+
+    def shown(self) -> str:
+        return display_amount(self.value, self.display_unit or self.unit,
+                              self.display_factor)
 
 
 @dataclass
@@ -92,6 +106,32 @@ _UNIT_TABLE: List[Tuple[str, str, float]] = [
     ("angle", "degrees", 1.0),
     ("angle", "deg", 1.0),
     ("angle", "°", 1.0),
+    # Luminance — the headline figure of any display TDR.
+    ("luminance", "cd/m2", 1.0),
+    ("luminance", "cd/m²", 1.0),
+    ("luminance", "cd/sqm", 1.0),
+    ("luminance", "nits", 1.0),
+    ("luminance", "nit", 1.0),
+    ("mass", "mg", 0.001),
+    ("mass", "kg", 1000.0),
+    ("mass", "g", 1.0),
+    ("pressure", "mbar", 0.1),
+    ("pressure", "bar", 100.0),
+    ("pressure", "kpa", 1.0),
+    ("pressure", "hpa", 0.1),
+    ("pressure", "pa", 0.001),
+    ("acoustic", "db", 1.0),
+    ("acoustic", "dba", 1.0),
+    ("count", "px", 1.0),
+    ("count", "pixels", 1.0),
+    ("count", "pixel", 1.0),
+    ("time", "hours", 3_600_000.0),
+    ("time", "hour", 3_600_000.0),
+    ("time", "hrs", 3_600_000.0),
+    ("time", "µs", 0.001),
+    ("time", "us", 0.001),
+    ("time", "s", 1000.0),
+    ("time", "h", 3_600_000.0),
     # Ambiguous single letters — only accepted with a word boundary and
     # a nearby quantity hint (handled in _looks_like_unit).
     ("current", "a", 1000.0),
@@ -100,7 +140,17 @@ _UNIT_TABLE: List[Tuple[str, str, float]] = [
     ("power", "w", 1000.0),
 ]
 
-_AMBIGUOUS_UNITS = {"a", "v", "c", "w"}
+_AMBIGUOUS_UNITS = {"a", "v", "c", "w", "s", "h", "g"}
+
+# Unité de référence interne de chaque famille. La comparaison se fait
+# toujours dans cette unité ; l'affichage, lui, garde l'unité écrite par
+# l'auteur du document (voir display_unit).
+_CANONICAL_UNIT = {
+    "current": "mA", "voltage": "V", "temperature": "°C", "percent": "%",
+    "ratio": ":1", "power": "mW", "frequency": "Hz", "time": "ms",
+    "length": "mm", "angle": "°", "luminance": "cd/m²", "mass": "g",
+    "pressure": "kPa", "acoustic": "dB", "count": "px",
+}
 
 _OPERATOR_MAP = [
     (r"≤|<=|=<", "le"),
@@ -117,6 +167,12 @@ _NUM_RE = re.compile(
 )
 
 _QUALIFIER_RE = re.compile(r"\b(typ(?:ical)?|max(?:imum)?|min(?:imum)?)\b", re.I)
+
+# "500 cd/m2", "500 cd/m²", "500 nits" — unité composée, traitée à part.
+_LUMINANCE_RE = re.compile(
+    r"(?<![A-Za-z0-9])(\d+(?:[.,]\d+)?)\s*(?:cd\s*/\s*m\s*[²2]|nits?)\b",
+    re.I,
+)
 
 # A number after “target / limit / requirement” is a restated spec, not a result.
 _RESTATE_LEAD = re.compile(
@@ -176,6 +232,14 @@ def _looks_like_unit(token: str, nearby: str) -> bool:
         return True
     if tok == "c" and re.search(r"temp|thermal|°", near):
         return True
+    if tok == "s" and re.search(r"time|duration|delay|within|durée|temps|startup|boot", near):
+        return True
+    if tok == "h" and re.search(r"hour|lifetime|endurance|durée\s+de\s+vie|operating", near):
+        return True
+    # "g" est aussi une accélération (vibration 50 g) : n'accepter la masse
+    # que si le contexte parle explicitement de poids.
+    if tok == "g" and re.search(r"weight|mass|poids|masse", near):
+        return True
     if tok == "w" and re.search(r"power|watt", near):
         return True
     return False
@@ -204,6 +268,18 @@ def to_canonical(value: float, family: str, factor: float) -> float:
     return value * factor
 
 
+def display_amount(canonical: float, unit: str, factor: float = 1.0) -> str:
+    """Revenir à l'unité d'origine : 2000 mA + facteur 1000 → "2 A"."""
+    if not factor:
+        factor = 1.0
+    shown = canonical / factor
+    # Éviter 0.30000000000000004 sur les divisions flottantes.
+    shown = round(shown, 9)
+    label = pretty_unit(unit)
+    sep = "" if label == ":1" else " "
+    return f"{shown:g}{sep}{label}".strip()
+
+
 def _is_id_or_condition_number(text: str, start: int, raw_num: str) -> bool:
     """Skip REQ-IDs, years, slide/page indices, and V=32° condition numbers."""
     prefix = text[max(0, start - 12):start].lower()
@@ -224,20 +300,34 @@ def _is_id_or_condition_number(text: str, start: int, raw_num: str) -> bool:
 def _quantity_of(text: str) -> str:
     """Fine-grained quantity so % attenuation is never compared to % CPU load."""
     t = (text or "").lower()
-    if re.search(r"attenuat|lcf|luminance", t):
+    if re.search(r"attenuat|lcf", t):
         return "attenuation"
+    if re.search(r"\bcd\s*/\s*m|nits?\b", t) or (
+        re.search(r"luminance|brightness", t) and not re.search(r"attenuat|lcf", t)
+    ):
+        return "luminance"
     if re.search(r"contrast", t):
         return "contrast"
     if re.search(r"\bcpu\b|cpu\s+load|\bload\b", t):
         return "cpu_load"
+    # Les courants doivent rester séparés : un courant d'appel n'est pas
+    # une consommation en veille.
+    if re.search(r"\binrush\b|\bsurge\b|\bpeak\s+current\b|appel", t):
+        return "inrush_current"
     if re.search(r"\bidle\b", t):
         return "idle_current"
-    if re.search(r"\bstandby\b", t):
+    if re.search(r"\bstandby\b|\bsleep\b|\bveille\b", t):
         return "standby_current"
     if re.search(r"reduced", t) and re.search(r"current|consum", t):
         return "reduced_current"
     if re.search(r"current|consommation|consumption|amp", t):
         return "current"
+    if re.search(r"weight|mass|poids|masse", t):
+        return "weight"
+    if re.search(r"\bstartup\b|\bboot\b|\bdémarrage\b|\bdemarrage\b", t):
+        return "startup_time"
+    if re.search(r"\boperating\b", t) and re.search(r"temp", t):
+        return "operating_temperature"
     if re.search(r"\bstorage\b", t) and re.search(r"temp", t):
         return "storage_temperature"
     if re.search(r"\bdisplay\b", t) and re.search(r"temp", t):
@@ -253,16 +343,55 @@ def _quantity_of(text: str) -> str:
 
 _GENERIC_QTY = {
     "", "temperature", "current", "percent", "time", "voltage", "power",
-    "ratio", "length", "frequency", "angle",
+    "ratio", "length", "frequency", "angle", "luminance", "mass",
+    "pressure", "acoustic", "count",
 }
 
 
-def _prefer_quantity(window: str, text: str) -> str:
-    """Prefer a specific tag (idle_current, storage_temperature) over the family."""
+def quantities_compatible(a: str, b: str) -> bool:
+    """
+    True when two quantity tags may describe the same measurement.
+
+    A generic tag ("time") is the family itself, so it matches a more
+    precise one ("startup_time"). Two *different* precise tags never
+    match: a standby current is not an inrush current.
+    """
+    if not a or not b or a == b:
+        return True
+    return a in _GENERIC_QTY or b in _GENERIC_QTY
+
+
+def _prefer_quantity(window: str, text: str, unit_family: str = "") -> str:
+    """
+    Prefer a specific tag (idle_current, storage_temperature) over the family.
+
+    The wider text is only consulted as a fallback, and a tag taken from
+    there is rejected when it belongs to another unit family: on a slide
+    reading "gap 0.18 mm / Weight 512 g", the millimetres must not be
+    labelled a weight just because the word appears two lines below.
+    """
     a, b = _quantity_of(window), _quantity_of(text)
     if b and b not in _GENERIC_QTY and (not a or a in _GENERIC_QTY):
-        return b
+        if not unit_family or _QTY_FAMILY.get(b, unit_family) == unit_family:
+            return b
+        return a
+    if a and unit_family and _QTY_FAMILY.get(a, unit_family) != unit_family:
+        return ""
     return a or b
+
+
+# Famille d'unité attendue pour chaque grandeur nommée. Sert à refuser
+# une étiquette empruntée à une autre ligne de la même diapositive.
+_QTY_FAMILY = {
+    "attenuation": "percent", "cpu_load": "percent", "contrast": "ratio",
+    "luminance": "luminance", "weight": "mass",
+    "inrush_current": "current", "idle_current": "current",
+    "standby_current": "current", "reduced_current": "current",
+    "current": "current", "voltage": "voltage",
+    "storage_temperature": "temperature", "display_temperature": "temperature",
+    "operating_temperature": "temperature", "temperature": "temperature",
+    "startup_time": "time",
+}
 
 
 def _guess_family_from_text(text: str) -> str:
@@ -301,7 +430,23 @@ def extract_constraints(text: str, source: str = "requirement") -> List[Constrai
         return []
 
     found: List[Constraint] = []
-    # Ratio first: 400:1
+    # Luminance before the generic pass: "cd/m2" contains a slash and a
+    # digit, which the generic unit pattern cannot carry.
+    for m in _LUMINANCE_RE.finditer(text):
+        window = text[max(0, m.start() - 48): m.end() + 40]
+        found.append(Constraint(
+            raw=m.group(0).strip(),
+            value=_norm_num(m.group(1)),
+            operator=_detect_operator(window, default="ge"),
+            unit_family="luminance",
+            unit="cd/m²",
+            condition=_extract_condition(window) or _extract_condition(text),
+            quantity="luminance",
+            source=source,
+            display_unit="cd/m²",
+        ))
+
+    # Ratio: 400:1
     for m in re.finditer(r"(\d+(?:[.,]\d+)?)\s*:\s*1\b", text):
         value = _norm_num(m.group(1))
         window = text[max(0, m.start() - 40): m.end() + 40]
@@ -341,10 +486,12 @@ def extract_constraints(text: str, source: str = "requirement") -> List[Constrai
             value=value,
             operator=_detect_operator(window, default="le" if family in ("current", "temperature", "power") else "ge"),
             unit_family=family,
-            unit=unit or family,
+            unit=_CANONICAL_UNIT.get(family, unit or family),
             condition=_extract_condition(after) or _extract_condition(window) or _extract_condition(text),
-            quantity=_prefer_quantity(window, text) or family,
+            quantity=_prefer_quantity(window, text, family) or family,
             source=source,
+            display_unit=unit or family,
+            display_factor=factor,
         ))
 
     return _dedupe_constraints(found)
@@ -356,6 +503,22 @@ def extract_measurements(text: str, location: str = "") -> List[Measurement]:
         return []
 
     found: List[Measurement] = []
+
+    for m in _LUMINANCE_RE.finditer(text):
+        prefix = text[max(0, m.start() - 24): m.start()]
+        after = text[m.end(): m.end() + 36]
+        window = prefix + m.group(0) + after
+        found.append(Measurement(
+            raw=m.group(0).strip(),
+            value=_norm_num(m.group(1)),
+            unit_family="luminance",
+            unit="cd/m²",
+            condition=_extract_condition(after) or _extract_condition(window),
+            qualifier=_qualifier(window, prefix=prefix),
+            location=location,
+            quantity="luminance",
+            display_unit="cd/m²",
+        ))
 
     for m in re.finditer(r"(\d+(?:[.,]\d+)?)\s*:\s*1\b", text):
         prefix = text[max(0, m.start() - 24): m.start()]
@@ -401,7 +564,7 @@ def extract_measurements(text: str, location: str = "") -> List[Measurement]:
                 family, unit, factor = "temperature", "°c", 1.0
             else:
                 continue
-        qty = _prefer_quantity(window, text)
+        qty = _prefer_quantity(window, text, family)
         if family == "percent" and not qty:
             if re.search(r"attenuat|lcf", window + " " + after, re.I):
                 qty = "attenuation"
@@ -411,11 +574,13 @@ def extract_measurements(text: str, location: str = "") -> List[Measurement]:
             raw=m.group(0).strip(),
             value=to_canonical(_norm_num(raw_num), family, factor),
             unit_family=family,
-            unit=unit or family,
+            unit=_CANONICAL_UNIT.get(family, unit or family),
             condition=_extract_condition(after) or _extract_condition(window),
             qualifier=_qualifier(window, prefix=prefix),
             location=location,
             quantity=qty,
+            display_unit=unit or family,
+            display_factor=factor,
         ))
 
     return _dedupe_measurements(found)
@@ -531,7 +696,8 @@ def compare_constraint(
     """
     same_family = [m for m in measurements if m.unit_family == constraint.unit_family]
     if constraint.quantity:
-        same_qty = [m for m in same_family if not m.quantity or m.quantity == constraint.quantity]
+        same_qty = [m for m in same_family
+                    if quantities_compatible(m.quantity, constraint.quantity)]
         if same_qty:
             same_family = same_qty
     if not same_family:
@@ -557,13 +723,17 @@ def compare_constraint(
             ok = _compare_one(constraint.operator, chosen.value, constraint.value)
             gap = chosen.value - constraint.value
             op_sym = {"le": "<=", "lt": "<", "ge": ">=", "gt": ">", "eq": "="}.get(constraint.operator, constraint.operator)
+            # Afficher dans l'unité de l'exigence, pas dans l'unité interne.
+            shown_unit = constraint.display_unit or constraint.unit
+            shown_factor = constraint.display_factor or 1.0
             verdicts.append(ConditionVerdict(
                 condition=chosen.condition or constraint.condition or cond_key,
-                target=f"{op_sym}{constraint.value:g} {constraint.unit}",
-                measured=f"{chosen.qualifier + ' ' if chosen.qualifier else ''}{chosen.value:g} {chosen.unit}".strip(),
+                target=f"{op_sym}{display_amount(constraint.value, shown_unit, shown_factor)}",
+                measured=f"{chosen.qualifier + ' ' if chosen.qualifier else ''}"
+                         f"{display_amount(chosen.value, shown_unit, shown_factor)}".strip(),
                 status="CONFORME" if ok else "NON_CONFORME",
-                gap=gap,
-                gap_unit=constraint.unit,
+                gap=gap / shown_factor,
+                gap_unit=pretty_unit(shown_unit),
             ))
     return verdicts
 
@@ -599,11 +769,20 @@ def operator_symbol(op: str) -> str:
 # Affichage lisible : "<=50 ma" → "≤50 mA", "380 :1" → "380:1".
 _PRETTY_UNIT = {
     "ma": "mA", "µa": "µA", "ua": "µA", "amp": "A", "ampere": "A", "amps": "A",
-    "mv": "mV", "kv": "kV", "°c": "°C", "degc": "°C", "celsius": "°C",
-    "mw": "mW", "kw": "kW", "mhz": "MHz", "khz": "kHz", "hz": "Hz",
-    "ms": "ms", "sec": "s", "min": "min", "µm": "µm", "um": "µm",
-    "mm": "mm", "cm": "cm", "percent": "%", "pct": "%", "ratio": ":1",
+    "a": "A", "mv": "mV", "kv": "kV", "v": "V",
+    "°c": "°C", "degc": "°C", "celsius": "°C", "c": "°C",
+    "mw": "mW", "kw": "kW", "w": "W",
+    "mhz": "MHz", "khz": "kHz", "hz": "Hz",
+    "ms": "ms", "sec": "s", "s": "s", "µs": "µs", "us": "µs",
+    "min": "min", "h": "h", "hrs": "h", "hour": "h", "hours": "h",
+    "µm": "µm", "um": "µm", "mm": "mm", "cm": "cm",
+    "percent": "%", "pct": "%", "ratio": ":1",
     "deg": "°", "degree": "°", "degrees": "°",
+    "cd/m2": "cd/m²", "cd/m²": "cd/m²", "cd/sqm": "cd/m²",
+    "nit": "nits", "nits": "nits",
+    "mg": "mg", "g": "g", "kg": "kg",
+    "pa": "Pa", "hpa": "hPa", "kpa": "kPa", "mbar": "mbar", "bar": "bar",
+    "db": "dB", "dba": "dB(A)", "px": "px", "pixel": "px", "pixels": "px",
 }
 
 

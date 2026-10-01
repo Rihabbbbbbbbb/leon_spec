@@ -239,12 +239,7 @@ def _check_one(
     evidence_file = best[0].file_name if best else ""
     match_score = best[1] if best else 0.0
 
-    measurements: List[Measurement] = []
-    for chunk, _score in ranked[:4]:
-        measurements.extend(extract_measurements(chunk.text, location=chunk.location))
-    qty = {c.quantity for c in constraints if c.quantity}
-    if qty:
-        measurements = [m for m in measurements if not m.quantity or m.quantity in qty]
+    measurements = _gather_measurements(ranked, constraints)
 
     condition_verdicts: List[Dict] = []
     evidence_status = "MANQUANT"
@@ -260,7 +255,7 @@ def _check_one(
             vs = compare_constraint(c, measurements)
             all_v.extend(vs)
             if not target:
-                target = f"{operator_symbol(c.operator)}{c.value:g} {c.unit}"
+                target = f"{operator_symbol(c.operator)}{c.shown()}"
                 if c.condition:
                     target += f" ({c.condition})"
         condition_verdicts = [
@@ -379,6 +374,51 @@ def _check_one(
         declaration_alignment=walk.alignment,
     )
     return item, contras, walk
+
+
+def _gather_measurements(
+    ranked: List[Tuple[EvidenceChunk, float]],
+    constraints: List[Constraint],
+) -> List[Measurement]:
+    """
+    Collect the numbers that legitimately belong to this requirement.
+
+    Without a guard, a requirement asking for ≤100 mA would absorb the
+    3.1 A of an unrelated inrush slide simply because both are currents,
+    and AERIS would report a fake "TDR self-contradiction". So:
+
+    * the best-matching passage is always trusted;
+    * a lower-ranked passage only contributes when it measures the same
+      named quantity (standby current, contrast, luminance…), which is
+      what lets one requirement be proven across several slides.
+    """
+    if not ranked:
+        return []
+
+    wanted = {c.quantity for c in constraints if c.quantity}
+    families = {c.unit_family for c in constraints if c.unit_family}
+    best_score = ranked[0][1]
+
+    out: List[Measurement] = []
+    for index, (chunk, score) in enumerate(ranked[:6]):
+        found = extract_measurements(chunk.text, location=chunk.location)
+        if index == 0:
+            keep = found
+        else:
+            # Trop loin du meilleur score : ce n'est plus la même preuve.
+            if score < max(1.4, best_score * 0.55):
+                continue
+            keep = [m for m in found if m.quantity and m.quantity in wanted]
+        out.extend(keep)
+
+    if wanted:
+        # Une mesure explicitement rattachée à une autre grandeur de la
+        # même famille (courant d'appel vs consommation) est écartée.
+        out = [
+            m for m in out
+            if not m.quantity or m.quantity in wanted or m.unit_family not in families
+        ]
+    return out
 
 
 def _retrieve(
