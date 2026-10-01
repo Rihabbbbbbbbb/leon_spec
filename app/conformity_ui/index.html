@@ -344,6 +344,26 @@
     .badge-VERY_HIGH, .badge-HIGH { background: rgba(21,115,71,0.12); color: var(--ok); }
     .badge-MEDIUM { background: rgba(154,91,0,0.14); color: var(--dev); }
     .badge-LOW, .badge-NONE { background: rgba(91,107,124,0.10); color: var(--muted); }
+    .badge-OPPOSITE, .badge-DECLARATION_OPPOSITE { background: rgba(179,38,30,0.12); color: var(--nok); }
+    .badge-VALUE_MISMATCH { background: rgba(198,89,17,0.14); color: var(--partial); }
+    .badge-WRONG_TARGET, .badge-TDR_RESTATES_WRONG_TARGET { background: rgba(154,91,0,0.14); color: var(--dev); }
+    .badge-TDR_CONFLICT, .badge-TDR_INTERNAL_CONFLICT { background: rgba(198,89,17,0.14); color: var(--partial); }
+    .said-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 8px; }
+    @media (max-width: 800px) { .said-grid { grid-template-columns: 1fr; } }
+    .said-box {
+      background: var(--panel-2); border: 1px solid var(--border);
+      border-radius: 8px; padding: 8px 10px; font-size: 13px;
+    }
+    .said-box .lbl {
+      font-size: 10px; text-transform: uppercase; letter-spacing: 0.4px;
+      color: var(--muted); font-weight: 700; margin-bottom: 4px;
+    }
+    .said-box.disagree { border-color: #f0b4b0; background: #fff6f5; }
+    .said-box.agree { border-color: #b7e4c7; background: #f3fbf6; }
+    .crosswalk-row {
+      border: 1px solid var(--border); border-radius: 10px;
+      padding: 12px 14px; margin-bottom: 10px; background: var(--panel);
+    }
     .dual-upload { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
     @media (max-width: 800px) { .dual-upload { grid-template-columns: 1fr; } }
     .risk-chip {
@@ -623,9 +643,11 @@
       <h2>AERIS — prove each matrix row against the supplier TDR</h2>
       <p class="muted mb-16">
         Upload the conformity matrix <strong>and</strong> the supplier technical dossier
-        (PPT / PDF / DOCX / TXT). AERIS extracts measurable targets (≤100&nbsp;mA, &gt;95&nbsp;% @32°,
+        (PPT / PDF / DOCX / TXT). AERIS         extracts measurable targets (≤100&nbsp;mA, &gt;95&nbsp;% @32°,
         contrast ≥400:1…), finds the matching evidence slide/page, compares the numbers,
-        and flags when the matrix says OK but the TDR does not.
+        and then compares <em>what the supplier wrote in the TDR</em> with
+        <em>what they declared in the matrix</em> (opposite OK/NOK, different
+        figures, restated-wrong target, TDR self-conflict).
       </p>
       <div class="dual-upload">
         <div>
@@ -680,8 +702,26 @@
         </p>
         <div id="aeris-contra-list"></div>
       </div>
+      <div class="panel" id="aeris-crosswalk-panel">
+        <h2>3. Statement crosswalk — what they said in the matrix vs the TDR</h2>
+        <p class="muted mb-16">
+          Three-way check used in supplier technical reviews: Stellantis target
+          ↔ matrix declaration ↔ TDR statement. Aligned NOK (matrix already
+          admits the miss) is honest, not an incompliance.
+        </p>
+        <div class="filter-bar">
+          <button class="filter-btn active" data-wfilter="ALL" onclick="setWalkFilter('ALL')">All</button>
+          <button class="filter-btn" data-wfilter="INCOMPLIANT" onclick="setWalkFilter('INCOMPLIANT')">Incompliant</button>
+          <button class="filter-btn" data-wfilter="OPPOSITE" onclick="setWalkFilter('OPPOSITE')">Opposite</button>
+          <button class="filter-btn" data-wfilter="VALUE_MISMATCH" onclick="setWalkFilter('VALUE_MISMATCH')">Value mismatch</button>
+          <button class="filter-btn" data-wfilter="WRONG_TARGET" onclick="setWalkFilter('WRONG_TARGET')">Wrong target</button>
+          <button class="filter-btn" data-wfilter="TDR_CONFLICT" onclick="setWalkFilter('TDR_CONFLICT')">TDR conflict</button>
+          <button class="filter-btn" data-wfilter="ALIGNED" onclick="setWalkFilter('ALIGNED')">Aligned</button>
+        </div>
+        <div id="aeris-crosswalk-list"></div>
+      </div>
       <div class="panel">
-        <h2>3. Requirement ↔ evidence findings</h2>
+        <h2>4. Requirement ↔ evidence findings</h2>
         <div class="filter-bar">
           <input type="text" class="search-box" id="aeris-search" placeholder="Search REQ-ID, target, evidence…" oninput="filterAerisTable()" />
           <button class="filter-btn active" data-afilter="ALL" onclick="setAerisFilter('ALL')">All</button>
@@ -699,6 +739,7 @@
                 <th>REQ-ID</th>
                 <th>Verdict</th>
                 <th>Matrix</th>
+                <th>Said</th>
                 <th>Coherence</th>
                 <th>Target</th>
                 <th>Supplier result</th>
@@ -1405,6 +1446,7 @@ let aerisEvidence = [];
 let aerisReport = null;
 let aerisExcel = null;
 let aerisFilter = 'ALL';
+let aerisWalkFilter = 'ALL';
 
 function _bindDrop(zone, input, onFiles) {
   input.addEventListener('change', () => { if (input.files.length) onFiles(input.files); });
@@ -1500,6 +1542,9 @@ function renderAeris(data) {
     {cls:'stat-total', val:(s.conformityRate||0)+'%', label:'Conformity rate'},
     {cls:'stat-nok', val:s.contradictions||0, label:'Contradictions'},
     {cls:'stat-nok', val:s.contradictionsCritical||0, label:'Critical'},
+    {cls:'stat-nok', val:s.statementIncompliant||0, label:'Said-incompliant'},
+    {cls:'stat-partial', val:s.valueMismatch||0, label:'Value mismatch'},
+    {cls:'stat-dev', val:s.wrongTarget||0, label:'Wrong target'},
   ];
   document.getElementById('aeris-stats-grid').innerHTML = cards.map(c =>
     `<div class="stat-card ${c.cls}"><div class="value">${c.val}</div><div class="label">${c.label}</div></div>`
@@ -1507,7 +1552,8 @@ function renderAeris(data) {
   const ev = (data.evidenceFiles || []).join(', ');
   document.getElementById('aeris-meta').innerHTML =
     `Matrix: <strong>${data.matrixFile || ''}</strong> · Evidence: <strong>${ev}</strong>` +
-    ` · Coverage: ${s.evidenceCoverage || 0}% · Matrix too optimistic: ${s.matrixTooOptimistic || 0}`;
+    ` · Coverage: ${s.evidenceCoverage || 0}% · Matrix too optimistic: ${s.matrixTooOptimistic || 0}` +
+    ` · Opposite declarations: ${s.declarationOpposite || 0} · TDR self-conflict: ${s.tdrConflict || 0}`;
   document.getElementById('aeris-notes').innerHTML = (data.notes || []).map(n => `<p>${n}</p>`).join('');
   document.getElementById('aeris-risks').innerHTML = (data.topRisks || []).length
     ? '<h2 style="margin-bottom:8px">Top risks</h2>' + data.topRisks.map((r, i) =>
@@ -1516,6 +1562,7 @@ function renderAeris(data) {
       ).join('')
     : '';
   renderAerisContradictions(data.contradictions || []);
+  setWalkFilter('ALL');
   setAerisFilter('ALL');
 }
 
@@ -1544,9 +1591,68 @@ function renderAerisContradictions(list) {
   }).join('');
 }
 
+function setWalkFilter(f) {
+  aerisWalkFilter = f;
+  document.querySelectorAll('#results-aeris [data-wfilter]').forEach(b => b.classList.remove('active'));
+  const btn = document.querySelector(`#results-aeris [data-wfilter="${f}"]`);
+  if (btn) btn.classList.add('active');
+  renderAerisCrosswalk((aerisReport && aerisReport.crosswalk) || []);
+}
+
+function renderAerisCrosswalk(list) {
+  const box = document.getElementById('aeris-crosswalk-list');
+  if (!box) return;
+  const incompliant = new Set(['OPPOSITE', 'VALUE_MISMATCH', 'WRONG_TARGET', 'TDR_CONFLICT']);
+  const filtered = list.filter(w => {
+    if (aerisWalkFilter === 'ALL') return true;
+    if (aerisWalkFilter === 'INCOMPLIANT') return incompliant.has(w.alignment);
+    return w.alignment === aerisWalkFilter;
+  });
+  if (!filtered.length) {
+    box.innerHTML = '<p class="muted">No statement row in this filter.</p>';
+    return;
+  }
+  box.innerHTML = filtered.map(w => {
+    const bad = incompliant.has(w.alignment);
+    const valBad = w.values_agree === 'DISAGREE';
+    const polBad = w.polarity_agree === 'OPPOSITE';
+    return `<div class="crosswalk-row">
+      <div class="header" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <strong style="font-family:var(--mono)">${_esc(w.req_id)}</strong>
+        <span class="badge badge-${w.alignment || 'ALIGNED'}">${_esc(w.alignment || 'ALIGNED')}</span>
+        ${w.incompliance_type ? `<span class="badge badge-${w.incompliance_type}">${_esc(w.incompliance_type)}</span>` : ''}
+        ${w.stellatis_target ? `<span class="muted" style="font-size:12px">Target ${_esc(w.stellatis_target)}</span>` : ''}
+      </div>
+      ${w.incompliance_title ? `<div class="explanation" style="margin-top:6px">${_esc(w.incompliance_title)}</div>` : ''}
+      <div class="said-grid">
+        <div class="said-box ${valBad || polBad ? 'disagree' : 'agree'}">
+          <div class="lbl">Matrix said · ${ _esc(w.matrix_polarity || '') }</div>
+          ${_esc(w.matrix_said)}
+        </div>
+        <div class="said-box ${valBad || polBad ? 'disagree' : 'agree'}">
+          <div class="lbl">TDR said · ${ _esc(w.tdr_polarity || '') }${w.tdr_location ? ' · ' + _esc(w.tdr_location) : ''}</div>
+          ${_esc(w.tdr_said)}
+        </div>
+      </div>
+      <div class="meta muted" style="margin-top:8px;font-size:12px">
+        Values: ${_esc(w.values_agree)} · Polarity: ${_esc(w.polarity_agree)}
+        ${w.restated_target ? ' · Restated target: ' + _esc(w.restated_target) + ' (' + _esc(w.restated_target_match) + ')' : ''}
+        ${w.tdr_internal_conflict ? ' · TDR conflict: ' + _esc(w.tdr_internal_conflict) : ''}
+      </div>
+      ${w.action ? `<div class="meta muted" style="font-size:12px">Action: ${_esc(w.action)}</div>` : ''}
+    </div>`;
+  }).join('');
+}
+
+function _esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[c]));
+}
+
 function setAerisFilter(f) {
   aerisFilter = f;
-  document.querySelectorAll('#results-aeris .filter-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('#results-aeris [data-afilter]').forEach(b => b.classList.remove('active'));
   const btn = document.querySelector(`#results-aeris [data-afilter="${f}"]`);
   if (btn) btn.classList.add('active');
   filterAerisTable();
@@ -1568,6 +1674,7 @@ function filterAerisTable() {
       <td><span class="badge badge-${it.final_status}">${it.final_status}</span>
           <div class="muted" style="font-size:11px">${it.confidence || ''}</div></td>
       <td><span class="badge badge-${it.matrix_status}">${it.matrix_status}</span></td>
+      <td>${it.declaration_alignment ? `<span class="badge badge-${it.declaration_alignment}">${it.declaration_alignment}</span>` : '<span class="muted">—</span>'}</td>
       <td><span class="badge badge-${it.coherence}">${it.coherence}</span></td>
       <td>${it.target || '<span class="muted">—</span>'}</td>
       <td>${it.supplier_result || '<span class="muted">—</span>'}

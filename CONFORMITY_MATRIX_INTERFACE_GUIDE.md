@@ -8,6 +8,8 @@ How to open and use the Conformity Matrix web interface — no installation, no 
 
 Suppliers return conformity matrices (ODS/XLSX spreadsheets) marking each requirement **OK**, **NOK** (not conforming), or **NA** (not applicable), with a comment. Reviewing them by hand is slow, and a row marked "OK" can hide a problem in its comment ("pending validation", "partially covered"…).
 
+The third tab (AERIS) goes further: it treats the matrix row as a *claim* and the TDR as *evidence*, then builds a statement crosswalk of what the supplier wrote on each side.
+
 The analyzer does this automatically. Upload a matrix and it:
 
 - **Finds the data by itself** — the right sheet, header row, and "Conformité FNR" / "Commentaires FNR" columns, even when suppliers change names or layout.
@@ -33,8 +35,9 @@ The interface has three tabs:
 
 **🔎 Matrix ↔ TDR (AERIS)**
 1. Upload the supplier conformity matrix **and** the TDR / PPT / PDF technical dossier.
-2. Click **🔎 Cross-check matrix ↔ TDR**. AERIS extracts measurable targets, finds the matching slide/page, compares the numbers, and opens a **review queue** of contradictions (matrix OK but TDR fails, comment vs TDR mismatch, OK with no proof).
-3. Download the **📗 Synthesis Excel** (Synthesis / Findings / Top risks / Conditions).
+2. Click **🔎 Cross-check matrix ↔ TDR**. AERIS extracts measurable targets, finds the matching slide/page, compares the numbers, then compares **what the supplier said in the TDR** with **what they declared in the matrix** (opposite OK/NOK, different figures, restated-wrong target, TDR self-conflict).
+3. Open the **review queue** and the **statement crosswalk** first.
+4. Download the **📗 Synthesis Excel** (Synthesis / Contradictions / Crosswalk / Deviations / TDR claims / Coverage / Findings / Top risks / Conditions).
 
 **📄 Validation de Spec**
 1. **Click or drag** a specification file (`.docx`, `.pdf`, `.txt`).
@@ -74,3 +77,5 @@ The interface is a single page ([app/conformity_ui/index.html](app/conformity_ui
 - Publicly by the Azure Function ([azure_function/function_app.py](azure_function/function_app.py), endpoint `GET /api/conformity-ui`, anonymous).
 
 Other API endpoints (PDF report, multi-matrix comparison, Power BI dataset) exist under `/api/conformity*` — see [app/qa/route.py](app/qa/route.py) and the analyzer engine [app/qa/conformity_analyzer.py](app/qa/conformity_analyzer.py).
+
+The Matrix ↔ TDR tab calls `POST /api/aeris-crosscheck` (multipart `matrix` + `evidence[]`). The engine lives in `app/qa/aeris_*.py`: deterministic number compare, statement crosswalk, contradiction queue. Azure OpenAI is optional and never overrides a numeric verdict.

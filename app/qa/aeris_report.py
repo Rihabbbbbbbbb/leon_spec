@@ -112,6 +112,22 @@ def generate_aeris_excel(report: dict) -> bytes:
     ws["A24"] = "  of which high"
     ws["B24"] = summary.get("contradictionsHigh", 0)
 
+    ws["A26"] = "What the supplier said (matrix vs TDR)"
+    ws["A26"].font = Font(bold=True, color="0B2545")
+    ws["A27"] = "Declarations aligned"
+    ws["B27"] = summary.get("declarationsAligned", 0)
+    ws["A28"] = "Statement incompliances"
+    ws["A28"].font = Font(bold=True, color="9C0006")
+    ws["B28"] = summary.get("statementIncompliant", 0)
+    ws["A29"] = "  opposite polarity (OK vs NOK)"
+    ws["B29"] = summary.get("declarationOpposite", 0)
+    ws["A30"] = "  value mismatch (comment ≠ TDR)"
+    ws["B30"] = summary.get("valueMismatch", 0)
+    ws["A31"] = "  TDR restates a wrong target"
+    ws["B31"] = summary.get("wrongTarget", 0)
+    ws["A32"] = "  TDR disagrees with itself"
+    ws["B32"] = summary.get("tdrConflict", 0)
+
     # Pie source (hidden-ish) + chart
     ws["D8"] = "Status"
     ws["E8"] = "Count"
@@ -139,10 +155,10 @@ def generate_aeris_excel(report: dict) -> bytes:
 
     notes = report.get("notes") or []
     if notes:
-        ws["A26"] = "Notes"
-        ws["A26"].font = Font(bold=True)
-        ws["A27"] = " ".join(notes)
-        ws["A27"].alignment = wrap
+        ws["A34"] = "Notes"
+        ws["A34"].font = Font(bold=True)
+        ws["A35"] = " ".join(notes)
+        ws["A35"].alignment = wrap
 
     ws.column_dimensions["A"].width = 48
     ws.column_dimensions["B"].width = 55
@@ -271,6 +287,139 @@ def generate_aeris_excel(report: dict) -> bytes:
     for i, w in enumerate([18, 28, 24, 28, 20, 14], 1):
         wc.column_dimensions[get_column_letter(i)].width = w
     wc.freeze_panes = "A2"
+
+    _ALIGN_FILL = {
+        "ALIGNED": "C6EFCE",
+        "OPPOSITE": "FFC7CE",
+        "VALUE_MISMATCH": "FCE4D6",
+        "WRONG_TARGET": "FFF2CC",
+        "TDR_CONFLICT": "FCE4D6",
+        "UNVERIFIABLE": "DDEBF7",
+    }
+
+    # ── Crosswalk (what they said) ───────────────────────────────
+    wx = wb.create_sheet("Crosswalk")
+    xh = [
+        "REQ-ID", "Alignment", "Incompliance", "Severity",
+        "Matrix said", "TDR said", "Values", "Polarity",
+        "Restated target", "Restated match", "TDR self-conflict",
+        "Location", "Action",
+    ]
+    for ci, h in enumerate(xh, 1):
+        cell = wx.cell(1, ci, h)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.border = thin
+    xkeys = [
+        "req_id", "alignment", "incompliance_type", "incompliance_severity",
+        "matrix_said", "tdr_said", "values_agree", "polarity_agree",
+        "restated_target", "restated_target_match", "tdr_internal_conflict",
+        "tdr_location", "action",
+    ]
+    crosswalk = report.get("crosswalk") or []
+    for ri, row in enumerate(crosswalk, 2):
+        fill = PatternFill("solid", fgColor=_ALIGN_FILL.get(row.get("alignment", ""), "FFFFFF"))
+        for ci, key in enumerate(xkeys, 1):
+            cell = wx.cell(ri, ci, row.get(key, ""))
+            cell.fill = fill
+            cell.border = thin
+            cell.alignment = wrap
+    for i, w in enumerate([16, 18, 28, 12, 42, 42, 16, 14, 22, 16, 28, 16, 44], 1):
+        wx.column_dimensions[get_column_letter(i)].width = w
+    wx.freeze_panes = "A2"
+    if crosswalk:
+        wx.auto_filter.ref = f"A1:M{len(crosswalk) + 1}"
+
+    # ── Deviations ───────────────────────────────────────────────
+    wd = wb.create_sheet("Deviations")
+    dh = [
+        "REQ-ID", "Domain", "Target", "Matrix", "Final", "Declared in",
+        "Matrix said", "TDR said", "Location", "Gap",
+    ]
+    for ci, h in enumerate(dh, 1):
+        cell = wd.cell(1, ci, h)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.border = thin
+    deviations = report.get("deviations") or []
+    dkeys = [
+        "req_id", "domain", "target", "matrix_status", "final_status", "declaredIn",
+        "matrix_said", "tdr_said", "location", "gap",
+    ]
+    for ri, row in enumerate(deviations, 2):
+        fill = PatternFill("solid", fgColor="FFF2CC")
+        for ci, key in enumerate(dkeys, 1):
+            cell = wd.cell(ri, ci, row.get(key, ""))
+            cell.fill = fill
+            cell.border = thin
+            cell.alignment = wrap
+    for i, w in enumerate([16, 22, 22, 12, 22, 14, 40, 40, 16, 12], 1):
+        wd.column_dimensions[get_column_letter(i)].width = w
+    wd.freeze_panes = "A2"
+    if deviations:
+        wd.auto_filter.ref = f"A1:J{len(deviations) + 1}"
+
+    # ── TDR claim ledger ─────────────────────────────────────────
+    wl = wb.create_sheet("TDR claims")
+    lh = ["File", "Location", "Polarity", "Values", "Restated targets", "Cited REQ-IDs", "Excerpt"]
+    for ci, h in enumerate(lh, 1):
+        cell = wl.cell(1, ci, h)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.border = thin
+    ledger = report.get("tdrStatements") or []
+    lkeys = ["file", "location", "polarity", "values", "restatedTargets", "citedReqIds", "excerpt"]
+    for ri, row in enumerate(ledger, 2):
+        cited = row.get("citedReqIds") or []
+        vals = {
+            **row,
+            "citedReqIds": ", ".join(cited) if isinstance(cited, list) else cited,
+        }
+        pol_fill = {
+            "FAIL": "FFC7CE", "PASS": "C6EFCE", "MIXED": "FFF2CC", "NONE": "FFFFFF",
+        }.get(row.get("polarity", ""), "FFFFFF")
+        fill = PatternFill("solid", fgColor=pol_fill)
+        for ci, key in enumerate(lkeys, 1):
+            cell = wl.cell(ri, ci, vals.get(key, ""))
+            cell.fill = fill
+            cell.border = thin
+            cell.alignment = wrap
+    for i, w in enumerate([28, 14, 12, 36, 28, 24, 60], 1):
+        wl.column_dimensions[get_column_letter(i)].width = w
+    wl.freeze_panes = "A2"
+    if ledger:
+        wl.auto_filter.ref = f"A1:G{len(ledger) + 1}"
+
+    # ── Traceability coverage ────────────────────────────────────
+    wv = wb.create_sheet("Coverage")
+    coverage = report.get("coverage") or {}
+    wv["A1"] = "Traceability coverage"
+    wv["A1"].font = title_font
+    wv["A2"] = "Matched"
+    wv["B2"] = coverage.get("matched", 0)
+    wv["A3"] = "Missing"
+    wv["B3"] = coverage.get("missing", 0)
+    wv["A4"] = "Cited in TDR by REQ-ID"
+    wv["B4"] = coverage.get("citedInTdr", 0)
+    wv["A5"] = "Coverage"
+    wv["B5"] = f"{coverage.get('coveragePct', 0)}%"
+    for ci, h in enumerate(["REQ-ID", "Coverage", "Location", "Final status"], 1):
+        cell = wv.cell(7, ci, h)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.border = thin
+    cov_fill = {
+        "CITED": "C6EFCE", "MATCHED": "DDEBF7", "MISSING": "FFC7CE", "NA": "D9D9D9",
+    }
+    for ri, row in enumerate(coverage.get("rows") or [], 8):
+        fill = PatternFill("solid", fgColor=cov_fill.get(row.get("coverage", ""), "FFFFFF"))
+        for ci, key in enumerate(["req_id", "coverage", "location", "final_status"], 1):
+            cell = wv.cell(ri, ci, row.get(key, ""))
+            cell.fill = fill
+            cell.border = thin
+    for i, w in enumerate([18, 14, 18, 24], 1):
+        wv.column_dimensions[get_column_letter(i)].width = w
+    wv.freeze_panes = "A8"
 
     buf = io.BytesIO()
     wb.save(buf)

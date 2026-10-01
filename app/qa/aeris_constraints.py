@@ -112,11 +112,19 @@ _OPERATOR_MAP = [
 ]
 
 _NUM_RE = re.compile(
-    r"(?<![A-Za-z0-9])(\d+(?:[.,]\d+)?)\s*(:1)?"
+    r"(?<![A-Za-z0-9])(-?\d+(?:[.,]\d+)?)\s*(:1)?"
     r"(?:\s*([µuμ]?[A-Za-z%°]+(?:\s*[Cc])?))?",
 )
 
 _QUALIFIER_RE = re.compile(r"\b(typ(?:ical)?|max(?:imum)?|min(?:imum)?)\b", re.I)
+
+# A number after “target / limit / requirement” is a restated spec, not a result.
+_RESTATE_LEAD = re.compile(
+    r"\b(?:target|objectif|consigne|requirement|exigence|"
+    r"spec(?:ification)?|limit|seuil|design\s+target)\b"
+    r"(?:\s*(?:is|of|de|=|:))?\s*(?:≤|≥|<=|>=|<|>)?\s*$",
+    re.I,
+)
 
 _CONDITION_RE = re.compile(
     r"(?:"
@@ -140,6 +148,7 @@ _QUANTITY_HINTS = [
     (r"\bcontrast\b", "ratio"),
     (r"\bload\b|\bcpu\b|\bcpu\s+load\b", "percent"),
     (r"\bpower\b|\bwatt", "power"),
+    (r"\bstartup\b|\bboot\b|\btime\b", "time"),
 ]
 
 
@@ -202,7 +211,8 @@ def _is_id_or_condition_number(text: str, start: int, raw_num: str) -> bool:
         return True
     if re.search(r"(slide|page|block|section)\s*$", prefix):
         return True
-    if raw_num.isdigit() and len(raw_num) >= 6:
+    digits = raw_num.lstrip("-")
+    if digits.isdigit() and len(digits) >= 6:
         return True
     if re.match(r"20\d{2}$", raw_num):
         return True
@@ -220,13 +230,39 @@ def _quantity_of(text: str) -> str:
         return "contrast"
     if re.search(r"\bcpu\b|cpu\s+load|\bload\b", t):
         return "cpu_load"
+    if re.search(r"\bidle\b", t):
+        return "idle_current"
+    if re.search(r"\bstandby\b", t):
+        return "standby_current"
+    if re.search(r"reduced", t) and re.search(r"current|consum", t):
+        return "reduced_current"
     if re.search(r"current|consommation|consumption|amp", t):
         return "current"
+    if re.search(r"\bstorage\b", t) and re.search(r"temp", t):
+        return "storage_temperature"
+    if re.search(r"\bdisplay\b", t) and re.search(r"temp", t):
+        return "display_temperature"
     if re.search(r"temp(?:erature)?|thermal", t):
         return "temperature"
     if re.search(r"voltage|tension", t):
         return "voltage"
+    if re.search(r"startup|boot|\btime\b", t):
+        return "time"
     return ""
+
+
+_GENERIC_QTY = {
+    "", "temperature", "current", "percent", "time", "voltage", "power",
+    "ratio", "length", "frequency", "angle",
+}
+
+
+def _prefer_quantity(window: str, text: str) -> str:
+    """Prefer a specific tag (idle_current, storage_temperature) over the family."""
+    a, b = _quantity_of(window), _quantity_of(text)
+    if b and b not in _GENERIC_QTY and (not a or a in _GENERIC_QTY):
+        return b
+    return a or b
 
 
 def _guess_family_from_text(text: str) -> str:
@@ -307,7 +343,7 @@ def extract_constraints(text: str, source: str = "requirement") -> List[Constrai
             unit_family=family,
             unit=unit or family,
             condition=_extract_condition(after) or _extract_condition(window) or _extract_condition(text),
-            quantity=_quantity_of(window) or _quantity_of(text) or family,
+            quantity=_prefer_quantity(window, text) or family,
             source=source,
         ))
 
@@ -340,11 +376,14 @@ def extract_measurements(text: str, location: str = "") -> List[Measurement]:
         raw_num, ratio_mark, unit_tok = m.group(1), m.group(2), m.group(3) or ""
         if ratio_mark:
             continue
-        if _is_id_or_condition_number(text, m.start(), raw_num) and not unit_tok:
+        if _is_id_or_condition_number(text, m.start(), raw_num):
             continue
         prefix = text[max(0, m.start() - 24): m.start()]
         after = text[m.end(): m.end() + 36]
         window = prefix + m.group(0) + after
+        # Skip quoted spec limits (“target 800ms”, “requirement ≤100mA”).
+        if _RESTATE_LEAD.search(prefix):
+            continue
         family, unit, factor = classify_unit(unit_tok, window)
         if not family:
             hinted = _guess_family_from_text(window)
@@ -362,7 +401,7 @@ def extract_measurements(text: str, location: str = "") -> List[Measurement]:
                 family, unit, factor = "temperature", "°c", 1.0
             else:
                 continue
-        qty = _quantity_of(window) or _quantity_of(text)
+        qty = _prefer_quantity(window, text)
         if family == "percent" and not qty:
             if re.search(r"attenuat|lcf", window + " " + after, re.I):
                 qty = "attenuation"
@@ -511,19 +550,32 @@ def compare_constraint(
 
     verdicts: List[ConditionVerdict] = []
     for cond_key, group in groups.items():
-        chosen = _pick_worst(constraint.operator, group)
-        ok = _compare_one(constraint.operator, chosen.value, constraint.value)
-        gap = chosen.value - constraint.value
-        op_sym = {"le": "<=", "lt": "<", "ge": ">=", "gt": ">", "eq": "="}.get(constraint.operator, constraint.operator)
-        verdicts.append(ConditionVerdict(
-            condition=chosen.condition or constraint.condition or cond_key,
-            target=f"{op_sym}{constraint.value:g} {constraint.unit}",
-            measured=f"{chosen.qualifier + ' ' if chosen.qualifier else ''}{chosen.value:g} {chosen.unit}".strip(),
-            status="CONFORME" if ok else "NON_CONFORME",
-            gap=gap,
-            gap_unit=constraint.unit,
-        ))
+        # Typ/Max are one operating point (use the worst). Two bare results
+        # that disagree are two tests — emit both so PARTIELLEMENT is possible.
+        members = group if _bare_results_conflict(group) else [_pick_worst(constraint.operator, group)]
+        for chosen in members:
+            ok = _compare_one(constraint.operator, chosen.value, constraint.value)
+            gap = chosen.value - constraint.value
+            op_sym = {"le": "<=", "lt": "<", "ge": ">=", "gt": ">", "eq": "="}.get(constraint.operator, constraint.operator)
+            verdicts.append(ConditionVerdict(
+                condition=chosen.condition or constraint.condition or cond_key,
+                target=f"{op_sym}{constraint.value:g} {constraint.unit}",
+                measured=f"{chosen.qualifier + ' ' if chosen.qualifier else ''}{chosen.value:g} {chosen.unit}".strip(),
+                status="CONFORME" if ok else "NON_CONFORME",
+                gap=gap,
+                gap_unit=constraint.unit,
+            ))
     return verdicts
+
+
+def _bare_results_conflict(group: List[Measurement]) -> bool:
+    bare = [m for m in group if not m.qualifier]
+    if len(bare) < 2:
+        return False
+    vals = [m.value for m in bare]
+    span = max(vals) - min(vals)
+    scale = max(abs(v) for v in vals) or 1.0
+    return span > 1e-9 and (span / scale) > 0.08
 
 
 def summarize_verdicts(verdicts: List[ConditionVerdict]) -> str:

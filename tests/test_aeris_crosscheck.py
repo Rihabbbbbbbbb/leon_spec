@@ -32,6 +32,11 @@ from app.qa.aeris_contradictions import classify_contradiction, tdr_polarity
 from app.qa.aeris_crosscheck import crosscheck_analysis, report_to_dict, run_crosscheck
 from app.qa.aeris_evidence import parse_evidence_bytes
 from app.qa.aeris_report import generate_aeris_excel
+from app.qa.aeris_statements import (
+    extract_restated_targets,
+    matrix_polarity,
+    values_relation,
+)
 from app.qa.conformity_analyzer import classify_conformity, extract_conformity_data
 
 
@@ -173,6 +178,37 @@ class TestContradictionRules:
         assert c and c.type == "CLAIM_NOK_EVIDENCE_PASSES"
 
 
+class TestStatementCrosswalk:
+
+    def test_restated_target_extracted(self):
+        ts = extract_restated_targets("Startup time target 800ms, measured 450ms")
+        assert ts
+        assert any(abs(t.value - 800) < 0.1 and t.unit_family == "time" for t in ts)
+
+    def test_measured_skips_restated_target(self):
+        ms = extract_measurements("Startup time target 800ms measured 450ms")
+        times = [m for m in ms if m.unit_family == "time"]
+        assert any(abs(m.value - 450) < 0.1 for m in times)
+        assert not any(abs(m.value - 800) < 0.1 for m in times)
+
+    def test_negative_temperature_constraint(self):
+        cs = extract_constraints("Storage temperature ≥-40°C")
+        assert cs
+        assert cs[0].unit_family == "temperature"
+        assert cs[0].value == -40
+        assert cs[0].operator == "ge"
+
+    def test_matrix_comment_vs_tdr_value_mismatch(self):
+        comment_m = extract_measurements("Typ 40 mA — OK")
+        tdr_m = extract_measurements("Idle current Typ 80 mA NOK")
+        assert values_relation(comment_m, tdr_m) == "DISAGREE"
+
+    def test_matrix_polarity_ok_vs_comment_nok(self):
+        assert matrix_polarity("OK", "Typ 40 mA — OK") == "PASS"
+        assert matrix_polarity("NOK", "Deviation") == "FAIL"
+        assert matrix_polarity("OK", "NOK Deviation") == "FAIL"
+
+
 class TestDeviationClassification:
 
     def test_plain_deviation(self):
@@ -220,6 +256,20 @@ NOK
 
 Slide 55: EMC immunity
 EMC immunity test NOK Deviation
+
+Slide 62: Startup time
+Startup time target 800ms
+measured 450ms
+OK
+
+Slide 64: Standby current
+Standby current 18 mA OK
+
+Slide 65: Standby current second test
+Standby current 35 mA
+
+Slide 72: Storage temperature
+Storage temperature tested -40°C OK
 """
 
 
@@ -259,6 +309,15 @@ def _build_matrix(path: Path) -> Path:
         ("REQ-0309200", "EMC",
          "EMC immunity shall be compliant",
          "OK", "OK"),
+        ("REQ-0309300", "EE",
+         "Standby current ≤20mA",
+         "OK", "18 mA"),
+        ("REQ-0309400", "SYS",
+         "Startup time ≤500ms",
+         "OK", "meets spec"),
+        ("REQ-0309500", "ME",
+         "Storage temperature ≥-40°C",
+         "DEVIATION", "we only guarantee -30°C"),
     ]
     for req, ref, desc, status, comment in rows:
         ws.append([req, ref, "", "", "", desc, status, comment])
@@ -331,27 +390,59 @@ class TestAerisPipeline:
     def test_contradiction_queue_flags_claimed_ok_vs_tdr(self, tianma_pair):
         matrix, tdr = tianma_pair
         report = run_crosscheck(str(matrix), [(tdr.name, tdr.read_bytes())], matrix.name)
-        by_id = {c.req_id: c for c in report.contradictions}
+        types = {}
+        for c in report.contradictions:
+            types.setdefault(c.req_id, set()).add(c.type)
 
-        thermal = by_id["REQ-0309002"]
-        assert thermal.type == "CLAIM_OK_EVIDENCE_FAILS"
-        assert thermal.severity == "critical"
-
-        contrast = by_id["REQ-0308444"]
-        assert contrast.type == "CLAIM_OK_PARTIAL"
-
-        idle = by_id["REQ-0309100"]
-        assert idle.type == "CLAIM_OK_EVIDENCE_FAILS"
-
-        mech = by_id["REQ-0309003"]
-        assert mech.type == "CLAIM_OK_NO_EVIDENCE"
-
-        emc = by_id["REQ-0309200"]
-        assert emc.type == "CLAIM_OK_TDR_SAYS_NOK"
+        assert "CLAIM_OK_EVIDENCE_FAILS" in types["REQ-0309002"]
+        assert "CLAIM_OK_PARTIAL" in types["REQ-0308444"]
+        assert "CLAIM_OK_EVIDENCE_FAILS" in types["REQ-0309100"]
+        assert "VALUE_MISMATCH" in types["REQ-0309100"]
+        assert "CLAIM_OK_NO_EVIDENCE" in types["REQ-0309003"]
+        assert "CLAIM_OK_TDR_SAYS_NOK" in types["REQ-0309200"]
 
         # Honest NOK in the matrix that the TDR confirms is NOT a contradiction.
-        assert "REQ-0308287" not in by_id
-        assert "REQ-0307942" not in by_id
+        assert "REQ-0308287" not in types
+        assert "REQ-0307942" not in types
+
+    def test_statement_crosswalk_finds_said_incompliances(self, tianma_pair):
+        matrix, tdr = tianma_pair
+        report = run_crosscheck(str(matrix), [(tdr.name, tdr.read_bytes())], matrix.name)
+        by_id = {w.req_id: w for w in report.crosswalk}
+        types = {}
+        for c in report.contradictions:
+            types.setdefault(c.req_id, set()).add(c.type)
+
+        # Honest NOK: same numbers, same polarity — not an incompliance.
+        current = by_id["REQ-0308287"]
+        assert current.alignment == "ALIGNED"
+        assert current.values_agree == "AGREE"
+
+        idle = by_id["REQ-0309100"]
+        assert idle.values_agree == "DISAGREE"
+        assert idle.alignment == "VALUE_MISMATCH"
+
+        startup = by_id["REQ-0309400"]
+        assert startup.restated_target_match == "WRONG_TARGET"
+        assert "TDR_RESTATES_WRONG_TARGET" in types["REQ-0309400"]
+        # Measured 450ms still meets ≤500ms — the lie is the restated limit.
+        startup_item = next(i for i in report.items if i.req_id == "REQ-0309400")
+        assert startup_item.final_status == "CONFORME"
+
+        standby_types = types["REQ-0309300"]
+        assert "TDR_INTERNAL_CONFLICT" in standby_types
+        assert "CLAIM_OK_PARTIAL" in standby_types
+
+        storage = next(i for i in report.items if i.req_id == "REQ-0309500")
+        assert storage.final_status == "CONFORME"
+        assert storage.coherence == "MATRIX_TOO_PESSIMISTIC"
+
+        assert report.crosswalk_summary["valueMismatch"] >= 1
+        assert report.crosswalk_summary["wrongTarget"] >= 1
+        assert report.crosswalk_summary["tdrConflict"] >= 1
+        assert report.deviations
+        assert report.tdr_statements
+        assert report.coverage.get("total") == 12
 
     def test_na_stays_na(self, tianma_pair):
         matrix, tdr = tianma_pair
@@ -364,15 +455,20 @@ class TestAerisPipeline:
         report = run_crosscheck(str(matrix), [(tdr.name, tdr.read_bytes())], matrix.name)
         payload = report_to_dict(report)
         s = payload["summary"]
-        assert s["total"] == 9
+        assert s["total"] == 12
         assert s["nonConforme"] + s["deviation"] >= 3
         assert s["conforme"] >= 1
         assert s["partiel"] >= 1
         assert s["matrixTooOptimistic"] >= 2
         assert s["contradictions"] >= 3
         assert s["contradictionsCritical"] >= 1
+        assert s["valueMismatch"] >= 1
+        assert s["wrongTarget"] >= 1
         assert payload["topRisks"]
         assert payload["contradictions"]
+        assert payload["crosswalk"]
+        assert payload["tdrStatements"]
+        assert payload["deviations"]
 
         xlsx = generate_aeris_excel(payload)
         wb = load_workbook(io.BytesIO(xlsx))
@@ -380,8 +476,13 @@ class TestAerisPipeline:
         assert "Contradictions" in wb.sheetnames
         assert "Findings" in wb.sheetnames
         assert "Top risks" in wb.sheetnames
+        assert "Crosswalk" in wb.sheetnames
+        assert "Deviations" in wb.sheetnames
+        assert "TDR claims" in wb.sheetnames
+        assert "Coverage" in wb.sheetnames
         assert wb["Synthesis"]["B5"].value.endswith("%")
         assert wb["Contradictions"].cell(2, 1).value  # at least one queued row
+        assert wb["Crosswalk"].cell(2, 1).value
 
     def test_pptx_fallback_xml_roundtrip(self, tmp_path, tianma_pair):
         """A minimal PPTX (zip/XML) is readable even without python-pptx shapes."""
@@ -433,7 +534,7 @@ class TestAerisRoute:
             )
         assert res.status_code == 200, res.text
         body = res.json()
-        assert body["summary"]["total"] == 9
+        assert body["summary"]["total"] == 12
         assert body["reportExcel"]
         ids = {i["req_id"] for i in body["items"]}
         assert "REQ-0308287" in ids

@@ -54,6 +54,17 @@ from app.qa.aeris_contradictions import (
     contradictions_to_dicts,
     tdr_polarity,
 )
+from app.qa.aeris_statements import (
+    StatementCrosswalk,
+    build_crosswalk,
+    build_deviation_register,
+    build_tdr_ledger,
+    coverage_map,
+    crosswalk_summary,
+    crosswalks_to_dicts,
+    merge_contradictions,
+    statement_contradictions,
+)
 from app.qa.aeris_evidence import EvidenceChunk, EvidenceDocument, parse_evidence_bytes
 from app.qa.conformity_analyzer import (
     ConformityAnalysis,
@@ -107,6 +118,9 @@ class CrossCheckItem:
     contradiction_severity: str = ""
     recommended_action: str = ""
     tdr_polarity: str = "NONE"
+    matrix_said: str = ""
+    tdr_said: str = ""
+    declaration_alignment: str = ""
 
 
 @dataclass
@@ -121,6 +135,11 @@ class CrossCheckReport:
     notes: List[str] = field(default_factory=list)
     contradictions: List[Contradiction] = field(default_factory=list)
     contradiction_summary: Dict = field(default_factory=dict)
+    crosswalk: List[StatementCrosswalk] = field(default_factory=list)
+    crosswalk_summary: Dict = field(default_factory=dict)
+    tdr_statements: List[Dict] = field(default_factory=list)
+    deviations: List[Dict] = field(default_factory=list)
+    coverage: Dict = field(default_factory=dict)
 
 
 def run_crosscheck(
@@ -170,25 +189,33 @@ def crosscheck_analysis(
 
     items: List[CrossCheckItem] = []
     found: List[Contradiction] = []
+    walks: List[StatementCrosswalk] = []
     for req in analysis.items:
         if not req.req_id and not req.description:
             continue
-        item, contra = _check_one(req, chunks)
+        item, contras, walk = _check_one(req, chunks)
         items.append(item)
-        if contra:
-            found.append(contra)
+        found.extend(contras)
+        walks.append(walk)
 
     report.items = items
+    report.crosswalk = walks
+    report.crosswalk_summary = crosswalk_summary(walks)
+    report.tdr_statements = build_tdr_ledger(chunks)
+    report.deviations = build_deviation_register(items, walks)
+    report.coverage = coverage_map(items, walks, report.tdr_statements)
     report.contradictions = build_review_queue(found)
     report.contradiction_summary = contradiction_summary(report.contradictions)
-    report.summary = _build_summary(items, report.contradiction_summary)
+    report.summary = _build_summary(
+        items, report.contradiction_summary, report.crosswalk_summary
+    )
     report.top_risks = _rank_risks(items)
     return report
 
 
 def _check_one(
     req: ConformityItem, chunks: List[EvidenceChunk]
-) -> Tuple[CrossCheckItem, Optional[Contradiction]]:
+) -> Tuple[CrossCheckItem, List[Contradiction], StatementCrosswalk]:
     blob = " ".join(p for p in (req.description, req.comment, req.reference) if p)
     constraints = extract_constraints(req.description or "", source="requirement")
     if not constraints and req.comment:
@@ -205,6 +232,9 @@ def _check_one(
     measurements: List[Measurement] = []
     for chunk, _score in ranked[:4]:
         measurements.extend(extract_measurements(chunk.text, location=chunk.location))
+    qty = {c.quantity for c in constraints if c.quantity}
+    if qty:
+        measurements = [m for m in measurements if not m.quantity or m.quantity in qty]
 
     condition_verdicts: List[Dict] = []
     evidence_status = "MANQUANT"
@@ -277,7 +307,19 @@ def _check_one(
             excerpt = excerpt[:417] + "…"
 
     polarity = tdr_polarity(evidence_text)
-    contradiction = classify_contradiction(
+    walk = build_crosswalk(
+        req_id=req.req_id,
+        domain=domain,
+        description=req.description or "",
+        matrix_status=req.conformity_category,
+        comment=req.comment or "",
+        constraints=constraints,
+        tdr_measurements=measurements,
+        tdr_text=evidence_text,
+        tdr_location=evidence_loc,
+        confidence=confidence,
+    )
+    primary = classify_contradiction(
         req_id=req.req_id,
         matrix_status=req.conformity_category,
         evidence_status=evidence_status,
@@ -292,6 +334,12 @@ def _check_one(
         constraints=constraints,
         measurements=measurements,
     )
+    contras = merge_contradictions(primary, statement_contradictions(walk))
+    # Highest-severity finding drives the row-level badge.
+    top = contras[0] if contras else None
+    if len(contras) > 1:
+        rank = {"critical": 3, "high": 2, "medium": 1, "info": 0}
+        top = max(contras, key=lambda c: (rank.get(c.severity, 0), c.type))
 
     item = CrossCheckItem(
         req_id=req.req_id,
@@ -312,12 +360,15 @@ def _check_one(
         domain=domain,
         condition_verdicts=condition_verdicts,
         match_score=round(match_score, 3),
-        contradiction_type=contradiction.type if contradiction else "",
-        contradiction_severity=contradiction.severity if contradiction else "",
-        recommended_action=contradiction.action if contradiction else "",
+        contradiction_type=top.type if top else "",
+        contradiction_severity=top.severity if top else "",
+        recommended_action=top.action if top else "",
         tdr_polarity=polarity,
+        matrix_said=walk.matrix_said,
+        tdr_said=walk.tdr_said,
+        declaration_alignment=walk.alignment,
     )
-    return item, contradiction
+    return item, contras, walk
 
 
 def _retrieve(
@@ -353,6 +404,8 @@ def _retrieve(
         chunk_qty = {m.quantity for m in chunk_meas if m.quantity}
         if qty and qty & chunk_qty:
             score += 4.0
+        elif qty and chunk_qty and not (qty & chunk_qty):
+            score -= 1.5
         elif families & chunk_families:
             score += 2.5
         elif families and any(f in low for f in families):
@@ -507,7 +560,11 @@ def _rationale(
     return " ".join(parts)
 
 
-def _build_summary(items: List[CrossCheckItem], contra: Optional[Dict] = None) -> Dict:
+def _build_summary(
+    items: List[CrossCheckItem],
+    contra: Optional[Dict] = None,
+    walk: Optional[Dict] = None,
+) -> Dict:
     counts = Counter(i.final_status for i in items)
     coherence = Counter(i.coherence for i in items)
     total = len(items)
@@ -537,6 +594,12 @@ def _build_summary(items: List[CrossCheckItem], contra: Optional[Dict] = None) -
         "contradictionsCritical": (contra or {}).get("critical", 0),
         "contradictionsHigh": (contra or {}).get("high", 0),
         "contradictionTypes": (contra or {}).get("byType", {}),
+        "statementIncompliant": (walk or {}).get("incompliant", 0),
+        "declarationOpposite": (walk or {}).get("opposite", 0),
+        "valueMismatch": (walk or {}).get("valueMismatch", 0),
+        "wrongTarget": (walk or {}).get("wrongTarget", 0),
+        "tdrConflict": (walk or {}).get("tdrConflict", 0),
+        "declarationsAligned": (walk or {}).get("aligned", 0),
     }
 
 
@@ -568,6 +631,11 @@ def report_to_dict(report: CrossCheckReport) -> dict:
         "topRisks": report.top_risks,
         "contradictions": contradictions_to_dicts(report.contradictions),
         "contradictionSummary": report.contradiction_summary,
+        "crosswalk": crosswalks_to_dicts(report.crosswalk),
+        "crosswalkSummary": report.crosswalk_summary,
+        "tdrStatements": report.tdr_statements,
+        "deviations": report.deviations,
+        "coverage": report.coverage,
         "items": [asdict(i) for i in report.items],
         "matrixAnalysis": {
             "fileName": report.matrix_analysis.get("fileName"),
