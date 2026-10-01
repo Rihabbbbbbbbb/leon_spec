@@ -444,6 +444,44 @@ class TestAerisPipeline:
         assert report.tdr_statements
         assert report.coverage.get("total") == 12
 
+    def test_incoherences_are_one_readable_row_per_requirement(self, tianma_pair):
+        matrix, tdr = tianma_pair
+        report = run_crosscheck(str(matrix), [(tdr.name, tdr.read_bytes())], matrix.name)
+        rows = report.incoherences
+
+        # Une seule ligne par exigence, même si plusieurs motifs.
+        ids = [r["req_id"] for r in rows]
+        assert len(ids) == len(set(ids))
+
+        # Les exigences cohérentes ne sont jamais listées.
+        assert "REQ-0309001" not in ids   # CPU 50% < 70%, matrice OK
+        assert "REQ-0309004" not in ids   # NA
+        assert "REQ-0308287" not in ids   # NOK assumé, TDR confirme
+
+        # Tri par gravité : les bloquantes d'abord.
+        assert rows[0]["gravite"].startswith("1 - Bloquant")
+        assert [r["n"] for r in rows] == list(range(1, len(rows) + 1))
+
+        thermal = next(r for r in rows if r["req_id"] == "REQ-0309002")
+        assert thermal["demande"] == "<38 °C"
+        assert "41.6" in thermal["tdr"]
+        assert thermal["ou"] == "Slide 41"
+        assert "déclare OK" in thermal["pourquoi"]
+        assert "CLAIM_OK" not in thermal["pourquoi"]
+        assert thermal["action"]
+
+        idle = next(r for r in rows if r["req_id"] == "REQ-0309100")
+        assert idle["demande"] == "≤50 mA"
+        assert "80 mA" in idle["tdr"]
+        assert idle["autres_motifs"]  # value mismatch listé en motif secondaire
+
+        # Le signe négatif ne doit jamais être perdu.
+        storage = next(r for r in rows if r["req_id"] == "REQ-0309500")
+        assert "-40 °C" in storage["tdr"] or "-30" in storage["pourquoi"]
+
+        assert report.incoherence_summary["total"] == len(rows)
+        assert report.incoherence_summary["bloquant"] >= 1
+
     def test_na_stays_na(self, tianma_pair):
         matrix, tdr = tianma_pair
         report = run_crosscheck(str(matrix), [(tdr.name, tdr.read_bytes())], matrix.name)
@@ -469,20 +507,22 @@ class TestAerisPipeline:
         assert payload["crosswalk"]
         assert payload["tdrStatements"]
         assert payload["deviations"]
+        assert payload["incoherences"]
+        assert s["incoherences"] == len(payload["incoherences"])
+        assert s["bloquant"] >= 1
 
         xlsx = generate_aeris_excel(payload)
         wb = load_workbook(io.BytesIO(xlsx))
-        assert "Synthesis" in wb.sheetnames
-        assert "Contradictions" in wb.sheetnames
-        assert "Findings" in wb.sheetnames
-        assert "Top risks" in wb.sheetnames
-        assert "Crosswalk" in wb.sheetnames
-        assert "Deviations" in wb.sheetnames
-        assert "TDR claims" in wb.sheetnames
-        assert "Coverage" in wb.sheetnames
-        assert wb["Synthesis"]["B5"].value.endswith("%")
-        assert wb["Contradictions"].cell(2, 1).value  # at least one queued row
-        assert wb["Crosswalk"].cell(2, 1).value
+        # Le classeur s'ouvre sur les incohérences, et rien d'autre n'est requis.
+        assert wb.sheetnames == ["Incohérences", "Synthèse", "Détail complet"]
+        assert wb.active.title == "Incohérences"
+        ws = wb["Incohérences"]
+        assert ws.cell(5, 1).value == "N°"
+        assert ws.cell(5, 9).value == "Pourquoi c'est une incohérence"
+        # Première ligne de données : une phrase, pas un code machine.
+        pourquoi = ws.cell(6, 9).value
+        assert pourquoi and "matrice" in pourquoi.lower()
+        assert "CLAIM_OK" not in pourquoi
 
     def test_pptx_fallback_xml_roundtrip(self, tmp_path, tianma_pair):
         """A minimal PPTX (zip/XML) is readable even without python-pptx shapes."""

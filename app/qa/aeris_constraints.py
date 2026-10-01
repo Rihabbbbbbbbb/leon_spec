@@ -594,3 +594,38 @@ def summarize_verdicts(verdicts: List[ConditionVerdict]) -> str:
 
 def operator_symbol(op: str) -> str:
     return {"le": "<=", "lt": "<", "ge": ">=", "gt": ">", "eq": "="}.get(op, op)
+
+
+# Affichage lisible : "<=50 ma" → "≤50 mA", "380 :1" → "380:1".
+_PRETTY_UNIT = {
+    "ma": "mA", "µa": "µA", "ua": "µA", "amp": "A", "ampere": "A", "amps": "A",
+    "mv": "mV", "kv": "kV", "°c": "°C", "degc": "°C", "celsius": "°C",
+    "mw": "mW", "kw": "kW", "mhz": "MHz", "khz": "kHz", "hz": "Hz",
+    "ms": "ms", "sec": "s", "min": "min", "µm": "µm", "um": "µm",
+    "mm": "mm", "cm": "cm", "percent": "%", "pct": "%", "ratio": ":1",
+    "deg": "°", "degree": "°", "degrees": "°",
+}
+
+
+def pretty_unit(unit: str) -> str:
+    tok = (unit or "").strip()
+    return _PRETTY_UNIT.get(tok.lower(), tok)
+
+
+def pretty_value(text: str) -> str:
+    """Rendre un affichage machine lisible : opérateurs et unités."""
+    if not text:
+        return ""
+    out = str(text)
+    out = out.replace("<=", "≤").replace(">=", "≥")
+    # Unités en fin de nombre : "50 ma" → "50 mA"
+    def _unit_sub(m):
+        return m.group(1) + pretty_unit(m.group(2))
+    out = re.sub(
+        r"(\d\s*)([A-Za-zµ°]+(?:\s*[Cc])?)",
+        lambda m: _unit_sub(m) if pretty_unit(m.group(2)) != m.group(2) else m.group(0),
+        out,
+    )
+    out = re.sub(r"\s*:\s*1\b", ":1", out)
+    out = re.sub(r"\s{2,}", " ", out).strip()
+    return out

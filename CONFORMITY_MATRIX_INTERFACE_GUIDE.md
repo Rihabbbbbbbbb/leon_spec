@@ -36,8 +36,8 @@ The interface has three tabs:
 **🔎 Matrix ↔ TDR (AERIS)**
 1. Upload the supplier conformity matrix **and** the TDR / PPT / PDF technical dossier.
 2. Click **🔎 Cross-check matrix ↔ TDR**. AERIS extracts measurable targets, finds the matching slide/page, compares the numbers, then compares **what the supplier said in the TDR** with **what they declared in the matrix** (opposite OK/NOK, different figures, restated-wrong target, TDR self-conflict).
-3. Open the **review queue** and the **statement crosswalk** first.
-4. Download the **📗 Synthesis Excel** (Synthesis / Contradictions / Crosswalk / Deviations / TDR claims / Coverage / Findings / Top risks / Conditions).
+3. The screen opens on the **incohérences** — one card per requirement, with what Stellantis asks, what the matrix declares, what the TDR says, where, and why it is an incoherence. Conforming requirements are not listed.
+4. Download the **📗 Rapport des incohérences (Excel)**. It opens on the `Incohérences` sheet; `Synthèse` and `Détail complet` are there only if you need them.
 
 **📄 Validation de Spec**
 1. **Click or drag** a specification file (`.docx`, `.pdf`, `.txt`).

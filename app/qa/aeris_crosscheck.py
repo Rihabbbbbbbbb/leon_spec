@@ -54,6 +54,7 @@ from app.qa.aeris_contradictions import (
     contradictions_to_dicts,
     tdr_polarity,
 )
+from app.qa.aeris_incoherences import build_incoherences, incoherence_summary
 from app.qa.aeris_statements import (
     StatementCrosswalk,
     build_crosswalk,
@@ -140,6 +141,8 @@ class CrossCheckReport:
     tdr_statements: List[Dict] = field(default_factory=list)
     deviations: List[Dict] = field(default_factory=list)
     coverage: Dict = field(default_factory=dict)
+    incoherences: List[Dict] = field(default_factory=list)
+    incoherence_summary: Dict = field(default_factory=dict)
 
 
 def run_crosscheck(
@@ -206,9 +209,15 @@ def crosscheck_analysis(
     report.coverage = coverage_map(items, walks, report.tdr_statements)
     report.contradictions = build_review_queue(found)
     report.contradiction_summary = contradiction_summary(report.contradictions)
+    report.incoherences = build_incoherences(report)
+    report.incoherence_summary = incoherence_summary(report.incoherences)
     report.summary = _build_summary(
         items, report.contradiction_summary, report.crosswalk_summary
     )
+    report.summary["incoherences"] = report.incoherence_summary.get("total", 0)
+    report.summary["bloquant"] = report.incoherence_summary.get("bloquant", 0)
+    report.summary["majeur"] = report.incoherence_summary.get("majeur", 0)
+    report.summary["aClarifier"] = report.incoherence_summary.get("aClarifier", 0)
     report.top_risks = _rank_risks(items)
     return report
 
@@ -629,6 +638,8 @@ def report_to_dict(report: CrossCheckReport) -> dict:
         "evidenceFiles": report.evidence_files,
         "summary": report.summary,
         "topRisks": report.top_risks,
+        "incoherences": report.incoherences,
+        "incoherenceSummary": report.incoherence_summary,
         "contradictions": contradictions_to_dicts(report.contradictions),
         "contradictionSummary": report.contradiction_summary,
         "crosswalk": crosswalks_to_dicts(report.crosswalk),

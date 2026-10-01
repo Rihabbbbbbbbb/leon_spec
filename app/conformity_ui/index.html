@@ -676,7 +676,7 @@
           🔎 Cross-check matrix ↔ TDR
         </button>
         <button class="btn btn-secondary" id="aeris-excel-btn" disabled onclick="downloadAerisExcel()">
-          📗 Synthesis Excel
+          📗 Rapport des incohérences (Excel)
         </button>
       </div>
     </div>
@@ -688,43 +688,45 @@
 
     <div class="results" id="results-aeris">
       <div class="panel">
-        <h2>1. Synthesis</h2>
+        <h2>1. Synthèse</h2>
         <div class="stats-grid" id="aeris-stats-grid"></div>
         <p class="muted" id="aeris-meta" style="font-size:12px;margin-top:8px"></p>
         <div id="aeris-notes" class="muted mt-16"></div>
         <div id="aeris-risks" class="mt-16"></div>
       </div>
       <div class="panel" id="aeris-contra-panel">
-        <h2>2. Review queue — matrix vs TDR contradictions</h2>
+        <h2>2. Incohérences matrice ↔ TDR</h2>
         <p class="muted mb-16">
-          A matrix OK is a <em>claim</em>. The TDR is the evidence. This list is what a
-          quality reviewer should open first: declared yes/no that the dossier contradicts.
+          Une seule ligne par exigence : ce que Stellantis demande, ce que le
+          fournisseur a déclaré dans la matrice, ce qu'il a écrit dans le TDR,
+          et pourquoi c'est une incohérence. Les exigences cohérentes ne sont
+          pas listées.
         </p>
         <div id="aeris-contra-list"></div>
       </div>
       <div class="panel" id="aeris-crosswalk-panel">
-        <h2>3. Statement crosswalk — what they said in the matrix vs the TDR</h2>
+        <h2>3. Comparatif déclaration ↔ TDR</h2>
         <p class="muted mb-16">
-          Three-way check used in supplier technical reviews: Stellantis target
-          ↔ matrix declaration ↔ TDR statement. Aligned NOK (matrix already
-          admits the miss) is honest, not an incompliance.
+          Contrôle à trois niveaux : exigence Stellantis ↔ déclaration dans la
+          matrice ↔ ce qui est écrit dans le TDR. Un NOK assumé (la matrice dit
+          déjà NOK et le TDR le confirme) n'est pas une incohérence.
         </p>
         <div class="filter-bar">
-          <button class="filter-btn active" data-wfilter="ALL" onclick="setWalkFilter('ALL')">All</button>
-          <button class="filter-btn" data-wfilter="INCOMPLIANT" onclick="setWalkFilter('INCOMPLIANT')">Incompliant</button>
-          <button class="filter-btn" data-wfilter="OPPOSITE" onclick="setWalkFilter('OPPOSITE')">Opposite</button>
-          <button class="filter-btn" data-wfilter="VALUE_MISMATCH" onclick="setWalkFilter('VALUE_MISMATCH')">Value mismatch</button>
-          <button class="filter-btn" data-wfilter="WRONG_TARGET" onclick="setWalkFilter('WRONG_TARGET')">Wrong target</button>
-          <button class="filter-btn" data-wfilter="TDR_CONFLICT" onclick="setWalkFilter('TDR_CONFLICT')">TDR conflict</button>
-          <button class="filter-btn" data-wfilter="ALIGNED" onclick="setWalkFilter('ALIGNED')">Aligned</button>
+          <button class="filter-btn active" data-wfilter="INCOMPLIANT" onclick="setWalkFilter('INCOMPLIANT')">Incohérentes seulement</button>
+          <button class="filter-btn" data-wfilter="OPPOSITE" onclick="setWalkFilter('OPPOSITE')">Déclarations opposées</button>
+          <button class="filter-btn" data-wfilter="VALUE_MISMATCH" onclick="setWalkFilter('VALUE_MISMATCH')">Chiffres différents</button>
+          <button class="filter-btn" data-wfilter="WRONG_TARGET" onclick="setWalkFilter('WRONG_TARGET')">Mauvaise cible</button>
+          <button class="filter-btn" data-wfilter="TDR_CONFLICT" onclick="setWalkFilter('TDR_CONFLICT')">TDR contradictoire</button>
+          <button class="filter-btn" data-wfilter="ALL" onclick="setWalkFilter('ALL')">Tout afficher</button>
         </div>
         <div id="aeris-crosswalk-list"></div>
       </div>
       <div class="panel">
-        <h2>4. Requirement ↔ evidence findings</h2>
+        <h2>4. Détail des exigences</h2>
         <div class="filter-bar">
-          <input type="text" class="search-box" id="aeris-search" placeholder="Search REQ-ID, target, evidence…" oninput="filterAerisTable()" />
-          <button class="filter-btn active" data-afilter="ALL" onclick="setAerisFilter('ALL')">All</button>
+          <input type="text" class="search-box" id="aeris-search" placeholder="Rechercher REQ-ID, cible, preuve…" oninput="filterAerisTable()" />
+          <button class="filter-btn active" data-afilter="INCOHERENTES" onclick="setAerisFilter('INCOHERENTES')">Incohérentes seulement</button>
+          <button class="filter-btn" data-afilter="ALL" onclick="setAerisFilter('ALL')">Tout afficher</button>
           <button class="filter-btn" data-afilter="NON_CONFORME" onclick="setAerisFilter('NON_CONFORME')">Non-conforme</button>
           <button class="filter-btn" data-afilter="PARTIELLEMENT_CONFORME" onclick="setAerisFilter('PARTIELLEMENT_CONFORME')">Partial</button>
           <button class="filter-btn" data-afilter="DEVIATION" onclick="setAerisFilter('DEVIATION')">Deviation</button>
@@ -1521,7 +1523,7 @@ async function doAeris() {
     document.getElementById('aeris-excel-btn').disabled = !aerisExcel;
     renderAeris(data);
     document.getElementById('results-aeris').classList.add('show');
-    toast('AERIS synthesis — ' + (data.summary.conformityRate || 0) + '% conforme on judged items');
+    toast('AERIS — ' + ((data.summary || {}).incoherences || 0) + ' incohérence(s) matrice ↔ TDR');
   } catch (e) {
     toast('Network error: ' + e.message, 'error');
   } finally {
@@ -1532,19 +1534,14 @@ async function doAeris() {
 function renderAeris(data) {
   const s = data.summary || {};
   const cards = [
-    {cls:'stat-total', val:s.total||0, label:'Requirements'},
-    {cls:'stat-ok', val:s.conforme||0, label:'Conforme'},
-    {cls:'stat-nok', val:s.nonConforme||0, label:'Non-conforme'},
-    {cls:'stat-partial', val:s.partiel||0, label:'Partial'},
-    {cls:'stat-dev', val:s.deviation||0, label:'Deviation'},
-    {cls:'stat-warn', val:s.preuveInsuffisante||0, label:'Weak proof'},
-    {cls:'stat-na', val:s.manquant||0, label:'Missing'},
-    {cls:'stat-total', val:(s.conformityRate||0)+'%', label:'Conformity rate'},
-    {cls:'stat-nok', val:s.contradictions||0, label:'Contradictions'},
-    {cls:'stat-nok', val:s.contradictionsCritical||0, label:'Critical'},
-    {cls:'stat-nok', val:s.statementIncompliant||0, label:'Said-incompliant'},
-    {cls:'stat-partial', val:s.valueMismatch||0, label:'Value mismatch'},
-    {cls:'stat-dev', val:s.wrongTarget||0, label:'Wrong target'},
+    {cls:'stat-nok', val:s.incoherences||0, label:'Incohérences'},
+    {cls:'stat-nok', val:s.bloquant||0, label:'Bloquantes'},
+    {cls:'stat-partial', val:s.majeur||0, label:'Majeures'},
+    {cls:'stat-dev', val:s.aClarifier||0, label:'À clarifier'},
+    {cls:'stat-total', val:s.total||0, label:'Exigences analysées'},
+    {cls:'stat-ok', val:s.conforme||0, label:'Conformes'},
+    {cls:'stat-na', val:s.manquant||0, label:'Sans preuve TDR'},
+    {cls:'stat-total', val:(s.conformityRate||0)+'%', label:'Taux de conformité'},
   ];
   document.getElementById('aeris-stats-grid').innerHTML = cards.map(c =>
     `<div class="stat-card ${c.cls}"><div class="value">${c.val}</div><div class="label">${c.label}</div></div>`
@@ -1561,32 +1558,39 @@ function renderAeris(data) {
         + (r.examples && r.examples.length ? ` (${r.examples.join(', ')})` : '') + '</span>'
       ).join('')
     : '';
-  renderAerisContradictions(data.contradictions || []);
-  setWalkFilter('ALL');
-  setAerisFilter('ALL');
+  renderAerisContradictions(data.incoherences || []);
+  setWalkFilter('INCOMPLIANT');
+  setAerisFilter('INCOHERENTES');
 }
 
 function renderAerisContradictions(list) {
   const box = document.getElementById('aeris-contra-list');
   if (!list.length) {
-    box.innerHTML = '<p class="muted">No declaration↔evidence contradiction detected on judged rows.</p>';
+    box.innerHTML = '<p class="muted">Aucune incohérence détectée entre la matrice et le TDR fourni.</p>';
     return;
   }
-  box.innerHTML = list.map(c => {
-    const sev = (c.severity || 'medium').toLowerCase();
-    const color = sev === 'critical' ? 'var(--nok)' : sev === 'high' ? 'var(--partial)' : 'var(--dev)';
+  box.innerHTML = list.map(r => {
+    const g = r.gravite || '';
+    const color = g.startsWith('1') ? 'var(--nok)' : g.startsWith('2') ? 'var(--partial)' : 'var(--dev)';
     return `<div class="inc-card" style="border-left-color:${color}">
       <div class="header">
-        <span class="badge" style="background:rgba(28,43,58,0.07);color:${color}">${(c.severity||'').toUpperCase()}</span>
-        <span class="req-id">${c.req_id || ''}</span>
-        <span class="muted" style="font-size:11px">${c.type || ''}</span>
+        <span class="badge" style="background:rgba(28,43,58,0.07);color:${color}">${_esc(g)}</span>
+        <span class="req-id">${_esc(r.req_id)}</span>
+        <span class="muted" style="font-size:11px">${_esc(r.motif)}</span>
       </div>
-      <div class="explanation">${c.title || ''}</div>
-      <div class="meta">Matrix: ${c.matrix_status || ''} · TDR: ${c.evidence_status || ''}
-        ${c.target ? ' · Target: ' + c.target : ''}
-        ${c.evidenced ? ' · Evidence: ' + String(c.evidenced).substring(0,140) : ''}
-        ${c.location ? ' · ' + c.location : ''}</div>
-      ${c.action ? `<div class="meta">Action: ${c.action}</div>` : ''}
+      <div class="explanation">${_esc(r.pourquoi)}</div>
+      <div class="said-grid">
+        <div class="said-box disagree">
+          <div class="lbl">Déclaré dans la matrice</div>${_esc(r.matrice)}
+        </div>
+        <div class="said-box disagree">
+          <div class="lbl">Écrit dans le TDR${r.ou ? ' · ' + _esc(r.ou) : ''}</div>${_esc(r.tdr)}
+        </div>
+      </div>
+      <div class="meta">Demandé : <strong>${_esc(r.demande) || '—'}</strong>
+        ${r.ecart ? ' · Écart : ' + _esc(r.ecart) : ''}
+        ${r.autres_motifs ? ' · Aussi : ' + _esc(r.autres_motifs) : ''}</div>
+      ${r.action ? `<div class="meta">Action : ${_esc(r.action)}</div>` : ''}
     </div>`;
   }).join('');
 }
@@ -1662,7 +1666,11 @@ function filterAerisTable() {
   const items = (aerisReport && aerisReport.items) || [];
   const q = (document.getElementById('aeris-search').value || '').toLowerCase();
   const filtered = items.filter(it => {
-    if (aerisFilter !== 'ALL' && it.final_status !== aerisFilter) return false;
+    if (aerisFilter === 'INCOHERENTES') {
+      if (!it.contradiction_type) return false;
+    } else if (aerisFilter !== 'ALL' && it.final_status !== aerisFilter) {
+      return false;
+    }
     if (!q) return true;
     const blob = [it.req_id, it.description, it.target, it.supplier_result, it.evidence_excerpt, it.rationale].join(' ').toLowerCase();
     return blob.includes(q);
@@ -1685,8 +1693,8 @@ function filterAerisTable() {
     </tr>`).join('');
   document.getElementById('aeris-count').textContent =
     filtered.length > maxRows
-      ? `${filtered.length} findings (showing first ${maxRows})`
-      : `${filtered.length} findings`;
+      ? `${filtered.length} exigences (${maxRows} premières affichées)`
+      : `${filtered.length} exigences`;
 }
 
 function downloadAerisExcel() {
