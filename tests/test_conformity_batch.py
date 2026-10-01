@@ -79,8 +79,9 @@ class TestBatchExcelGeneration:
         assert ws.cell(row=5, column=2).value == "supplier_b.ods"
         assert ws.cell(row=4, column=4).value == 20
         assert ws.cell(row=5, column=4).value == 8
-        # 1 Overview + 2 Items sheets (no deep findings)
-        assert len(wb.sheetnames) == 3
+        # 1 Overview + 1 hidden chart-source sheet + 2 Items sheets
+        # (no deep findings)
+        assert len(wb.sheetnames) == 4
 
     def test_deepok_sheet_only_created_when_findings_exist(self):
         from openpyxl import load_workbook
@@ -96,6 +97,57 @@ class TestBatchExcelGeneration:
         deepok_sheets = [n for n in wb.sheetnames if "DeepOK" in n]
         assert len(deepok_sheets) == 1
         assert "02" in deepok_sheets[0]  # belongs to the 2nd file
+
+    def test_deepok_sheet_has_no_signals_column(self):
+        """The Deep-Dive OK sheet carries 6 columns — 'Signals' was removed."""
+        from openpyxl import load_workbook
+        data = generate_batch_conformity_excel([
+            _fake_analysis("with_findings.xlsx", ok_deep_findings=[
+                {"severity": "error", "reqId": "REQ-1", "reference": "REF-1",
+                 "conformity": "OK", "signals": ["contradiction"], "comment": "x",
+                 "aiComment": "Suspicious"}
+            ]),
+        ])
+        wb = load_workbook(io.BytesIO(data))
+        ws = wb[[n for n in wb.sheetnames if "DeepOK" in n][0]]
+        headers = [ws.cell(row=1, column=c).value for c in range(1, ws.max_column + 1)]
+        assert headers == ["Severity", "Req ID", "Reference", "Conformity",
+                           "Comment", "AI Analysis"]
+        assert "Signals" not in headers
+        # the row carries the same 6 values (the signals text must be gone)
+        assert ws.cell(row=2, column=5).value == "x"          # Comment
+        assert ws.cell(row=2, column=6).value == "Suspicious"  # AI Analysis
+
+    def test_overview_is_clean_and_well_organised(self):
+        """Overview: no chart plumbing on the sheet, colour-coded counts, a TOTAL
+        row, and the chart source kept on its own hidden sheet."""
+        from openpyxl import load_workbook
+        data = generate_batch_conformity_excel([
+            _fake_analysis("a.xlsx", total=20, ok=15, nok=5, na=0),
+            _fake_analysis("b.xlsx", total=8, ok=2, nok=6, na=0),
+        ])
+        wb = load_workbook(io.BytesIO(data))
+        ws = wb["Overview"]
+
+        headers = [ws.cell(row=3, column=c).value for c in range(1, 11)]
+        assert headers == ["#", "File", "Sheet", "Total", "OK", "NOK", "NA",
+                           "Empty", "Flagged", "OK %"]
+
+        # rows 4-5 = the two matrices, row 6 = TOTAL
+        assert ws.cell(row=4, column=5).value == 15   # OK
+        assert ws.cell(row=4, column=8).value == 0    # Empty
+        assert ws.cell(row=6, column=1).value == "TOTAL"
+        assert ws.cell(row=6, column=4).value == 28   # 20 + 8
+        assert ws.cell(row=6, column=5).value == 17   # 15 + 2
+        assert ws.cell(row=6, column=6).value == 11   # 5 + 6
+
+        # The report area must be clean — no helper data beside/below the table.
+        assert ws.max_column <= 10
+        assert "_chart_data" in wb.sheetnames
+        assert wb["_chart_data"].sheet_state == "hidden"
+        for c in ws._charts:
+            ref = c.series[0].val.numRef.f
+            assert "_chart_data" in ref, ref
 
     def test_overview_row_count_matches_file_count(self):
         from openpyxl import load_workbook
@@ -147,10 +199,11 @@ class TestBatchExcelGeneration:
             _fake_analysis("b.xlsx", total=8, ok=2, nok=6, na=0),
         ])
         wb = load_workbook(io.BytesIO(data))
-        ws = wb["Overview"]
-        # Per-file data tables live in columns K/L (11/12), one 6-row block per file
-        block_a = {ws.cell(row=r, column=11).value: ws.cell(row=r, column=12).value for r in range(3, 9)}
-        block_b = {ws.cell(row=r, column=11).value: ws.cell(row=r, column=12).value for r in range(9, 15)}
+        ws = wb["_chart_data"]  # the hidden chart-source sheet
+        assert wb["_chart_data"].sheet_state == "hidden"
+        # one 6-row block per file: rows 1-6 = file a, rows 7-12 = file b
+        block_a = {ws.cell(row=r, column=1).value: ws.cell(row=r, column=2).value for r in range(1, 7)}
+        block_b = {ws.cell(row=r, column=1).value: ws.cell(row=r, column=2).value for r in range(7, 13)}
         assert block_a.get("OK") == 15 and block_a.get("NOK") == 5
         assert block_b.get("OK") == 2 and block_b.get("NOK") == 6
 

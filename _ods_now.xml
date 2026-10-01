@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="4" skipped="0" tests="30" time="66.566" timestamp="2026-09-30T09:57:36.582671+02:00" hostname="B1290911"><testcase classname="tests.test_conformity_ods_reading.TestTableRowGroupRecursion" name="test_rows_nested_in_table_row_group_are_found" time="0.070" /><testcase classname="tests.test_conformity_ods_reading.TestTableRowGroupRecursion" name="test_multi_level_nested_groups_all_found" time="0.032" /><testcase classname="tests.test_conformity_ods_reading.TestCoveredTableCellAlignment" name="test_covered_table_cell_preserves_column_alignment" time="0.036" /><testcase classname="tests.test_conformity_ods_reading.TestVisibilityNeverSkipsRealData" name="test_collapse_visibility_row_is_still_read" time="0.041" /><testcase classname="tests.test_conformity_ods_reading.TestVisibilityNeverSkipsRealData" name="test_filter_visibility_row_is_still_read" time="0.038" /><testcase classname="tests.test_conformity_ods_reading.TestSheetNames" name="test_sheet_names_read_from_table_name_attribute" time="0.042" /><testcase classname="tests.test_conformity_ods_reading.TestSheetNames" name="test_read_spreadsheet_ods_dispatches_correctly" time="0.038" /><testcase classname="tests.test_conformity_ods_reading.TestXlsxHiddenRowsNeverSkipped" name="test_hidden_row_is_still_read" time="0.854" /><testcase classname="tests.test_conformity_ods_reading.TestRealGentexFileConsistency" name="test_ods_and_xlsx_produce_identical_stats" time="35.471"><failure message="AssertionError: assert {'NOK': 28, '... 172, 'NA': 7} == {'OK': 175, '...: 28, 'NA': 7}&#10;  &#10;  Omitting 2 identical items, use -vv to show&#10;  Differing items:&#10;  {'OK': 172} != {'OK': 175}&#10;  Use -v to get more diff">self = &lt;tests.test_conformity_ods_reading.TestRealGentexFileConsistency object at 0x000001CC7C1487A0&gt;
+
+    def test_ods_and_xlsx_produce_identical_stats(self):
+        if not (GENTEX_ODS.exists() and GENTEX_XLSX.exists()):
+            pytest.skip("Gentex fixtures not found")
+        a_ods = analyze_conformity_matrix(str(GENTEX_ODS), "gentex.ods")
+        a_xlsx = analyze_conformity_matrix(str(GENTEX_XLSX), "gentex.xlsx")
+        assert a_ods.total_rows == a_xlsx.total_rows
+        assert a_ods.stats == a_xlsx.stats
+        # The full matrix includes introductory checklist items as well as
+        # RETRO_* technical requirements; preserve the established fixture
+        # ground truth for every extracted response row.
+&gt;       assert a_ods.stats == {"OK": 175, "NOK": 28, "NA": 7}
+E       AssertionError: assert {'NOK': 28, '... 172, 'NA': 7} == {'OK': 175, '...: 28, 'NA': 7}
+E         
+E         Omitting 2 identical items, use -vv to show
+E         Differing items:
+E         {'OK': 172} != {'OK': 175}
+E         Use -v to get more diff
+
+tests\test_conformity_ods_reading.py:254: AssertionError</failure></testcase><testcase classname="tests.test_conformity_ods_reading.TestTwoRowHeader" name="test_bare_conformite_header_is_detected" time="0.001" /><testcase classname="tests.test_conformity_ods_reading.TestTwoRowHeader" name="test_two_row_header_picks_comment_row" time="0.007" /><testcase classname="tests.test_conformity_ods_reading.TestTwoRowHeader" name="test_real_dm117e_matrix_extracts_supplier_comments" time="5.935" /><testcase classname="tests.test_conformity_ods_reading.TestRealDm12fWorkbooks" name="test_development_requirements_uses_requirements_tab" time="3.799"><failure message="assert [7, 9] == [7]&#10;  &#10;  Left contains one more item: 9&#10;  Use -v to get more diff">self = &lt;tests.test_conformity_ods_reading.TestRealDm12fWorkbooks object at 0x000001CC7C1494C0&gt;
+
+    def test_development_requirements_uses_requirements_tab(self):
+        fp = DATA_DIR / "01843_25_00571_V1_Development_Requirements_DM12F_Tianma_Rev1.0_20260427.xlsx"
+        if not fp.exists():
+            pytest.skip("DM12F development-requirements workbook not found")
+        a = analyze_conformity_matrix(str(fp), fp.name)
+        assert a.sheet_name == "Requirements"
+        assert a.header_row == 1
+        assert a.column_mapping["req_id"] == [1]
+        assert a.column_mapping["conformity"] == [6]
+&gt;       assert a.column_mapping["comment"] == [7]
+E       assert [7, 9] == [7]
+E         
+E         Left contains one more item: 9
+E         Use -v to get more diff
+
+tests\test_conformity_ods_reading.py:323: AssertionError</failure></testcase><testcase classname="tests.test_conformity_ods_reading.TestRealDm12fWorkbooks" name="test_supplier_xlsm_uses_application_matrix_and_supplier_conformity" time="16.610"><failure message="AssertionError: assert 33 == 34&#10; +  where 33 = ConformityAnalysis(sheet_name='Application &amp; Conformity matrix', header_row=33, data_start_row=35, total_rows=137, she...==========================================', file_name='01843_26_00005_v1-0_Conf_Matrix_LEVEL1_TS_DM12F_Supplier.xlsm').header_row">self = &lt;tests.test_conformity_ods_reading.TestRealDm12fWorkbooks object at 0x000001CC7C143E00&gt;
+
+    def test_supplier_xlsm_uses_application_matrix_and_supplier_conformity(self):
+        fp = DATA_DIR / "01843_26_00005_v1-0_Conf_Matrix_LEVEL1_TS_DM12F_Supplier.xlsm"
+        if not fp.exists():
+            pytest.skip("DM12F supplier conformity workbook not found")
+        a = analyze_conformity_matrix(str(fp), fp.name)
+        assert a.sheet_name == "Application &amp; Conformity matrix"
+&gt;       assert a.header_row == 34
+E       AssertionError: assert 33 == 34
+E        +  where 33 = ConformityAnalysis(sheet_name='Application &amp; Conformity matrix', header_row=33, data_start_row=35, total_rows=137, she...==========================================', file_name='01843_26_00005_v1-0_Conf_Matrix_LEVEL1_TS_DM12F_Supplier.xlsm').header_row
+
+tests\test_conformity_ods_reading.py:333: AssertionError</failure></testcase><testcase classname="tests.test_conformity_ods_reading.TestInvalidXlsxFilterMetadata" name="test_whitespace_custom_filter_does_not_block_workbook_reading" time="0.058" /><testcase classname="tests.test_conformity_ods_reading.TestCoverTextIsNotRequirement" name="test_repeated_long_cover_text_and_requirement_headers_are_excluded" time="1.564" /><testcase classname="tests.test_conformity_ods_reading.TestReferenceExtractionFallback" name="test_reference_from_column_b_survives_unmapped_header" time="0.052"><failure message="AssertionError: assert 0 == 1&#10; +  where 0 = len([])&#10; +    where [] = ConformityAnalysis(sheet_name='Matrix', header_row=0, data_start_row=1, total_rows=0, sheet_total_rows=2, items=[], st...Analyzer\n======================================================================', file_name='reference_fallback.xlsx').items">self = &lt;tests.test_conformity_ods_reading.TestReferenceExtractionFallback object at 0x000001CC7C1494F0&gt;
+tmp_path = WindowsPath('C:/Users/TA29225/AppData/Local/Temp/pytest-of-TA29225/pytest-248/test_reference_from_column_b_s0')
+
+    def test_reference_from_column_b_survives_unmapped_header(self, tmp_path):
+        from openpyxl import Workbook
+    
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Matrix"
+        ws.append(["Category", "Requirement title", "Description", "", "", "Requirement Identifier", "", "Conformity", "Comments"])
+        ws.append(["-", "GEN-TS-RESEAU-CP_LVDS_BIDIR.0001(4)", "The ECU shall support the requirement.", "", "", "REQ-0040217", "", "OK", "Verified"])
+        path = tmp_path / "reference_fallback.xlsx"
+        wb.save(path)
+    
+        analysis = analyze_conformity_matrix(str(path), path.name)
+    
+&gt;       assert len(analysis.items) == 1
+E       AssertionError: assert 0 == 1
+E        +  where 0 = len([])
+E        +    where [] = ConformityAnalysis(sheet_name='Matrix', header_row=0, data_start_row=1, total_rows=0, sheet_total_rows=2, items=[], st...Analyzer\n======================================================================', file_name='reference_fallback.xlsx').items
+
+tests\test_conformity_ods_reading.py:419: AssertionError</failure></testcase><testcase classname="tests.test_conformity_ods_reading.TestContentBasedCommentDetection" name="test_non_standard_comment_header_detected[Remarques]" time="0.064" /><testcase classname="tests.test_conformity_ods_reading.TestContentBasedCommentDetection" name="test_non_standard_comment_header_detected[Notes]" time="0.066" /><testcase classname="tests.test_conformity_ods_reading.TestContentBasedCommentDetection" name="test_non_standard_comment_header_detected[Observations]" time="0.070" /><testcase classname="tests.test_conformity_ods_reading.TestContentBasedCommentDetection" name="test_non_standard_comment_header_detected[Feedback]" time="0.069" /><testcase classname="tests.test_conformity_ods_reading.TestContentBasedCommentDetection" name="test_non_standard_comment_header_detected[Supplier Feedback]" time="0.071" /><testcase classname="tests.test_conformity_ods_reading.TestContentBasedCommentDetection" name="test_non_standard_comment_header_detected[Justification]" time="0.075" /><testcase classname="tests.test_conformity_ods_reading.TestContentBasedCommentDetection" name="test_non_standard_comment_header_detected[Commentaire]" time="0.075" /><testcase classname="tests.test_conformity_ods_reading.TestContentBasedCommentDetection" name="test_description_column_not_misread_as_comment" time="0.066" /><testcase classname="tests.test_conformity_ods_reading.TestBareDomainCodesKeptAsComments" name="test_domain_codes_are_kept_as_comments" time="0.065" /><testcase classname="tests.test_conformity_ods_reading.TestBareDomainCodesKeptAsComments" name="test_domain_codes_not_flagged_by_deep_ok" time="0.035" /><testcase classname="tests.test_conformity_ods_reading.TestSupplierAgnosticRamSColumnDetection" name="test_semantic_headers_and_status_language" time="0.075" /><testcase classname="tests.test_conformity_ods_reading.TestSupplierAgnosticRamSColumnDetection" name="test_unknown_headers_inferred_from_column_values" time="0.075" /><testcase classname="tests.test_conformity_ods_reading.TestSupplierAgnosticRamSColumnDetection" name="test_real_rams_iso_supplier_workbook" time="0.404" /></testsuite></testsuites>

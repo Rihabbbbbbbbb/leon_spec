@@ -148,3 +148,21 @@ def test_ocr_unavailable_is_reported(monkeypatch):
     warnings = []
     assert aeris_evidence._ocr_image(image.getvalue(), warnings) == ""
     assert any("OCR unavailable" in message for message in warnings)
+    doc = parse_evidence_bytes("ocr-required.pptx", _pptx())
+    assert any("OCR unavailable" in message for message in doc.warnings)
+
+
+def test_http_rejects_legacy_ppt(tmp_path):
+    from fastapi.testclient import TestClient
+    from app.conformity_server import app
+
+    with _matrix(tmp_path).open("rb") as matrix:
+        response = TestClient(app).post(
+            "/api/aeris-crosscheck",
+            files=[
+                ("matrix", ("matrix.xlsx", matrix, "application/octet-stream")),
+                ("evidence", ("old.ppt", b"legacy data", "application/octet-stream")),
+            ],
+        )
+    assert response.status_code == 400
+    assert ".pptx" in response.json()["detail"]

@@ -400,3 +400,37 @@ class TestEvidenceVerification:
 
         loc = find_text_location(user_text, "nonexistent text xyz")
         assert loc is None
+
+
+class TestLegacyDocRejection:
+    """
+    Legacy .doc (Word 97-2003 binary format) is deliberately rejected, not
+    silently accepted with degraded extraction: python-docx can only parse
+    the modern .docx zip/XML package, and no pure-Python .doc parser
+    preserves table structure, which this validator's analysis depends on
+    heavily (requirement tables, I/O tables). A clear, actionable message
+    is returned instead of a raw python-docx exception.
+    """
+
+    def test_doc_upload_rejected_with_actionable_message(self):
+        response = client.post(
+            "/validate",
+            files={"file": ("spec.doc", b"\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1fake ole content", "application/msword")},
+        )
+        assert response.status_code == 400
+        detail = response.json()["detail"]
+        assert ".doc" in detail
+        assert ".docx" in detail
+        # Must never surface a raw python-docx exception message instead.
+        assert "Fichier .docx invalide" not in detail
+
+    def test_docx_upload_still_reaches_document_parsing(self):
+        """Sanity check the .doc rejection didn't also block real .docx
+        uploads — an invalid (non-.doc) binary should still fail with the
+        ORIGINAL python-docx error path, not the new .doc-specific one."""
+        response = client.post(
+            "/validate",
+            files={"file": ("spec.docx", b"not a real docx file", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")},
+        )
+        assert response.status_code == 400
+        assert "Fichier .docx invalide" in response.json()["detail"]

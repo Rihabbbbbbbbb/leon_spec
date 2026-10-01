@@ -33,7 +33,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
 from app.qa.rule_extractor import (
-    ExtractedRules, SectionRule, WritingGuideRule, TemplateInstruction,
+    ExtractedRules,
     extract_all_rules, get_rule_by_id,
 )
 
@@ -85,6 +85,25 @@ class RequirementRow:
     table_index: int
     row_index: int
     explicit_na: bool = False   # filled, but with "N/A" rather than a reference
+    # The CTS template's own unedited requirement-engineering EXAMPLE row
+    # (id "REF-PSP-...", description literally "The system shall…", upstream
+    # literally "Nothing in this field") — confirmed present, unedited, in a
+    # real ASU spec during a 2026 audit. It must never count as a real,
+    # "compliant" requirement (it isn't one), but IS worth its own explicit
+    # finding since leaving template boilerplate in a submitted document is
+    # itself a real authoring defect.
+    is_template_example: bool = False
+
+
+# The template's literal placeholder text for "this requirement has no
+# upstream reference" — distinct from a real "N/A" declaration (see
+# _NA_UPSTREAM_RE), and distinct enough from any genuine engineering content
+# that matching it verbatim is safe.
+_TEMPLATE_EXAMPLE_UPSTREAM_RE = re.compile(r"^\s*nothing\s+in\s+this\s+field\s*$", re.IGNORECASE)
+# The template's literal unfilled requirement-statement stub — a real
+# requirement would never read as JUST "The system shall" with nothing
+# after it but an ellipsis.
+_TEMPLATE_EXAMPLE_DESCRIPTION_RE = re.compile(r"^\s*the\s+system\s+shall\s*[.…]{0,3}\s*$", re.IGNORECASE)
 
 
 _UPSTREAM_HEADER_RE = re.compile(r"input\s+requirement|exigence\s+amont", re.IGNORECASE)
@@ -201,6 +220,10 @@ def extract_requirement_rows(source_path) -> List[RequirementRow]:
             # builds its highlight units from the SAME extract_cell_text
             # call, so this excerpt is always found as a match.
             description = cells[1] if len(cells) > 1 else ""
+            is_template_example = bool(
+                _TEMPLATE_EXAMPLE_UPSTREAM_RE.match(upstream)
+                or _TEMPLATE_EXAMPLE_DESCRIPTION_RE.match(description)
+            )
 
             rows.append(RequirementRow(
                 req_id=match.group(0).strip(),
@@ -211,6 +234,7 @@ def extract_requirement_rows(source_path) -> List[RequirementRow]:
                 table_index=ti,
                 row_index=ri,
                 explicit_na=explicit_na,
+                is_template_example=is_template_example,
             ))
 
     return rows
@@ -408,13 +432,23 @@ def _section_matches(required: str, found_sections: List[str]) -> Optional[str]:
     """
     req_lower = required.lower().strip()
     req_words = set(req_lower.split())
+
+    # Pass 1: exact match, checked across ALL headings BEFORE any partial/
+    # substring fallback below. A short required name (e.g. "REQUIREMENTS")
+    # can legitimately appear as a whole word inside an earlier, unrelated
+    # heading (e.g. "UPSTREAM REQUIREMENTS", a subsection of REFERENCE
+    # DOCUMENTS) — returning on that first partial hit, before ever reaching
+    # the section's own real, exact heading later in the document, was
+    # confirmed during a 2026 audit to report the wrong section as evidence.
+    for found in found_sections:
+        if found.lower().strip() == req_lower:
+            return found
+
     best_match = None
     best_score = 0.0
 
     for found in found_sections:
         f_lower = found.lower().strip()
-        if f_lower == req_lower:
-            return found
         # Skip title/meta lines that are clearly not section headings
         if f_lower in ("requirements document", "of the alarm siren unit", "module"):
             continue
@@ -428,8 +462,7 @@ def _section_matches(required: str, found_sections: List[str]) -> Optional[str]:
         # headings (never arbitrary prose), so a word-boundary match here
         # can't produce a stray mid-sentence false positive.
         if len(req_words) <= 2:
-            if req_lower == f_lower:
-                return found
+            # Exact match already handled by Pass 1 above.
             if re.search(r"\b" + re.escape(req_lower) + r"\b", f_lower):
                 return found
             continue
@@ -954,8 +987,16 @@ def check_requirement_language(
     subjective_matches = SUBJECTIVE_WORDS_RE.findall(user_text)
     if subjective_matches and shall_count > 0:
         # Filter out subjective words that appear in non-requirement context
-        # (only flag if they appear near 'shall' lines)
-        shall_lines = [l for l in user_text.split("\n") if SHALL_RE.search(l)]
+        # (only flag if they appear near 'shall' lines). Also excludes the
+        # CTS template's own unedited example row ("...| The system shall… |
+        # Nothing in this field") — confirmed present in a real ASU spec —
+        # whose "PSA_Comments@{{if you want to add some information}}"
+        # instruction text otherwise gets misread as a subjective-word
+        # violation in a real requirement, when it isn't a requirement at all.
+        shall_lines = [
+            l for l in user_text.split("\n")
+            if SHALL_RE.search(l) and "nothing in this field" not in l.lower()
+        ]
         subjective_in_reqs = []
         for line in shall_lines:
             sm = SUBJECTIVE_WORDS_RE.findall(line)
@@ -1159,21 +1200,26 @@ def check_traceability(
     r22 = get_rule_by_id("R22")
 
     if req_rows:
-        total = len(req_rows)
-        traced = sum(1 for r in req_rows if r.traced)
+        template_example_rows = [r for r in req_rows if r.is_template_example]
+        real_rows = [r for r in req_rows if not r.is_template_example]
+
+        total = len(real_rows)
+        traced = sum(1 for r in real_rows if r.traced)
         ratio = traced / total if total else 0
-        untraced_items = _structural_untraced_items(req_rows)
+        untraced_items = _structural_untraced_items(real_rows)
         n_untraced = total - traced
 
-        example = next((r for r in req_rows if r.traced), None)
+        example = next((r for r in real_rows if r.traced), None)
         excerpt = (
             f"{example.req_id} → {example.upstream}"[:200] if example else ""
         )
 
-        n_na = sum(1 for r in req_rows if r.explicit_na)
+        n_na = sum(1 for r in real_rows if r.explicit_na)
         na_note = f" ({n_na} declared explicitly as 'N/A')" if n_na else ""
 
-        if n_untraced == 0:
+        if total == 0:
+            severity, message = "info", "No real requirement rows found to check traceability on."
+        elif n_untraced == 0:
             severity, message = "pass", (
                 f"Traceability complete: all {total} requirements declare an "
                 f"upstream requirement (or N/A) in the 'Input requirement' "
@@ -1186,11 +1232,36 @@ def check_traceability(
                 f"({round(ratio * 100)}% declared)."
             )
         else:
-            severity, message = "warning", (
+            # Escalated above "warning": a document where LESS THAN HALF of
+            # its requirements are traced is a materially worse risk than
+            # one that's "mostly done" — the two used to share one severity,
+            # making them visually indistinguishable in the report.
+            severity, message = "error", (
                 f"Traceability largely missing: {n_untraced} of {total} "
                 f"requirements have an EMPTY 'Input requirement' column "
                 f"(only {round(ratio * 100)}% declared)."
             )
+
+        if template_example_rows:
+            ids = ", ".join(r.req_id for r in template_example_rows[:3])
+            findings.append(EvidenceFinding(
+                check="G_TRACEABILITY", severity="warning", section="REQUIREMENTS",
+                rule_id="R22",
+                message=(
+                    f"{len(template_example_rows)} requirement row(s) are the CTS "
+                    f"template's own unedited example ({ids}) — left in the "
+                    f"document instead of being replaced with a real requirement."
+                ),
+                source_rule="Template: 'Requirement no. (v) | Description of the requirement | "
+                            "Input requirement (v)' example row, to be replaced before submission.",
+                source_doc="template",
+                user_excerpt=f"{template_example_rows[0].req_id} → {template_example_rows[0].description}",
+                user_location=f"Table {template_example_rows[0].table_index + 1}, row {template_example_rows[0].row_index + 1}",
+                why="The template's example row ('The system shall…' / 'Nothing in this field') is "
+                    "writing guidance, not a real requirement — it must be replaced or deleted, not "
+                    "counted as a compliant, traced requirement.",
+                fix_suggestion="Replace the example row with a real requirement, or delete it if unused.",
+            ))
 
         findings.append(EvidenceFinding(
             check="G_TRACEABILITY",
@@ -1481,8 +1552,22 @@ def check_writing_guide_rules(
 
     # Acronyms check (if ACRONYMS section present)
     if _section_matches("ACRONYMS", [s[0] for s in user_sections]):
-        has_acronym_defs = bool(re.search(r"[A-Z]{2,}\s*[:\-—]\s*[A-Z][a-z]", user_text))
+        # Real CTS specs write the acronyms list as a table ("ASU | Alarm
+        # ASU unit"), not the colon/dash-separated inline style the pattern
+        # originally only covered ("ASU: Alarm ASU unit") — confirmed on a
+        # real ASU spec whose ACRONYMS section is entirely pipe-delimited,
+        # which the colon/dash-only pattern couldn't match at all, so a
+        # section full of real definitions was reported as having none.
+        acronym_pattern = r"[A-Z]{2,}\s*[:\-—|]\s*[A-Z][a-z]"
+        # Scoped to the ACRONYMS section's own text — matching against the
+        # WHOLE document let an unrelated match elsewhere (e.g. the cover
+        # page's author-initials table) count as "the section has real
+        # definitions" even when the section itself was empty, confirmed
+        # during a 2026 audit against a real ASU spec.
+        acronyms_section_text = _extract_full_section_text(user_text, "ACRONYMS", rules)
+        has_acronym_defs = bool(re.search(acronym_pattern, acronyms_section_text or user_text))
         if has_acronym_defs:
+            excerpt, location = _find_excerpt_scoped(user_text, "ACRONYMS", acronym_pattern, rules, 80)
             findings.append(EvidenceFinding(
                 check="H_WRITING_GUIDE_RULES",
                 severity="pass",
@@ -1491,8 +1576,8 @@ def check_writing_guide_rules(
                 message="Acronyms section contains acronym definitions.",
                 source_rule="Writing guide §4.2: 'In this paragraph, we clarify only the abbreviation, in alphabetical order.'",
                 source_doc="writing_guide",
-                user_excerpt=_find_excerpt(user_text, r"[A-Z]{2,}\s*[:\-—]\s*[A-Z][a-z]", 80),
-                user_location="ACRONYMS section",
+                user_excerpt=excerpt,
+                user_location=location,
                 why="Every acronym used in the specification must be defined once in the ACRONYMS section. Undefined acronyms cause confusion.",
             ))
         else:
@@ -1625,10 +1710,10 @@ def check_extended_writing_guide_rules(
     # ── R04: Elements not defined in generic RD identified by yellow highlight ──
     r04 = get_rule_by_id("R04")
     # This is about generic RDs — check if document appears to be generic
-    is_generic = bool(re.search(r"\bgeneric\s+(specification|RD|document|spec)\b", text_lower))
+    is_generic = bool(re.search(r"\bgeneric\s+(specification|RD|document|spec)\b", text_lower, re.IGNORECASE))
     if is_generic:
         # Check for highlighted elements (can't detect yellow in text, but check for placeholder markers)
-        has_unspecified = bool(re.search(r"\b(?:TBD|to\s+be\s+defined|to\s+be\s+specified|per\s+project|per\s+application)\b", text_lower))
+        has_unspecified = bool(re.search(r"\b(?:TBD|to\s+be\s+defined|to\s+be\s+specified|per\s+project|per\s+application)\b", text_lower, re.IGNORECASE))
         if has_unspecified:
             findings.append(EvidenceFinding(
                 check="I_EXTENDED_WG_RULES", severity="info", section="",
@@ -1927,14 +2012,21 @@ def check_extended_writing_guide_rules(
     r41 = get_rule_by_id("R41")
     has_noise_req = bool(re.search(r"\b(?:random\s+noise|bruit\s+(?:aléatoire|parasite)|noise\s+(?:level|requirement|target))\b", text_lower))
     if has_noise_req:
+        # Scoped to the ERGONOMICS section first — an unscoped whole-document
+        # search was confirmed during a 2026 audit to pick up an unrelated
+        # match from the Applicable-Documents reference table (a standard
+        # named "...random noises...") instead of the real requirement, while
+        # still claiming "ERGONOMICS / OPERATIONAL section" as the location.
+        excerpt, location = _find_excerpt_scoped(
+            user_text, "ERGONOMICS", r"random\s+noise|bruit\s+aléatoire|noise\s+level", rules)
         findings.append(EvidenceFinding(
             check="I_EXTENDED_WG_RULES", severity="pass", section="ERGONOMICS",
             rule_id="R41",
             message="Random noise requirement found (R41 compliant — compulsory for electro-mechanical components).",
             source_rule=f"R41: {r41.text if r41 else 'A requirement concerning random noise is compulsory for each electro-mechanical component.'}",
             source_doc="writing_guide",
-            user_excerpt=_find_excerpt(user_text, r"random\s+noise|bruit\s+aléatoire|noise\s+level"),
-            user_location="ERGONOMICS / OPERATIONAL section",
+            user_excerpt=excerpt,
+            user_location=location,
             why="R41 requires a random noise requirement for every electro-mechanical component. This is a mandatory ergonomic constraint.",
         ))
     else:
@@ -1950,7 +2042,7 @@ def check_extended_writing_guide_rules(
 
     # ── R45: Each regulatory requirement refers to upstream regulatory requirement ──
     r45 = get_rule_by_id("R45")
-    has_regulatory = bool(re.search(r"\b(?:regulation|regulatory|réglementation|ECER|FMVSS|ISTA|ISO\s*\d+)\b", text_lower))
+    has_regulatory = bool(re.search(r"\b(?:regulation|regulatory|réglementation|ECER|FMVSS|ISTA|ISO\s*\d+)\b", text_lower, re.IGNORECASE))
     has_reg_refs = bool(re.search(r"\b(?:regulation\s+(?:requirement|standard)|réglementation|regulatory\s+requirement)\b", text_lower))
     if has_regulatory:
         findings.append(EvidenceFinding(
@@ -2072,7 +2164,7 @@ def check_extended_writing_guide_rules(
 
     # ── P10: SdF (Dependability) study requirements incorporated ──
     p10 = get_rule_by_id("P10")
-    has_sdf = bool(re.search(r"\b(?:SdF|sûreté\s+de\s+fonctionnement|dependability|safety|reliability|RAMS|ASIL|FTA|FMEA)\b", text_lower))
+    has_sdf = bool(re.search(r"\b(?:SdF|sûreté\s+de\s+fonctionnement|dependability|safety|reliability|RAMS|ASIL|FTA|FMEA)\b", text_lower, re.IGNORECASE))
     if has_sdf:
         findings.append(EvidenceFinding(
             check="I_EXTENDED_WG_RULES", severity="pass", section="RAMS REQUIREMENTS",
@@ -2097,7 +2189,17 @@ def check_extended_writing_guide_rules(
 
     # ── R31: Network context diagram ──
     r31 = get_rule_by_id("R31")
-    has_network = _section_matches("NETWORK INTERFACES", user_sections) or bool(re.search(r"\b(?:CAN|LIN|network\s+interface)\b", text_lower))
+    # This ASU spec has NO section actually titled "NETWORK INTERFACES" —
+    # has_network becomes True purely from CAN/LIN keyword mentions
+    # elsewhere in the document. Hardcoding "NETWORK INTERFACES section" as
+    # the location regardless was confirmed to mislead a reviewer looking
+    # for a section that doesn't exist; report honestly which one it was.
+    network_section_match = _section_matches("NETWORK INTERFACES", user_sections)
+    has_network = bool(network_section_match) or bool(re.search(r"\b(?:CAN|LIN|network\s+interface)\b", text_lower, re.IGNORECASE))
+    network_location = (
+        f"{network_section_match} section" if network_section_match
+        else "Entire document (no section literally titled \"NETWORK INTERFACES\" — detected via CAN/LIN keyword mentions)"
+    )
     has_context_diagram = bool(re.search(r"context(?:ual)?\s+diagram", text_lower))
     if has_network and has_context_diagram:
         findings.append(EvidenceFinding(
@@ -2107,7 +2209,7 @@ def check_extended_writing_guide_rules(
             source_rule=f"R31: {r31.text if r31 else 'Rule of writing of the Network Context Diagram (§ 5.3.1).'}",
             source_doc="writing_guide",
             user_excerpt=_find_excerpt(user_text, r"context.*diagram"),
-            user_location="NETWORK INTERFACES section",
+            user_location=network_location,
             why="R31 requires a Network Context Diagram for network interfaces. This shows the communication architecture.",
         ))
     elif has_network and not has_context_diagram:
@@ -2116,7 +2218,7 @@ def check_extended_writing_guide_rules(
             rule_id="R31",
             message="Network interfaces present but no context diagram detected. R31 recommends a Network Context Diagram.",
             source_rule=f"R31: {r31.text if r31 else 'Rule of writing of the Network Context Diagram (§ 5.3.1).'}",
-            source_doc="writing_guide", user_excerpt="", user_location="NETWORK INTERFACES section",
+            source_doc="writing_guide", user_excerpt="", user_location=network_location,
             why="R31 recommends a Network Context Diagram for network interfaces. Without it, the communication architecture is unclear.",
             fix_suggestion="Add a Network Context Diagram showing the component's network connections.",
         ))
@@ -2347,14 +2449,21 @@ def check_extended_writing_guide_rules(
     r30 = get_rule_by_id("R30")
     has_perf = _section_matches("PERFORMANCE REQUIREMENTS", user_sections)
     if has_perf:
+        # Scoped to the PERFORMANCE REQUIREMENTS section first — an unscoped
+        # whole-document search was confirmed during a 2026 audit to pick up
+        # an unrelated match from the Applicable-Documents standards table
+        # (a standard literally named "...PERFORMANCE REQUIREMENTS") instead
+        # of the real section content.
+        excerpt, location = _find_excerpt_scoped(
+            user_text, "PERFORMANCE REQUIREMENTS", r"performance\s+requirement", rules, 80)
         findings.append(EvidenceFinding(
             check="I_EXTENDED_WG_RULES", severity="pass", section="PERFORMANCE REQUIREMENTS",
             rule_id="R30",
             message="Performance requirements section present (R30 compliant).",
             source_rule=f"R30: {r30.text if r30 else 'Rule about performance requirements (§ 5.2).'}",
             source_doc="writing_guide",
-            user_excerpt=_find_excerpt(user_text, r"performance\s+requirement", 80),
-            user_location="PERFORMANCE REQUIREMENTS section",
+            user_excerpt=excerpt,
+            user_location=location,
             why="R30 requires performance requirements. These define the efficiency criteria for functional requirements (response time, accuracy, etc.).",
         ))
     elif _section_matches("REQUIREMENTS", user_sections):
@@ -2371,7 +2480,7 @@ def check_extended_writing_guide_rules(
     # ── R52: Network requirements specified ──
     r52 = get_rule_by_id("R52")
     if has_network:
-        has_network_reqs = bool(re.search(r"\b(?:CAN|LIN|network\s+(?:frame|message|signal|protocol))\b.*\bshall\b", text_lower))
+        has_network_reqs = bool(re.search(r"\b(?:CAN|LIN|network\s+(?:frame|message|signal|protocol))\b.*\bshall\b", text_lower, re.IGNORECASE))
         if has_network_reqs:
             findings.append(EvidenceFinding(
                 check="I_EXTENDED_WG_RULES", severity="pass", section="NETWORK INTERFACES",
@@ -2380,7 +2489,7 @@ def check_extended_writing_guide_rules(
                 source_rule=f"R52: {r52.text if r52 else 'Specify all the network requirements to be applied to the component specified.'}",
                 source_doc="writing_guide",
                 user_excerpt=_find_excerpt(user_text, r"(?:CAN|LIN|network).*shall"),
-                user_location="NETWORK INTERFACES section",
+                user_location=network_location,
                 why="R52 requires all network requirements to be specified. This defines the communication protocols and messages.",
             ))
         else:
@@ -2389,7 +2498,7 @@ def check_extended_writing_guide_rules(
                 rule_id="R52",
                 message="Network interfaces present but no explicit 'shall' network requirement statements detected (R52 violation).",
                 source_rule=f"R52: {r52.text if r52 else 'Specify all the network requirements to be applied to the component specified.'}",
-                source_doc="writing_guide", user_excerpt="", user_location="NETWORK INTERFACES section",
+                source_doc="writing_guide", user_excerpt="", user_location=network_location,
                 why="R52 requires all network requirements to be formally specified with 'shall'. Without them, the communication protocol behavior is undefined.",
                 fix_suggestion="Add formal 'shall' requirements for each CAN/LIN frame, message, or signal used by the component.",
             ))
@@ -2452,20 +2561,48 @@ def check_extended_writing_guide_rules(
         ))
 
     # ── R01: Conformity matrix / template compliance ──
+    # Actually checks for the standard Conformity-matrix table structure
+    # (pipe-delimited table rows + real requirement IDs) instead of always
+    # emitting "pass" unconditionally — the previous version's own comment
+    # ("if we got here... R01 is being satisfied") never inspected the
+    # document at all, silently inflating the pass count regardless of
+    # whether the document actually follows the template's table format.
     r01 = get_rule_by_id("R01")
-    # If we got here, the document is being validated against the template — so R01 is being satisfied
-    findings.append(EvidenceFinding(
-        check="I_EXTENDED_WG_RULES", severity="pass", section="",
-        rule_id="R01",
-        message="Document is being validated against the CTS template conformity matrix (R01 compliant by validation).",
-        source_rule=f"R01: {r01.text if r01 else 'RD written in Word must respect the Conformity matrix [PT0] defined by standard A10 0310.'}",
-        source_doc="writing_guide", user_excerpt="", user_location="Entire document",
-        why="R01 requires Word-based RDs to respect the conformity matrix. This validation system enforces that by checking against the template.",
-    ))
+    r01_table_rows = [l for l in user_text.split("\n") if "|" in l and l.count("|") >= 2]
+    r01_req_ids = set(REQ_ID_RE.findall(user_text))
+    if len(r01_table_rows) > 10 and r01_req_ids:
+        findings.append(EvidenceFinding(
+            check="I_EXTENDED_WG_RULES", severity="pass", section="",
+            rule_id="R01",
+            message=(
+                f"Document uses the standard Conformity-matrix table format "
+                f"({len(r01_table_rows)} table rows, {len(r01_req_ids)} requirement "
+                f"IDs found) — R01 compliant."
+            ),
+            source_rule=f"R01: {r01.text if r01 else 'RD written in Word must respect the Conformity matrix [PT0] defined by standard A10 0310.'}",
+            source_doc="writing_guide",
+            user_excerpt=r01_table_rows[0][:200] if r01_table_rows else "",
+            user_location=f"{len(r01_table_rows)} table rows detected",
+            why="R01 requires Word-based RDs to follow the Conformity matrix's standard table structure (requirement ID, description, upstream reference). Genuine table-formatted requirement rows were found.",
+        ))
+    else:
+        findings.append(EvidenceFinding(
+            check="I_EXTENDED_WG_RULES", severity="warning", section="",
+            rule_id="R01",
+            message=(
+                f"Document does not appear to follow the Conformity-matrix standard "
+                f"table format ({len(r01_table_rows)} table rows, {len(r01_req_ids)} "
+                f"requirement IDs found) — R01 may be violated."
+            ),
+            source_rule=f"R01: {r01.text if r01 else 'RD written in Word must respect the Conformity matrix [PT0] defined by standard A10 0310.'}",
+            source_doc="writing_guide", user_excerpt="", user_location="Entire document",
+            why="R01 requires Word-based RDs to respect the Conformity matrix's standard table structure. Little or no table-formatted requirement content was detected.",
+            fix_suggestion="Present requirements in the standard Conformity-matrix 3-column table format (Requirement ID | Description | Upstream requirement).",
+        ))
 
     # ── R24: No SIMULINK block diagrams as requirements ──
     r24 = get_rule_by_id("R24")
-    has_simulink = bool(re.search(r"\bSIMULINK\b", text_lower))
+    has_simulink = bool(re.search(r"\bSIMULINK\b", text_lower, re.IGNORECASE))
     if not has_simulink:
         findings.append(EvidenceFinding(
             check="I_EXTENDED_WG_RULES", severity="pass", section="REQUIREMENTS",
@@ -2508,6 +2645,29 @@ def _extract_section_text(text: str, section_keyword: str) -> str:
         return ""
     end_line = end_line or len(lines)
     return "\n".join(lines[start_line:end_line])
+
+
+def _find_excerpt_scoped(user_text: str, section_name: str, pattern: str,
+                          rules: "ExtractedRules", context_chars: int = 100):
+    """
+    Search for `pattern` WITHIN `section_name`'s own text first; only fall
+    back to a whole-document search if the section itself doesn't contain a
+    match. Returns (excerpt, user_location) — the location is honest about
+    where the match actually came from, instead of a hardcoded section name
+    disconnected from _find_excerpt's real (whole-document) search result.
+    A 2026 audit confirmed this mismatch: e.g. an "ACRONYMS section"-labeled
+    finding whose excerpt was actually the cover-page author table, because
+    _find_excerpt just returns the FIRST match anywhere in the document.
+    """
+    section_text = _extract_full_section_text(user_text, section_name, rules)
+    if section_text:
+        excerpt = _find_excerpt(section_text, pattern, context_chars)
+        if excerpt:
+            return excerpt, f"{section_name} section"
+    excerpt = _find_excerpt(user_text, pattern, context_chars)
+    if excerpt:
+        return excerpt, f"elsewhere in the document (not within the {section_name} section)"
+    return "", "NOT FOUND"
 
 
 def _extract_full_section_text(user_text: str, section_name: str, rules: ExtractedRules) -> str:
@@ -2902,29 +3062,62 @@ def _compute_scores(findings: List[EvidenceFinding], rules: ExtractedRules) -> D
 # keeps its current fully offline, deterministic behaviour unless it
 # explicitly opts in.
 _SEMANTIC_RULE_SECTIONS: List[Tuple[str, str, List[str]]] = [
-    ("P03", "Each service must be described autonomously (independent of upstream architecture constraints) — §2.2/§5.1.",
-     ["SCOPE", "GENERAL DESCRIPTION OF THE SYSTEM"]),
+    ("P03", "Each service must be described autonomously in §5.1 — purely in terms of the service's OWN inputs and "
+     "outputs, without requiring knowledge of another system's INTERNAL architecture/implementation to understand "
+     "the behavior. Do NOT evaluate this rule against §2.2/general-context narrative text — that introductory text "
+     "is expected and allowed to name external actors/systems for scene-setting, and is out of scope for this "
+     "check; only the excerpt below (the §5.1 functional requirement) is what to judge. Naming an external system as "
+     "merely the SOURCE of a trigger or input signal (e.g. \"the service reacts when input signal X is absent/"
+     "present\", even if X's origin is another ECU) is NOT a violation — this is normal black-box input/output "
+     "description. A REAL violation looks like: the requirement text itself explains what the OTHER system does "
+     "internally, or how the other system's internal state machine/logic works, in order to explain THIS service's "
+     "behavior. If the excerpt only names an input signal (whatever its origin) and describes THIS service's own "
+     "reaction to it, that is compliant, not a violation.",
+     ["FUNCTIONAL REQUIREMENTS"]),
     ("P05", "Requirements must stay at the right level of abstraction (Application = pure functional behavior, with no protocol/transfer detail) — §5.",
      ["FUNCTIONAL REQUIREMENTS"]),
-    ("R26", "Every value in the applicative I/O tables must be used in the semantic-level requirements — §5.1.",
-     ["EXTERNAL INTERFACES REQUIREMENTS", "FUNCTIONAL REQUIREMENTS"]),
-    ("R28", "The \"phase of life\" diagnostic must be handled under Maintainability (§5.4.4.5); autodiagnostic must remain in §5.1 with the other use cases.",
+    ("R26", "Every value in the applicative I/O tables must be used in the semantic-level requirements — §5.1. "
+     "IMPORTANT: check ALL provided sections, including Maintainability — a value used only in a DTC/fault-recording "
+     "requirement there still counts as being used in a semantic-level requirement.",
+     ["EXTERNAL INTERFACES REQUIREMENTS", "FUNCTIONAL REQUIREMENTS", "MAINTAINABILITY"]),
+    ("R28", "The \"phase of life\" diagnostic must be handled under Maintainability (§5.4.4.5); autodiagnostic must remain in §5.1 with the other use cases. "
+     "IMPORTANT: DTC/fault recording, protocol conformance, assembly-phase self-test, download, remote coding, and "
+     "traceability requirements ALL correctly belong under Maintainability — do not flag these as \"autodiagnostic\" "
+     "violations. Only flag a violation if you find requirement text describing a RUNTIME self-check performed during "
+     "normal operation (e.g. an arming-state diagnosis check) actually placed inside the Maintainability excerpt.",
      ["MAINTAINABILITY", "FUNCTIONAL REQUIREMENTS"]),
     ("R34", "The network frame reception protocol must describe the behavior for invalid/unused values, frame loss, and default values in fault mode — §5.3.1.",
      ["EXTERNAL INTERFACES REQUIREMENTS"]),
     ("R35", "The controller must check the consistency of received input data — §5.3.1.",
      ["EXTERNAL INTERFACES REQUIREMENTS"]),
-    ("R38", "Wired interfaces must be described via the expected reference catalogs (selection guide, DA8/DA9) — §5.3.2.",
+    ("R38", "Wired interfaces must be described via the expected reference catalogs — the wired-interface selection "
+     "guide and the [DA8]/[DA9]-style wired-interface catalogs — §5.3.2. IMPORTANT: connector hardware catalogs "
+     "(e.g. references named CON1, CON2, or a \"connector specification\"/\"connector technical specification\" "
+     "document) are a DIFFERENT document category and do NOT satisfy this rule — a connector-catalog citation is "
+     "NOT evidence of compliance. Only a citation of the wired-interface selection guide or a DA8/DA9-style wired-"
+     "interface catalog counts.",
      ["ELECTRICAL INTERFACES"]),
     ("R39", "HMI content (color, message readability, icon style, force) must be grouped in the section dedicated to Human-Machine Interfaces — §5.3.4.",
      ["HUMAN-MACHINE INTERFACES"]),
     ("R42", "The statement of a dreaded event must be consistent with the statement of its associated failure mode — §5.4.4.",
      ["DEMONSTRATION OF COMPLIANCE WITH REQUIREMENTS", "RAMS REQUIREMENTS"]),
-    ("R44", "Diagnostic, download, remote coding and programming must be grouped in the same paragraph; customer-facing autodiagnostic remains in §5.1 — §5.4.4.",
-     ["MAINTAINABILITY", "DOCUMENT REQUIREMENTS"]),
+    ("R44", "Diagnostic, download, remote coding and programming must be grouped in the same paragraph; customer-facing autodiagnostic remains in §5.1 — §5.4.4. "
+     "IMPORTANT: this rule is about requirements being SCATTERED — only flag a violation if you can point to a "
+     "SPECIFIC diagnostic/download/remote-coding/programming requirement located OUTSIDE the Maintainability excerpt "
+     "(e.g. one you also see in the other candidate section provided). If everything relevant is contained within "
+     "the Maintainability excerpt, that is compliant grouping, not scattering.",
+     ["MAINTAINABILITY"]),
 ]
 
-_SEMANTIC_MAX_SECTION_CHARS = 3000
+# Per-CANDIDATE cap (not per combined, multi-candidate result — a rule with
+# 2 candidates gets up to 2x this budget). A 2026 audit against the real ASU
+# spec found the OLD behaviour — truncating the JOINED string after
+# concatenating every candidate — let whichever candidate came first consume
+# the entire budget, silently dropping the second candidate's content 100%
+# of the time (confirmed for R26/R28/R42/R44, all 2-candidate rules: their
+# second section never reached the LLM at all, regardless of its own size).
+_SEMANTIC_MAX_SECTION_CHARS = 4000
+_SEMANTIC_TRUNCATION_MARKER = "\n[...remainder truncated, not shown to the reviewer...]"
 _SEMANTIC_VERDICT_TO_SEVERITY = {
     "compliant": "pass",
     "violation": "warning",
@@ -2950,12 +3143,19 @@ def check_semantic_writing_guide_rules(user_text: str, rules: ExtractedRules) ->
     sections_used: Dict[str, str] = {}
     prompt_blocks: List[str] = []
     for rule_id, rule_desc, candidates in _SEMANTIC_RULE_SECTIONS:
-        combined = ""
+        # Truncate EACH candidate independently, THEN join — truncating the
+        # joined string instead let whichever candidate came first consume
+        # the whole budget, silently excluding every other candidate 100%
+        # (confirmed on the real ASU spec for every 2-candidate rule).
+        parts = []
         for cand in candidates:
             text = _extract_full_section_text(user_text, cand, rules)
-            if text:
-                combined = (combined + "\n" + text).strip() if combined else text
-        combined = combined[:_SEMANTIC_MAX_SECTION_CHARS]
+            if not text:
+                continue
+            if len(text) > _SEMANTIC_MAX_SECTION_CHARS:
+                text = text[:_SEMANTIC_MAX_SECTION_CHARS] + _SEMANTIC_TRUNCATION_MARKER
+            parts.append(text)
+        combined = "\n".join(parts)
         sections_used[rule_id] = combined
         excerpt_note = combined if combined else "[Section missing or not found in the document]"
         prompt_blocks.append(
@@ -2970,8 +3170,24 @@ def check_semantic_writing_guide_rules(user_text: str, rules: ExtractedRules) ->
         "judged relevant (or an explicit mention that the section is missing). "
         "Judge ONLY from the text provided — never invent content. If the "
         "excerpt is missing, empty, or simply says \"NA\", answer "
-        "not_applicable. If the excerpt exists but does not allow a confident "
-        "judgment, answer cannot_verify rather than guessing.\n\n"
+        "not_applicable. Before judging, check that the excerpt actually names "
+        "the SPECIFIC things this rule is about (read the rule text carefully) "
+        "— a generic or tangentially related passage that never actually "
+        "addresses the rule's subject is not evidence either way: answer "
+        "cannot_verify rather than guessing from unrelated text. An excerpt "
+        "ending with '[...remainder truncated, not shown to the reviewer...]' "
+        "was cut short by length limits — if what you can see does not "
+        "resolve the question, answer cannot_verify rather than assuming the "
+        "truncated part would have confirmed compliance. A 'violation' verdict "
+        "must point to DIRECT textual evidence of the SPECIFIC problem the rule "
+        "describes — never infer a violation merely because a section discusses "
+        "a related-sounding topic, or because content 'could' be misplaced. If "
+        "you cannot quote the exact words that demonstrate the problem, answer "
+        "cannot_verify or compliant instead of violation. Likewise, a 'compliant' "
+        "verdict must point to evidence that actually satisfies what the rule "
+        "requires — a citation of a document from a different, unrelated "
+        "reference-document category (read the rule text's own examples of "
+        "what counts) does not satisfy it.\n\n"
         "Respond STRICTLY with a JSON array, one object per rule, in this exact "
         "order, with no text before or after:\n"
         '[{"rule_id": "P03", "verdict": "compliant|violation|not_applicable|'
@@ -3001,23 +3217,43 @@ def check_semantic_writing_guide_rules(user_text: str, rules: ExtractedRules) ->
             why=f"The LLM call failed or returned an unusable response ({exc}); these rules still require manual review.",
         )]
 
-    by_rule = {item.get("rule_id"): item for item in parsed if isinstance(item, dict)}
+    # Build the lookup defensively: a syntactically-valid JSON array can
+    # still carry a "rule_id" that isn't a string (e.g. a nested object) —
+    # using that directly as a dict key would raise an uncaught TypeError
+    # OUTSIDE this function's own try/except, contradicting the "never
+    # raises" guarantee this function documents.
+    by_rule: Dict[str, dict] = {}
+    for item in parsed:
+        if not isinstance(item, dict):
+            continue
+        raw_rule_id = item.get("rule_id")
+        if isinstance(raw_rule_id, str):
+            by_rule[raw_rule_id] = item
+
     findings: List[EvidenceFinding] = []
-    for rule_id, rule_desc, _candidates in _SEMANTIC_RULE_SECTIONS:
+    for rule_id, rule_desc, candidates in _SEMANTIC_RULE_SECTIONS:
         item = by_rule.get(rule_id)
         r = get_rule_by_id(rule_id)
         source_rule_text = f"{rule_id}: {r.text if r else rule_desc}"
+        # Which document section(s) this rule's excerpt was actually drawn
+        # from — a reviewer checking an AI-assisted excerpt needs to know
+        # WHERE to go verify it, not just the excerpt text on its own.
+        candidate_location = (
+            " / ".join(candidates) + (" sections" if len(candidates) > 1 else " section")
+        ) if candidates else "Entire document"
         if not item:
             findings.append(EvidenceFinding(
                 check="K_SEMANTIC_ANALYSIS", severity="info", section="",
                 rule_id=rule_id,
                 message=f"{rule_id}: the AI analysis did not return a verdict for this rule.",
                 source_rule=source_rule_text, source_doc="writing_guide",
-                user_excerpt="", user_location="Entire document",
+                user_excerpt="", user_location=candidate_location,
                 why="The LLM response omitted this rule — treat as not yet reviewed.",
             ))
             continue
         verdict = item.get("verdict", "cannot_verify")
+        if not isinstance(verdict, str):
+            verdict = "cannot_verify"
         severity = _SEMANTIC_VERDICT_TO_SEVERITY.get(verdict, "info")
         explanation = str(item.get("explanation", ""))[:400]
         excerpt = str(item.get("excerpt", ""))[:250]
@@ -3026,7 +3262,7 @@ def check_semantic_writing_guide_rules(user_text: str, rules: ExtractedRules) ->
             rule_id=rule_id,
             message=f"[AI analysis — to verify] {rule_id}: {explanation or verdict}",
             source_rule=source_rule_text, source_doc="writing_guide",
-            user_excerpt=excerpt, user_location="Semantic Analysis (AI)",
+            user_excerpt=excerpt, user_location=candidate_location,
             why=(
                 "This finding comes from an AI-assisted analysis (not a "
                 "deterministic rule) because this rule requires judging the "

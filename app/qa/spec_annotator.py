@@ -93,15 +93,31 @@ def collect_highlight_targets(report: Dict) -> List[str]:
     targets: List[str] = []
     seen = set()
 
-    def _add(raw: Optional[str]):
-        cleaned = _clean_target(raw or "")
-        if not cleaned:
-            return
+    def _add_one(cleaned: str):
         key = _normalize_ws(cleaned)
         if key in seen:
             return
         seen.add(key)
         targets.append(cleaned)
+
+    def _add(raw: Optional[str]):
+        raw = raw or ""
+        # A multi-line excerpt (e.g. the AI-assisted semantic-analysis
+        # check's own quoted citation, built from a whole extracted
+        # section rather than one paragraph) spans what were SEPARATE
+        # paragraphs/table rows in the original document — _clean_target
+        # collapses "\n" into a single space, so the joined string can
+        # never match any ONE _iter_docx_units() unit, and the passage
+        # would silently go unhighlighted. Splitting on the ORIGINAL
+        # newlines first — before that collapsing happens — and adding
+        # each real line as its own target keeps every line highlightable
+        # individually, covering the whole cited passage instead of none
+        # of it.
+        lines = raw.split("\n") if "\n" in raw else [raw]
+        for line in lines:
+            cleaned = _clean_target(line)
+            if cleaned:
+                _add_one(cleaned)
 
     for f in report.get("findings", []):
         # A finding's own excerpt is only worth highlighting when it

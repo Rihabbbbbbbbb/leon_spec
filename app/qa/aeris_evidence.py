@@ -198,6 +198,13 @@ def _extract_pptx(content: bytes, file_name: str, warnings: List[str]) -> List[E
                         blocks.append((loc, f"{title}\n{ocr}" if title else ocr, False, "image"))
                 if shape.has_chart:
                     chart = shape.chart
+                    chart_title = (
+                        chart.chart_title.text_frame.text if chart.has_title else title
+                    )
+                    unit = re.search(
+                        r"\((Hz|kHz|MHz|mA|A|V|ms|°C|%)\)",
+                        chart_title, re.I,
+                    )
                     for series in chart.series:
                         values = getattr(series, "values", ())
                         for index, value in enumerate(values):
@@ -210,7 +217,8 @@ def _extract_pptx(content: bytes, file_name: str, warnings: List[str]) -> List[E
                                 pass
                             blocks.append((
                                 loc,
-                                f"{title} {series.name} {category}: {value}",
+                                f"{chart_title} {series.name} {category}: "
+                                f"{value} {unit.group(1) if unit else ''}",
                                 False,
                                 "chart",
                             ))

@@ -39,11 +39,14 @@ def _add_page_number_footer(section):
     """Add page numbers to the footer of a DOCX section."""
     from docx.oxml.ns import qn
     from docx.oxml import OxmlElement
+    from docx.shared import Pt, RGBColor
     footer = section.footer
     footer.is_linked_to_previous = False
     p = footer.paragraphs[0] if footer.paragraphs else footer.add_paragraph()
     p.alignment = 1  # CENTER
     run = p.add_run("LEON — Validation Report | Page ")
+    run.font.size = Pt(8)
+    run.font.color.rgb = RGBColor(108, 117, 125)
     fldChar1 = OxmlElement("w:fldChar")
     fldChar1.set(qn("w:fldCharType"), "begin")
     instrText = OxmlElement("w:instrText")
@@ -54,6 +57,72 @@ def _add_page_number_footer(section):
     run._r.append(fldChar1)
     run._r.append(instrText)
     run._r.append(fldChar2)
+
+
+def _add_running_header(section, file_name: str):
+    """Add a slim running header (document title + file name) to every
+    page after the cover, so context survives printing or scrolling to
+    the middle of a long report."""
+    from docx.shared import Pt, RGBColor
+    header = section.header
+    header.is_linked_to_previous = False
+    p = header.paragraphs[0] if header.paragraphs else header.add_paragraph()
+    p.alignment = 3  # RIGHT
+    run = p.add_run(f"LEON Validation Report  ·  {file_name}")
+    run.font.size = Pt(8)
+    run.italic = True
+    run.font.color.rgb = RGBColor(108, 117, 125)
+
+
+def _set_default_font(doc, name: str = "Calibri", size: int = 10):
+    """Apply a single consistent enterprise-standard font across the whole
+    document (python-docx otherwise falls back to whatever the Normal
+    style's underlying template default is, which reads as generic)."""
+    from docx.oxml.ns import qn
+    from docx.oxml import OxmlElement
+    from docx.shared import Pt
+    style = doc.styles["Normal"]
+    style.font.name = name
+    style.font.size = Pt(size)
+    # Word looks up the East-Asian/complex-script font slot separately —
+    # without this, some viewers keep rendering the old default typeface.
+    rpr = style.element.get_or_add_rPr()
+    rFonts = rpr.find(qn("w:rFonts"))
+    if rFonts is None:
+        rFonts = OxmlElement("w:rFonts")
+        rpr.append(rFonts)
+    rFonts.set(qn("w:eastAsia"), name)
+
+
+def _add_masthead(doc, title: str, subtitle: str):
+    """A full-width shaded banner (navy, matching the web UI's masthead)
+    instead of plain centered text — the first thing the reader sees sets
+    the tone of a designed report rather than a bare Word default."""
+    from docx.shared import Pt, RGBColor
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.enum.table import WD_TABLE_ALIGNMENT
+
+    table = doc.add_table(rows=2, cols=1)
+    table.alignment = WD_TABLE_ALIGNMENT.CENTER
+
+    title_cell = table.cell(0, 0)
+    title_cell.text = title
+    run = title_cell.paragraphs[0].runs[0]
+    run.font.size = Pt(20)
+    run.bold = True
+    run.font.color.rgb = RGBColor(255, 255, 255)
+    title_cell.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+    _set_cell_shading(title_cell, "0B2545")
+
+    subtitle_cell = table.cell(1, 0)
+    subtitle_cell.text = subtitle
+    run = subtitle_cell.paragraphs[0].runs[0]
+    run.font.size = Pt(9)
+    run.italic = True
+    run.font.color.rgb = RGBColor(169, 188, 212)
+    subtitle_cell.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+    _set_cell_shading(subtitle_cell, "123061")
+    return table
 
 
 _VERDICT_LABELS = {
@@ -331,6 +400,7 @@ def generate_spec_validation_document(report: Dict) -> bytes:
     from docx.enum.table import WD_TABLE_ALIGNMENT
 
     doc = Document()
+    _set_default_font(doc, "Calibri", 10)
 
     # ── Page setup ─────────────────────────────────────────
     section = doc.sections[0]
@@ -342,8 +412,11 @@ def generate_spec_validation_document(report: Dict) -> bytes:
     # ── Helpers ────────────────────────────────────────────
     def _add_heading(text, level=1, color=(0, 51, 102)):
         h = doc.add_heading(text, level=level)
+        h.paragraph_format.space_before = Pt(14)
+        h.paragraph_format.space_after = Pt(6)
         for run in h.runs:
             run.font.color.rgb = RGBColor(*color)
+            run.font.name = "Calibri"
         return h
 
     def _add_para(text, bold=False, italic=False, size=10, color=None, align=None):
@@ -379,25 +452,16 @@ def generate_spec_validation_document(report: Dict) -> bytes:
     rules_used = report.get("rulesUsed", {})
 
     # ═══════════════════════════════════════════════════════
-    # HEADER
+    # COVER — shaded masthead banner instead of plain centered text
     # ═══════════════════════════════════════════════════════
-    title = doc.add_paragraph()
-    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    run = title.add_run("LEON — Specification Validation Report")
-    run.font.size = Pt(18)
-    run.bold = True
-    run.font.color.rgb = RGBColor(0, 51, 102)
-
-    tagline = doc.add_paragraph()
-    tagline.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    run = tagline.add_run(
+    _add_masthead(
+        doc,
+        "LEON — Specification Validation Report",
         f"{file_name}  ·  {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}  ·  "
-        f"Stellantis Mechatronics Engineering"
+        f"Stellantis Mechatronics Engineering",
     )
-    run.font.size = Pt(9)
-    run.italic = True
-    run.font.color.rgb = RGBColor(108, 117, 125)
     doc.add_paragraph()
+    _add_running_header(section, file_name)
 
     # ── How to read this report (orientation for first-time readers) ──
     _add_para(
@@ -413,7 +477,7 @@ def generate_spec_validation_document(report: Dict) -> bytes:
         "error, yellow = warning, green = passed/good.",
         italic=True, size=9, color=(90, 98, 108)
     )
-    doc.add_paragraph()
+    doc.add_page_break()
 
     # ═══════════════════════════════════════════════════════
     # 1. SUMMARY — verdict banner + scores + counts
@@ -499,6 +563,7 @@ def generate_spec_validation_document(report: Dict) -> bytes:
         if f.get("check") not in ("G_TRACEABILITY", "K_SEMANTIC_ANALYSIS")
     ]
     n_problems = len(all_problems)
+    doc.add_page_break()
     _add_heading(f"2. Issues to Fix ({n_problems})", level=2)
 
     if n_problems == 0:
@@ -604,6 +669,7 @@ def generate_spec_validation_document(report: Dict) -> bytes:
     trace_finding = trace_findings[0] if trace_findings else {}
 
     if untraced_items:
+        doc.add_page_break()
         _add_heading(
             f"3. Requirements Traceability ({len(untraced_items)} with no upstream reference)",
             level=2,
@@ -671,6 +737,7 @@ def generate_spec_validation_document(report: Dict) -> bytes:
     # ═══════════════════════════════════════════════════════
     semantic_findings = [f for f in findings if f.get("check") == "K_SEMANTIC_ANALYSIS"]
     if semantic_findings:
+        doc.add_page_break()
         _add_heading(f"4. Semantic Analysis — AI ({len(semantic_findings)})", level=2)
         _add_para(
             "These findings come from an AI-assisted analysis, for writing-guide "
@@ -700,7 +767,8 @@ def generate_spec_validation_document(report: Dict) -> bytes:
             verdict_label = sem_verdict_labels.get(sev, sev)
             explanation = (f.get("message", "") or "").replace("[AI analysis — to verify] ", "")[:_MSG_MAX]
             excerpt = (f.get("user_excerpt", "") or "")[:_EXCERPT_MAX]
-            row_data = [f.get("rule_id", ""), verdict_label, explanation, excerpt or "—"]
+            location = f.get("user_location", "") or ""
+            row_data = [f.get("rule_id", ""), verdict_label, explanation]
             for ci, val in enumerate(row_data):
                 cell = sem_table.cell(ri, ci)
                 cell.text = str(val)
@@ -709,6 +777,24 @@ def generate_spec_validation_document(report: Dict) -> bytes:
                     for run in para.runs:
                         run.font.size = Pt(8)
                 _set_cell_shading(cell, hex_c)
+            # Excerpt column: the excerpt text, plus a separate, visually
+            # distinct paragraph naming WHERE it was extracted from — a
+            # reviewer verifying an AI-cited excerpt needs to know which
+            # document section to go check, not just the text (a plain
+            # embedded "\n" inside cell.text does not render as a real
+            # line break in Word — a genuine second paragraph is needed).
+            excerpt_cell = sem_table.cell(ri, 3)
+            excerpt_cell.text = excerpt or "—"
+            excerpt_cell.width = sem_col_widths[3]
+            for run in excerpt_cell.paragraphs[0].runs:
+                run.font.size = Pt(8)
+            if excerpt and location:
+                loc_para = excerpt_cell.add_paragraph()
+                loc_run = loc_para.add_run(f"Extracted from: {location}")
+                loc_run.font.size = Pt(7)
+                loc_run.font.italic = True
+                loc_run.font.color.rgb = RGBColor(102, 102, 102)
+            _set_cell_shading(excerpt_cell, hex_c)
         for ci in range(4):
             sem_table.cell(0, ci).width = sem_col_widths[ci]
         doc.add_paragraph()
@@ -716,6 +802,7 @@ def generate_spec_validation_document(report: Dict) -> bytes:
     # ═══════════════════════════════════════════════════════
     # 5. ANALYSIS SCOPE (audit trail, compact)
     # ═══════════════════════════════════════════════════════
+    doc.add_page_break()
     _add_heading("5. Analysis Scope", level=2)
 
     wg_count = rules_used.get("writing_guide_rules_count", 0)

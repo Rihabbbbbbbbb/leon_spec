@@ -192,6 +192,16 @@ async def validate_specification(
 
     if file is not None:
         filename = file.filename
+        if filename and Path(filename).suffix.lower() == ".doc":
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Les fichiers .doc (ancien format Word 97-2003) ne sont pas pris en "
+                    "charge — seul le format .docx peut être lu de manière fiable. Merci de "
+                    "réenregistrer ce fichier au format .docx (Word : Fichier > Enregistrer "
+                    "sous > Document Word (.docx)) puis de le réimporter."
+                ),
+            )
         temp_path = Path("data/uploads") / (file.filename or "upload.docx")
         temp_path.parent.mkdir(parents=True, exist_ok=True)
         content = await file.read()

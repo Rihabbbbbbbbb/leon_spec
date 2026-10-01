@@ -955,7 +955,10 @@ class TestStructuralTraceability:
         results = check_traceability("", rules, req_rows=rows)
         assert len(results) == 1
         f = results[0]
-        assert f.severity == "warning"
+        # Only 1/3 (33%) traced — below the 50% threshold, escalated to
+        # "error" (a document mostly untraced is a materially worse risk
+        # than one that's mostly done; these used to share one severity).
+        assert f.severity == "error"
         assert "2 of 3" in f.message
         assert {i["id"] for i in f.items} == {
             "REF-A-CD-FUNC-0001", "REF-A-CD-FUNC-0002",
@@ -1067,10 +1070,46 @@ class TestStructuralTraceability:
         text = extract_text_from_file(ASU_PATH)
         report = validate_with_evidence(ASU_PATH.name, text, source_path=ASU_PATH)
         trace = [f for f in report["findings"] if f["check"] == "G_TRACEABILITY"]
-        assert len(trace) == 1
-        assert trace[0]["severity"] == "warning"
-        assert len(trace[0]["items"]) == 156
-        assert "272" in trace[0]["message"]
+        # 2 findings now: the main traceability stat, PLUS a dedicated
+        # finding for the CTS template's own unedited example row (real
+        # requirement REF-PSP-AIRBAG-FRONT-001, confirmed left in this
+        # document by a 2026 audit) — which must never count toward the
+        # traceability stats below (excluding it drops the real total from
+        # 272 to 271; it doesn't change the untraced count since it was
+        # never one of the untraced 156).
+        assert len(trace) == 2
+        template_example = next(f for f in trace if "template" in f["message"].lower())
+        assert "REF-PSP-AIRBAG-FRONT-001" in template_example["message"]
+        main = next(f for f in trace if f["message"].startswith("Traceability"))
+        # 115/271 (~42%) traced — below the 50% threshold, escalated to
+        # "error" (used to share "warning" with any incomplete-but-mostly-done case).
+        assert main["severity"] == "error"
+        assert len(main["items"]) == 156
+        assert "271" in main["message"]
+
+    def test_template_example_row_is_flagged_not_counted_as_traced(self, tmp_path, rules):
+        """The CTS template's own unedited example row ('The system shall…'
+        / 'Nothing in this field') must never count as a real, compliant,
+        traced requirement — but its presence IS a real authoring defect
+        worth its own explicit finding."""
+        from app.qa.evidence_comparator import extract_requirement_rows, check_traceability
+        data = self._build_req_docx([
+            ("REF-A-CD-FUNC-0001(0)", "The system shall start.", "[SSD_X]"),
+            ("REF-PSP-AIRBAG-FRONT-001", "The system shall…", "Nothing in this field"),
+        ])
+        rows = extract_requirement_rows(self._write(tmp_path, data))
+        assert len(rows) == 2
+        template_row = next(r for r in rows if r.req_id == "REF-PSP-AIRBAG-FRONT-001")
+        assert template_row.is_template_example is True
+        real_row = next(r for r in rows if r.req_id == "REF-A-CD-FUNC-0001")
+        assert real_row.is_template_example is False
+
+        results = check_traceability("", rules, req_rows=rows)
+        main = next(f for f in results if f.message.startswith("Traceability"))
+        assert main.severity == "pass"  # the one REAL row is fully traced
+        assert "1" in main.message
+        template_finding = next(f for f in results if "template" in f.message.lower())
+        assert "REF-PSP-AIRBAG-FRONT-001" in template_finding.message
 
     def test_without_source_path_the_text_heuristic_is_still_used(self):
         """Backwards compatibility: PDF/TXT callers pass no source_path."""
@@ -1349,7 +1388,13 @@ class TestNestedTableExtraction:
 
         text = extract_text_from_file(ASU_PATH)
         report = validate_with_evidence(ASU_PATH.name, text, source_path=ASU_PATH)
-        trace = [f for f in report["findings"] if f["check"] == "G_TRACEABILITY"][0]
+        # G_TRACEABILITY now also includes a dedicated finding (with no
+        # "items") for the CTS template's own unedited example row — select
+        # the main traceability-stats finding specifically, not just [0].
+        trace = next(
+            f for f in report["findings"]
+            if f["check"] == "G_TRACEABILITY" and f["message"].startswith("Traceability")
+        )
         assert len(trace["items"]) == 156
 
         doc = Document(str(ASU_PATH))
@@ -1703,6 +1748,55 @@ class TestExcerptsAlwaysMatchARealHighlightableUnit:
         unmatched = [t for t in targets if not any(_normalize_ws(t) in ut for ut in unit_texts)]
         assert unmatched == []
 
+    def test_real_asu_spec_semantic_analysis_targets_also_match_a_real_unit(self):
+        """
+        Regression: the previous test above never exercised
+        include_semantic_analysis=True, so it could not have caught this —
+        a real sweep found that EVERY K_SEMANTIC_ANALYSIS finding's excerpt
+        (the AI's own quoted citation, built from a whole extracted
+        section rather than one paragraph) silently produced ZERO
+        highlights: the multi-line citation, once _clean_target collapsed
+        its "\\n"s into spaces, could never match any single
+        _iter_docx_units() unit. Mocks the LLM with a real multi-line
+        citation (copied verbatim from a live run against this exact
+        fixture) to keep this deterministic and fast.
+        """
+        if not ASU_PATH.exists():
+            pytest.skip("ASU spec not found")
+        from unittest.mock import patch
+        import json as _json
+        from app.qa.retrieval import extract_text_from_file
+        from app.qa.spec_annotator import (
+            collect_highlight_targets, _iter_docx_units, _normalize_ws,
+        )
+        from docx import Document
+
+        text = extract_text_from_file(ASU_PATH)
+        multiline_citation = (
+            "Maintainability requirements\n"
+            "Diagnostic:\n"
+            "Circuit malfunction\n"
+            "Requirement Number (v) | Description of the requirement | Input requirement (v)\n"
+            "REF-ASU-CD-MAINT-0001(0) | The ASU shall record a DTC with the parameters below:"
+        )
+        mock_response = _json.dumps([
+            {"rule_id": "R28", "verdict": "violation", "explanation": "ok", "excerpt": multiline_citation},
+        ] + [
+            {"rule_id": rid, "verdict": "not_applicable", "explanation": "ok", "excerpt": ""}
+            for rid in ("P03", "P05", "R26", "R34", "R35", "R38", "R39", "R42", "R44")
+        ])
+        with patch("app.embeddings.call_llm", return_value=mock_response):
+            report = validate_with_evidence(
+                ASU_PATH.name, text, source_path=ASU_PATH, include_semantic_analysis=True
+            )
+        targets = collect_highlight_targets(report)
+        assert any("MAINT-0001" in t for t in targets)
+
+        doc = Document(str(ASU_PATH))
+        unit_texts = [_normalize_ws(t) for _, t in _iter_docx_units(doc)]
+        unmatched = [t for t in targets if not any(_normalize_ws(t) in ut for ut in unit_texts)]
+        assert unmatched == []
+
 
 class TestNewDeterministicChecks:
     """
@@ -1965,6 +2059,65 @@ class TestSemanticAnalysis:
         assert p05.severity == "info"
         assert "did not return a verdict" in p05.message
 
+    def test_malformed_field_types_in_an_otherwise_valid_response_never_raise(self, rules):
+        """
+        Regression: a syntactically-valid JSON array can still carry a
+        "rule_id" or "verdict" that isn't a string (e.g. a nested object) —
+        using it directly as a dict key used to raise an uncaught TypeError
+        OUTSIDE the surrounding try/except, contradicting this function's
+        own documented "never raises" guarantee (and, on the live
+        /api/upload-and-validate endpoint, would have surfaced as an
+        unhandled 500 instead of a graceful degradation).
+        """
+        from unittest.mock import patch
+        from app.qa.evidence_comparator import check_semantic_writing_guide_rules
+        import json as _json
+        mock_response = _json.dumps([
+            {"rule_id": "P03", "verdict": {"nested": "not a string"}, "explanation": "x", "excerpt": ""},
+            {"rule_id": ["also", "not", "a", "string"], "verdict": "compliant", "explanation": "x", "excerpt": ""},
+        ])
+        with patch("app.embeddings.call_llm", return_value=mock_response):
+            findings = check_semantic_writing_guide_rules("SCOPE\nSome text.\n", rules)
+        assert len(findings) == 10
+        p03 = next(f for f in findings if f.rule_id == "P03")
+        # An unusable verdict must degrade to "info", never crash and never
+        # silently become a confident "pass"/"warning".
+        assert p03.severity == "info"
+
+    def test_multi_candidate_rule_gets_a_fair_share_for_each_candidate(self, rules):
+        """
+        Regression: truncating the JOINED, multi-candidate string (instead
+        of each candidate independently, BEFORE joining) let whichever
+        candidate was concatenated first silently consume the entire
+        _SEMANTIC_MAX_SECTION_CHARS budget — on the real ASU spec this
+        excluded R26/R28/R42/R44's SECOND candidate section 100% of the
+        time, regardless of its own length. Inspect the ACTUAL prompt sent
+        to the LLM (R42's two candidates: "DEMONSTRATION OF COMPLIANCE WITH
+        REQUIREMENTS" then "RAMS REQUIREMENTS") to confirm the second
+        candidate's real content survives even when the first, on its own,
+        already exceeds the whole shared budget.
+        """
+        from unittest.mock import patch
+        import json as _json
+        from app.qa.evidence_comparator import (
+            check_semantic_writing_guide_rules, _SEMANTIC_MAX_SECTION_CHARS,
+        )
+        long_first = "This paragraph is filler text repeated many times. " * 200
+        text = (
+            f"DEMONSTRATION OF COMPLIANCE WITH REQUIREMENTS\n{long_first}\n"
+            f"RAMS REQUIREMENTS\nThe dreaded event UNIQUEMARKER must be reachable.\n"
+            f"PRODUCT QUALITY\nNothing relevant here.\n"
+        )
+        assert len(long_first) > _SEMANTIC_MAX_SECTION_CHARS
+        mock_response = _json.dumps([
+            {"rule_id": rid, "verdict": "not_applicable", "explanation": "ok", "excerpt": ""}
+            for rid in ("P03", "P05", "R26", "R28", "R34", "R35", "R38", "R39", "R42", "R44")
+        ])
+        with patch("app.embeddings.call_llm", return_value=mock_response) as mock_llm:
+            check_semantic_writing_guide_rules(text, rules)
+        sent_prompt = mock_llm.call_args[0][1]  # (system_prompt, user_message, ...)
+        assert "UNIQUEMARKER" in sent_prompt
+
     def test_wired_into_validate_with_evidence_when_opted_in(self, rules):
         from unittest.mock import patch
         import json as _json
@@ -2011,3 +2164,193 @@ class TestSemanticAnalysis:
         # deterministic, categorized "Issues to Fix" tables.
         assert "Abstraction-level inconsistency" in after_section
         assert "Abstraction-level inconsistency" not in before_section
+
+    def test_real_asu_spec_semantic_prompt_sections_are_fixed(self, rules):
+        """
+        Regression for a 2026 fact-check against the real ASU spec that found
+        4 of 10 semantic verdicts wrong: R26/P03 were missing the candidate
+        section that actually contains the evidence, and R38/R44 were fed an
+        unrelated section (connector catalog / hardware document folder)
+        that caused wrong verdicts. Inspect the ACTUAL prompt text built from
+        the real document — not a mock — to confirm each fix reaches the LLM.
+        """
+        from unittest.mock import patch
+        from app.qa.evidence_comparator import check_semantic_writing_guide_rules
+        from app.qa.retrieval import extract_text_from_file
+        import json as _json
+
+        text = extract_text_from_file(str(ASU_PATH))
+        mock_response = _json.dumps([
+            {"rule_id": rid, "verdict": "not_applicable", "explanation": "ok", "excerpt": ""}
+            for rid in ("P03", "P05", "R26", "R28", "R34", "R35", "R38", "R39", "R42", "R44")
+        ])
+        with patch("app.embeddings.call_llm", return_value=mock_response) as mock_llm:
+            check_semantic_writing_guide_rules(text, rules)
+        sent_prompt = mock_llm.call_args[0][1]
+
+        def excerpt(rule_id):
+            """Just the "Document excerpt:" body for one rule block — NOT
+            the "Rule:" description text, which (post-fix) itself names the
+            excluded catalogs/sections as illustrative examples."""
+            start = sent_prompt.index(f"=== {rule_id} ===")
+            next_marker = "\n=== "
+            end = sent_prompt.find(next_marker, start + 1)
+            block_text = sent_prompt[start:end if end != -1 else len(sent_prompt)]
+            return block_text.split("Document excerpt:\n", 1)[1]
+
+        # R26: must now see the Maintainability usage of these I/O values,
+        # not just the (incomplete) EXTERNAL INTERFACES/FUNCTIONAL sections.
+        assert "ProhibitionFaultMemory" in excerpt("R26")
+
+        # P03: must see the §5.1 functional requirement (which describes the
+        # trigger autonomously, via the ASU's own inputs) and must NOT see
+        # the §2.2 context narrative naming the master ECU/heartbeat — that
+        # passage baited a false "violation" verdict even after a plain
+        # prompt clarification was tried first; only removing it as a
+        # candidate section actually fixed the live verdict.
+        p03_excerpt = excerpt("P03")
+        assert "CommandSurveillanceActivation" in p03_excerpt
+        assert "ZCU_CL" not in p03_excerpt
+        assert "thief cut the cable" not in p03_excerpt
+
+        # R38: must NOT see the connector hardware catalog anymore — it's a
+        # different document category that caused a false "compliant".
+        r38_excerpt = excerpt("R38")
+        assert "GTS Design rules for connections" not in r38_excerpt
+        assert "CON1" not in r38_excerpt
+
+        # R44: must NOT see the unrelated hardware/mechanical document-folder
+        # checklist anymore — it caused a false "scattered" violation.
+        r44_excerpt = excerpt("R44")
+        assert "Hardware Schematic" not in r44_excerpt
+        assert "Pinout connector" not in r44_excerpt
+
+
+class TestDeterministicCheckAudit2026Fixes:
+    """
+    Regression tests for a 2026 audit of the deterministic (non-AI) spec-
+    validator checks, independent of the earlier semantic-rule audit above.
+    Confirmed bugs: several extended-writing-guide-rule checks (R31, R52,
+    R24, R04, R45, P10) matched an ALL-UPPERCASE literal (e.g. "CAN", "LIN",
+    "SIMULINK", "RD", "RAMS") against text that had already been lowercased
+    — a pattern that can never match, silently making those rules dead code
+    that always took the same branch regardless of document content;
+    _section_matches() returned the first PARTIAL match found in document
+    order instead of checking for an exact match first, so a short required
+    name like "REQUIREMENTS" could match an unrelated earlier heading like
+    "UPSTREAM REQUIREMENTS"; and R01 always emitted "pass" with a comment
+    admitting no real check was performed.
+    """
+
+    def test_r31_r52_detect_lowercase_can_lin_mentions(self, rules):
+        """Before the fix, `\\b(?:CAN|LIN|...)\\b` matched against
+        `text_lower` could never match, so R31/R52 could never even reach
+        their "network interfaces present" branch for any document."""
+        from app.qa.evidence_comparator import check_extended_writing_guide_rules
+        text = (
+            "EXTERNAL INTERFACES REQUIREMENTS\n"
+            "REF-A-CD-LIN-0001(0) | The system shall transmit a lin frame every 100ms. | [X]\n"
+            "A network context diagram is shown in Figure 1.\n"
+        )
+        findings = check_extended_writing_guide_rules(text, rules)
+        by_rule = {f.rule_id: f for f in findings if f.rule_id in ("R31", "R52")}
+        assert by_rule["R31"].severity == "pass"
+        assert by_rule["R52"].severity == "pass"
+
+    def test_r24_simulink_detection_is_case_insensitive(self, rules):
+        """`\\bSIMULINK\\b` against lowercased text could never match, so
+        R24 always reported "pass" — correct by accident, never for real
+        reason. Confirm it can now genuinely detect a real occurrence too."""
+        from app.qa.evidence_comparator import check_extended_writing_guide_rules
+        text = "REQUIREMENTS\nThe behavior is described by this Simulink block diagram.\n"
+        findings = check_extended_writing_guide_rules(text, rules)
+        r24 = next(f for f in findings if f.rule_id == "R24")
+        assert r24.severity == "info"
+        assert "SIMULINK reference found" in r24.message
+
+    def test_r04_generic_rd_detection_is_case_insensitive(self, rules):
+        """`\\bgeneric\\s+(?:...|RD|...)\\b` against lowercased text meant
+        `is_generic` could never become True, so R04 silently never fired
+        (no finding at all) for any document, generic or not."""
+        from app.qa.evidence_comparator import check_extended_writing_guide_rules
+        text = "SCOPE\nThis is a generic RD with a TBD value for the connector reference.\n"
+        findings = check_extended_writing_guide_rules(text, rules)
+        assert any(f.rule_id == "R04" for f in findings)
+
+    def test_r01_is_a_real_check_not_an_unconditional_pass(self, rules):
+        """R01 used to always emit "pass" with a comment admitting no real
+        analysis was performed. It must now actually distinguish a
+        template-formatted document from one with no table structure."""
+        from app.qa.evidence_comparator import check_extended_writing_guide_rules
+        good_text = "\n".join(
+            f"REF-A-CD-FUNC-{i:04d}(0) | The system shall do thing {i}. | [SSD_{i}]"
+            for i in range(1, 15)
+        )
+        findings_good = check_extended_writing_guide_rules(good_text, rules)
+        r01_good = next(f for f in findings_good if f.rule_id == "R01")
+        assert r01_good.severity == "pass"
+
+        bad_text = "This document describes the system in free-flowing prose with no tables at all."
+        findings_bad = check_extended_writing_guide_rules(bad_text, rules)
+        r01_bad = next(f for f in findings_bad if f.rule_id == "R01")
+        assert r01_bad.severity == "warning"
+
+    def test_section_matches_prefers_exact_match_over_earlier_partial_match(self):
+        """A short required name like "REQUIREMENTS" must match its OWN
+        exact heading, not an earlier, unrelated heading that merely
+        CONTAINS "requirements" as one of several words (e.g. "UPSTREAM
+        REQUIREMENTS", a subsection of REFERENCE DOCUMENTS)."""
+        from app.qa.evidence_comparator import _section_matches
+        found_sections = ["REFERENCE DOCUMENTS", "UPSTREAM REQUIREMENTS", "SCOPE", "REQUIREMENTS"]
+        assert _section_matches("REQUIREMENTS", found_sections) == "REQUIREMENTS"
+
+    def test_section_matches_still_falls_back_to_partial_when_no_exact_match(self):
+        from app.qa.evidence_comparator import _section_matches
+        found_sections = ["6.4.3 ERGONOMICS AND HUMAN FACTORS"]
+        assert _section_matches("ERGONOMICS", found_sections) == "6.4.3 ERGONOMICS AND HUMAN FACTORS"
+
+    def test_subjective_word_in_template_example_row_is_not_flagged(self, rules):
+        """The template's own instruction text ("...if you want to add SOME
+        information...") sits on the same flattened line as "The system
+        shall…" and was confirmed to trigger a false R23 subjective-word
+        violation — it is guidance text, not a real requirement."""
+        from app.qa.evidence_comparator import check_requirement_language
+        text = (
+            "REF-A-CD-FUNC-0001(0) | The system shall start reliably. | [X]\n"
+            "PSA_Comments@{{if you want to add some information}} | The system shall… | Nothing in this field\n"
+        )
+        findings = check_requirement_language(text, rules)
+        subjective = [f for f in findings if "Subjective words found" in f.message]
+        assert subjective == []
+
+    def test_scoped_excerpt_prefers_match_within_the_named_section(self, rules):
+        """_find_excerpt_scoped must search WITHIN the named section first —
+        confirmed bug: an unscoped whole-document search picked up an
+        unrelated match (e.g. a standard's title containing the same
+        keywords) instead of the real section content."""
+        from app.qa.evidence_comparator import _find_excerpt_scoped
+        text = (
+            "APPLICABLE DOCUMENTS\n"
+            "[N41] | CS.00244 | STELLANTIS ELECTRICAL AND EMC PERFORMANCE REQUIREMENTS\n"
+            "PERFORMANCE REQUIREMENTS\n"
+            "REF-A-CD-PERF-0001(0) | The response time shall be under 200ms. | [X]\n"
+            "MAINTAINABILITY\n"
+        )
+        excerpt, location = _find_excerpt_scoped(text, "PERFORMANCE REQUIREMENTS", r"performance\s+requirement", rules)
+        assert "response time" in excerpt.lower()
+        assert location == "PERFORMANCE REQUIREMENTS section"
+
+    def test_scoped_excerpt_honest_fallback_when_not_in_named_section(self, rules):
+        """When the pattern genuinely isn't in the named section, the
+        fallback must say so honestly instead of falsely claiming the
+        named section as the source."""
+        from app.qa.evidence_comparator import _find_excerpt_scoped
+        text = (
+            "APPLICABLE DOCUMENTS\n"
+            "[N41] | CS.00244 | STELLANTIS ELECTRICAL AND EMC PERFORMANCE REQUIREMENTS\n"
+            "MAINTAINABILITY\n"
+            "REF-A-CD-MAINT-0001(0) | The ASU shall record a DTC. | [X]\n"
+        )
+        excerpt, location = _find_excerpt_scoped(text, "PERFORMANCE REQUIREMENTS", r"performance\s+requirement", rules)
+        assert "PERFORMANCE REQUIREMENTS" in excerpt or excerpt  # still finds SOMETHING
+        assert location == "elsewhere in the document (not within the PERFORMANCE REQUIREMENTS section)"

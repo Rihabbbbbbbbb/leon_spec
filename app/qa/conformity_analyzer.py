@@ -21,23 +21,68 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+from app.qa.conformity_coverage import extract_id_tokens, normalize_id
+
 # ── Spreadsheet reading ────────────────────────────────────────────
+
+# ODS reading is done via lxml directly on content.xml, NOT via odfpy's own
+# Document/SAX loader. odfpy's strict SAX parser catches malformed-XML
+# exceptions (a duplicate attribute is common in real-world .ods files —
+# e.g. exported by some non-LibreOffice tools) INTERNALLY and just prints
+# "SAX FAILED TO PARSE" — it never re-raises, and there is no reliable way
+# for a caller to detect the truncation from the outside (odfpy's own
+# lxml-repair-and-retry recipe re-serializes the "fixed" XML and hands it
+# BACK to the same strict SAX parser, which still chokes on it in
+# practice). Confirmed on a real supplier .ods: raw content.xml genuinely
+# contains 1164 <table:table-row> elements, but odfpy — even after the
+# repair-and-retry — only ever recovers 767 of them (a 34% silent data
+# loss, with no error, warning, or flag surfaced anywhere). lxml's
+# recover=True mode parses the WHOLE malformed document in one pass with
+# no data loss, so building the sheet structure directly from its tree
+# avoids the problem at the source instead of working around odfpy.
+_ODS_TABLE_NS = "urn:oasis:names:tc:opendocument:xmlns:table:1.0"
+_ODS_TEXT_NS = "urn:oasis:names:tc:opendocument:xmlns:text:1.0"
+
+
+def _ods_tag(local: str, ns: str = _ODS_TABLE_NS) -> str:
+    return f"{{{ns}}}{local}"
+
+
+def _load_ods_content_root(filepath: str):
+    """Parse an ODS file's content.xml via lxml (recover=True) and return
+    the root element — see the _read_ods module comment for why this
+    bypasses odfpy's own loader entirely."""
+    import zipfile
+    from lxml import etree
+
+    with zipfile.ZipFile(filepath) as z:
+        data = z.read("content.xml")
+    parser = etree.XMLParser(recover=True, huge_tree=True)
+    return etree.fromstring(data, parser=parser)
+
+
+def _read_ods_sheet_names(filepath: str) -> List[str]:
+    root = _load_ods_content_root(filepath)
+    return [
+        table.get(_ods_tag("name")) or f"Sheet_{i}"
+        for i, table in enumerate(root.iter(_ods_tag("table")))
+    ]
+
+
 def _read_ods(filepath: str) -> List[List[List[str]]]:
     """
-    Read an ODS file using odfpy and return a list of sheets.
-    Each sheet is a list of rows; each row is a list of cell strings.
-    Handles number-columns-repeated, number-rows-repeated, and number-rows-spanned
-    (merged cells) attributes correctly.
+    Read an ODS file's content.xml directly via lxml and return a list of
+    sheets. Each sheet is a list of rows; each row is a list of cell
+    strings. Handles number-columns-repeated, number-rows-repeated,
+    number-rows-spanned (vertically merged cells), and covered-table-cell
+    (horizontally merged placeholder) correctly.
     """
-    from odf.table import Table, TableRow, TableCell
-    from odf.text import P
+    from lxml.etree import QName
 
-    doc = _safe_ods_load(filepath)
-    tables = doc.getElementsByType(Table)
+    root = _load_ods_content_root(filepath)
     sheets: List[List[List[str]]] = []
 
-    for table in tables:
-        rows = table.getElementsByType(TableRow)
+    for table in root.iter(_ods_tag("table")):
         sheet_data: List[List[str]] = []
 
         # Track rowspan (merged cell) values: {col_index: (value, remaining_rows)}
@@ -45,38 +90,62 @@ def _read_ods(filepath: str) -> List[List[List[str]]]:
         # to the same column in subsequent rows.
         rowspan_values: Dict[int, Tuple[str, int]] = {}
 
-        for row in rows:
-            # Skip hidden/filtered rows — AutoFilter sets visibility='filter',
-            # manually hidden rows have visibility='collapse'.
-            # These rows are not visible to the user in the spreadsheet application
-            # but are still present in the ODS XML, so odfpy reads them by default.
-            visibility = row.getAttribute("visibility") or ""
-            if visibility in ("filter", "collapse"):
-                # Decrement rowspan counters for skipped rows
-                rowspan_values = {ci: (v, r - 1) for ci, (v, r) in rowspan_values.items() if r > 1}
-                continue
-
-            cells = row.getElementsByType(TableCell)
+        # Rows can be wrapped in a <table:table-row-group> (LibreOffice/Excel
+        # row OUTLINE grouping — a collapsible section) — a real supplier
+        # matrix with hundreds of requirements is a prime candidate for this,
+        # and it nests every one of its rows a level deeper than table's own
+        # direct children. table.findall("table-row") (direct children only)
+        # silently missed all of them: confirmed on a real supplier .ods
+        # where the entire 425-requirement matrix — 936 of the sheet's 975
+        # real rows — lived inside 2 such groups, leaving only 39 unrelated
+        # rows visible to the old direct-children search (reported as "0
+        # requirements found" even though every answer was genuinely
+        # present in the file). iter() recurses through any nesting depth.
+        #
+        # Row visibility ('filter' = hidden by an AutoFilter view, 'collapse'
+        # = a collapsed outline group) is likewise just the state of
+        # whoever last viewed the file in a spreadsheet app — never a
+        # signal that the data is invalid or should be ignored. The SAME
+        # real .ods had its ENTIRE answer matrix marked visibility="collapse"
+        # (it was saved with the outline collapsed) — skipping those rows,
+        # as earlier code did, silently discarded 100% of the real answers.
+        # An automated reader's job is to see every real answer regardless
+        # of how it was last displayed, so no row is ever skipped here.
+        for row in table.iter(_ods_tag("table-row")):
+            # A horizontally-merged cell is written as ONE real
+            # <table:table-cell> (holding the value, with
+            # number-columns-spanned="N") immediately followed by (N-1)
+            # <table:covered-table-cell/> placeholders that occupy the
+            # remaining spanned columns. Skipping those placeholders would
+            # shift every following cell in the row left by (N-1) columns —
+            # confirmed on a real supplier .ods where this silently turned
+            # a genuine NOK answer into an unrelated column's text,
+            # misclassifying the row as EMPTY. Iterating the row's direct
+            # children in document order and including covered-table-cell
+            # (as an empty placeholder, still advancing col_idx) keeps
+            # every real cell in its true column.
             expanded: List[str] = []
             col_idx = 0
             new_rowspan_values: Dict[int, Tuple[str, int]] = {}
 
-            for cell in cells:
-                # Extract text from all paragraphs
-                ps = cell.getElementsByType(P)
-                text_parts: List[str] = []
-                for p in ps:
-                    for child in p.childNodes:
-                        if hasattr(child, "data"):
-                            text_parts.append(str(child.data))
-                        elif hasattr(child, "firstChild") and child.firstChild and hasattr(child.firstChild, "data"):
-                            text_parts.append(str(child.firstChild.data))
-                text = " ".join(text_parts).strip()
+            for cell in row:
+                local = QName(cell).localname
+                if local not in ("table-cell", "covered-table-cell"):
+                    continue
+                is_covered = local == "covered-table-cell"
+                if is_covered:
+                    text = ""
+                else:
+                    # Extract text from all paragraphs (itertext() also
+                    # picks up text nested inside formatting spans, unlike
+                    # a shallow one-level child check).
+                    text_parts = ["".join(p.itertext()) for p in cell.iter(_ods_tag("p", _ODS_TEXT_NS))]
+                    text = " ".join(text_parts).strip()
 
-                repeat = int(cell.getAttribute("numbercolumnsrepeated") or "1")
+                repeat = int(cell.get(_ods_tag("number-columns-repeated")) or "1")
                 # Cap repeat to avoid huge memory usage (empty trailing cells)
                 repeat = min(repeat, 500)
-                rowspan = int(cell.getAttribute("numberrowsspanned") or "1")
+                rowspan = 1 if is_covered else int(cell.get(_ods_tag("number-rows-spanned")) or "1")
 
                 for _ in range(repeat):
                     # Check if this column has an active rowspan value
@@ -103,7 +172,7 @@ def _read_ods(filepath: str) -> List[List[List[str]]]:
             rowspan_values = new_rowspan_values
 
             # Handle number-rows-repeated attribute (empty rows can be repeated)
-            row_repeat = row.getAttribute("numberrowsrepeated")
+            row_repeat = row.get(_ods_tag("number-rows-repeated"))
             row_repeat = int(row_repeat) if row_repeat else 1
             row_repeat = min(row_repeat, 10000)  # Cap to avoid memory issues
             for _ in range(row_repeat):
@@ -119,120 +188,124 @@ def _read_xlsx(filepath: str) -> List[List[List[str]]]:
     Each sheet is a list of rows; each row is a list of cell strings.
 
     Handles:
-    - Hidden rows (AutoFilter, manually hidden) — skipped
     - Hidden columns — skipped (replaced with empty string)
     - Merged cells — values propagated from top-left to all cells in range
+
+    Rows are NEVER skipped for being hidden (AutoFilter view or manually
+    hidden): that state only reflects how whoever last viewed the file in
+    Excel had it displayed, not whether the data is real. Confirmed on a
+    real supplier submission (Gentex): the .xlsx had an AutoFilter/manual
+    hide active that skipped 176 of 211 real answer rows — every one of
+    them a genuine "OK" — reporting only the 35 NOK/NA rows that happened
+    to stay visible, and silently making a mostly-compliant matrix look
+    like it had zero OK answers at all.
     """
     from openpyxl import load_workbook
     from openpyxl.utils import get_column_letter
 
-    wb = load_workbook(filepath, data_only=True)
+    wb = _load_xlsx_workbook(filepath, data_only=True)
     sheets: List[List[List[str]]] = []
 
-    for ws in wb.worksheets:
-        # Detect hidden columns
-        hidden_cols: set = set()
-        for ci in range(1, ws.max_column + 1):
-            col_letter = get_column_letter(ci)
-            col_dim = ws.column_dimensions.get(col_letter)
-            if col_dim and col_dim.hidden:
-                hidden_cols.add(ci)  # 1-indexed
+    try:
+        worksheets = wb.worksheets
+        for ws in worksheets:
+            # Detect hidden columns
+            hidden_cols: set = set()
+            for ci in range(1, ws.max_column + 1):
+                col_letter = get_column_letter(ci)
+                col_dim = ws.column_dimensions.get(col_letter)
+                if col_dim and col_dim.hidden:
+                    hidden_cols.add(ci)  # 1-indexed
 
-        # Build merged cell value map: (row, col) → value
-        # Propagate the top-left cell value to all cells in the merge range
-        merged_values: Dict[Tuple[int, int], str] = {}
-        for mc in ws.merged_cells.ranges:
-            top_left = ws.cell(row=mc.min_row, column=mc.min_col)
-            val = str(top_left.value).strip() if top_left.value is not None else ""
-            if val:
-                for ri in range(mc.min_row, mc.max_row + 1):
-                    for ci in range(mc.min_col, mc.max_col + 1):
-                        merged_values[(ri, ci)] = val
+            # Build merged cell value map: (row, col) → value
+            # Propagate the top-left cell value to all cells in the merge range
+            merged_values: Dict[Tuple[int, int], str] = {}
+            for mc in ws.merged_cells.ranges:
+                top_left = ws.cell(row=mc.min_row, column=mc.min_col)
+                val = str(top_left.value).strip() if top_left.value is not None else ""
+                if val:
+                    for ri in range(mc.min_row, mc.max_row + 1):
+                        for ci in range(mc.min_col, mc.max_col + 1):
+                            merged_values[(ri, ci)] = val
 
-        sheet_data: List[List[str]] = []
-        for row_idx in range(1, ws.max_row + 1):
-            # Skip hidden rows (manually hidden or filtered out by AutoFilter)
-            row_dim = ws.row_dimensions.get(row_idx)
-            if row_dim and row_dim.hidden:
-                continue
-
-            row_values: List[str] = []
-            for col_idx in range(1, ws.max_column + 1):
-                # Skip hidden columns — replace with empty string
-                if col_idx in hidden_cols:
-                    row_values.append("")
-                    continue
-                # Check merged cell value first
-                if (row_idx, col_idx) in merged_values:
-                    row_values.append(merged_values[(row_idx, col_idx)])
-                    continue
-                cell = ws.cell(row=row_idx, column=col_idx)
-                val = str(cell.value).strip() if cell.value is not None else ""
-                row_values.append(val)
-            sheet_data.append(row_values)
-        sheets.append(sheet_data)
-
+            sheet_data: List[List[str]] = []
+            for row_idx in range(1, ws.max_row + 1):
+                row_values: List[str] = []
+                for col_idx in range(1, ws.max_column + 1):
+                    # Skip hidden columns — replace with empty string
+                    if col_idx in hidden_cols:
+                        row_values.append("")
+                        continue
+                    # Check merged cell value first
+                    if (row_idx, col_idx) in merged_values:
+                        row_values.append(merged_values[(row_idx, col_idx)])
+                        continue
+                    cell = ws.cell(row=row_idx, column=col_idx)
+                    val = str(cell.value).strip() if cell.value is not None else ""
+                    row_values.append(val)
+                sheet_data.append(row_values)
+            sheets.append(sheet_data)
+    finally:
+        wb.close()
     return sheets
 
 
-def _fix_ods_xml(filepath: str) -> str:
+def _load_xlsx_workbook(filepath: str, *, data_only: bool = True):
+    """Load an OOXML workbook, tolerating invalid non-filtering filter metadata.
+
+    Excel files from some suppliers store a space as the value of a custom
+    AutoFilter criterion. That is not a valid criterion according to OOXML,
+    and openpyxl 3.1.2 rejects the *entire workbook* while parsing worksheet
+    XML—even though the cells and the rest of the workbook are valid. Filter
+    state is only a display preference for this analyzer, so when that specific
+    unsupported metadata is present, retry a sanitized in-memory package. The
+    uploaded file itself is never changed.
     """
-    Fix malformed ODS XML (e.g., duplicate attributes) by re-parsing with lxml
-    recovery mode.  Returns the path to a temporary fixed ODS file.
+    from zipfile import ZIP_DEFLATED, ZipFile
 
-    odfpy uses a strict SAX parser that crashes on duplicate attributes.
-    lxml's recover=True keeps the last value for duplicates and silently fixes
-    other well-formedness issues.
-    """
-    import zipfile
-    import tempfile
-    import os
-    from lxml import etree
+    from openpyxl import load_workbook
+    from openpyxl.utils.exceptions import InvalidFileException
 
-    tmpdir = tempfile.mkdtemp(prefix="leon_ods_fix_")
-    tmp_ods = os.path.join(tmpdir, os.path.basename(filepath))
+    load_error = None
+    try:
+        return load_workbook(filepath, data_only=data_only)
+    except (ValueError, InvalidFileException) as exc:
+        # Limit compatibility retry to the precise openpyxl validation failure.
+        cause = exc
+        is_invalid_filter_value = False
+        while cause is not None:
+            if "Value must be either numerical or a string containing a wildcard" in str(cause):
+                is_invalid_filter_value = True
+                break
+            cause = cause.__cause__
+        if not is_invalid_filter_value:
+            raise
+        load_error = exc
 
-    with zipfile.ZipFile(filepath, "r") as zin:
-        with zipfile.ZipFile(tmp_ods, "w", zipfile.ZIP_DEFLATED) as zout:
-            for item in zin.infolist():
-                data = zin.read(item.filename)
-                # Fix XML files that may have duplicate attributes
-                if item.filename.endswith(".xml"):
-                    parser = etree.XMLParser(recover=True, huge_tree=True)
-                    tree = etree.fromstring(data, parser=parser)
-                    if tree is not None:
-                        data = etree.tostring(
-                            tree, encoding="UTF-8", xml_declaration=True
-                        )
-                zout.writestr(item, data)
+    import io
+    import re
 
-    return tmp_ods
+    repaired = io.BytesIO()
+    changed = False
+    with ZipFile(filepath, "r") as source, ZipFile(repaired, "w", ZIP_DEFLATED) as target:
+        for entry in source.infolist():
+            data = source.read(entry.filename)
+            if entry.filename.startswith("xl/worksheets/") and entry.filename.endswith(".xml"):
+                # Custom-filter values are XML attributes; preserve every
+                # other byte and remove only whitespace-only invalid values.
+                data, count = re.subn(
+                    rb'<customFilter\b(?=[^>]*\bval\s*=\s*["\']\s+["\'])[^>]*/>',
+                    b"",
+                    data,
+                )
+                changed = changed or count > 0
+            target.writestr(entry, data)
 
-
-def _safe_ods_load(filepath: str):
-    """
-    Load an ODS file with odfpy, falling back to a fixed version if the
-    original has malformed XML (duplicate attributes, etc.).
-
-    Also suppresses odfpy's internal print() on parse errors, which crashes
-    on Windows cp1252 consoles when the XML contains non-cp1252 characters.
-    """
-    import contextlib
-    import io as _io
-    from odf.opendocument import load
-
-    # Suppress odfpy's print() on SAX errors (crashes on Windows cp1252)
-    devnull = _io.StringIO()
-    with contextlib.redirect_stdout(devnull):
-        try:
-            return load(filepath)
-        except Exception:
-            pass
-
-    # Fallback: fix the XML and retry
-    fixed_path = _fix_ods_xml(filepath)
-    with contextlib.redirect_stdout(devnull):
-        return load(fixed_path)
+    if not changed:
+        # The error was not caused by the known supplier filter metadata.
+        raise load_error
+    repaired.seek(0)
+    return load_workbook(repaired, data_only=data_only)
 
 
 def read_spreadsheet(filepath: str) -> Tuple[List[str], List[List[List[str]]]]:
@@ -242,16 +315,12 @@ def read_spreadsheet(filepath: str) -> Tuple[List[str], List[List[List[str]]]]:
     """
     ext = filepath.lower().rsplit(".", 1)[-1]
     if ext == "ods":
-        # odfpy doesn't give sheet names directly; extract from tables
-        from odf.table import Table
-        doc = _safe_ods_load(filepath)
-        tables = doc.getElementsByType(Table)
-        sheet_names = [t.getAttribute("name") or f"Sheet_{i}" for i, t in enumerate(tables)]
+        sheet_names = _read_ods_sheet_names(filepath)
         sheets_data = _read_ods(filepath)
     elif ext in ("xlsx", "xlsm", "xls"):
-        from openpyxl import load_workbook
-        wb = load_workbook(filepath, data_only=True)
+        wb = _load_xlsx_workbook(filepath, data_only=True)
         sheet_names = wb.sheetnames
+        wb.close()
         sheets_data = _read_xlsx(filepath)
     else:
         raise ValueError(f"Unsupported file extension: .{ext}")
@@ -267,19 +336,70 @@ _CONFORMITY_PATTERNS = [
     r"conformity\s*fnr",
     r"supplier\s*conformity",
     r"conformit[eé]\s*(supplier|fournisseur)",
+    r"^conformity\s*matrix$",
+    r"^matrice\s*de\s*conformit[eé]$",
+    r"^(?:conformit[eé]|conformity)\s*/\s*(?:commentaires?|comments?)$",
+    r"^conformit[eé]\s*/\s*commentaires?\s*/\s*conformity\s*/\s*comments?$",
+    r"^conformity\s*/\s*comments?\s*/\s*conformit[eé]\s*/\s*commentaires?$",
     r"statut\s*fnr",
     r"validation\s*fnr",
     r"conformit[eé]\s*(g[eé]n[eé]ral|global)",
-    r"conformity\s*matrix",
-    r"conformit[eé]\s*(matrix|matrice)",
+    r"^(?!.*(?:matrix|matrice))conformit[eé](?:\s*fnr)?$",
     r"supplier\s*response",
     r"supplier\s*status",
+    r"^(?!.*(?:stellantis|psa|test|supplier test)).*\bstatus\b.*$",
+    r"\banswer\b",
+    r"\bresponse\b",
+    r"^(supplier\s*)?(answer|reply|response)$",
+    r"^supplier\s*answer\b",
+    r"^conformit[eé]\s*/\s*commentaires?(?:\s*/\s*conformity\s*/\s*comments?)?$",
+    r"^conformity\s*/\s*comments?(?:\s*/\s*conformit[eé]\s*/\s*commentaires?)?$",
+    r"^conformit[eé]\s*/\s*commentaires?(?:\s*/\s*conformity\s*/\s*comments?)?$",
+    r"^conformity\s*/\s*comments?(?:\s*/\s*conformit[eé]\s*/\s*commentaires?)?$",
+    r"supplier\s*(assessment|evaluation|response|answer|declaration)",
+    r"(compliance|conformity)\s*(status|result|assessment|level)",
+    r"(assessment|evaluation|verification)\s*(result|status|outcome)",
+    r"^(assessment|evaluation|status|result|answer|verdict|rating)$",
+    r"\b(compliance|conformity)\s*(assessment|evaluation|declaration|level|rating|result|status)\b",
+    r"^(compliance|conformity)(\s*(assessment|evaluation|declaration|level|rating|result|status))?$",
+    r"^assessment$",
+    r"^evaluation$",
+    r"^supplier\s+evaluation$",
+    r"^supplier\s+assessment$",
+    r"^(supplier\s*)?(compliant|compliance\s*status)$",
+    r"^meets?\s*(requirement)?$",
+    r"^(status|result|answer|response|verdict|rating|compliance|conformity)$",
     r"statut\s*(supplier|fournisseur)",
+    r"^(gentex\s+)?conformity$",
+    r"^conformity\s+gentex$",
+    r"^gentex\s+(response|answer|status)$",
+    r"^engagement(?!\s*minimum)",       # "Engagement" / "Engagement\nCommitment" — supplier conformity status
+    r"^commitment$",                    # exact "Commitment" (not "Minimum commitment")
+    r"^conformit[eé]",                  # bare "Conformité" / "Conformité\nConformity" column header
+    r"^conformity",                     # bare "Conformity" column header
     r"^ok$",
     r"^nok$",
+    r"^gentex\s*conformity$",
+    r"^conformity\s*gentex$",
+    r"^gentex\s*response$",
 ]
 
 _COMMENT_PATTERNS = [
+    r"^commentaires?\b",                # starts with "Commentaire(s)" — "Commentaires\nComments", "Commentaires FNR", …
+    r"^comments?\b",                    # starts with "Comment" / "Comments"
+    r"^(?:conformit[eé]|conformity)\s*/\s*(?:commentaires?|comments?)$",
+    r"^conformit[eé]\s*/\s*commentaires?\s*/\s*conformity\s*/\s*comments?$",
+    r"^conformity\s*/\s*comments?\s*/\s*conformit[eé]\s*/\s*commentaires?$",
+    r"^conformit[eé]\s*/\s*commentaires?(?:\s*/\s*conformity\s*/\s*comments?)?$",
+    r"^conformity\s*/\s*comments?(?:\s*/\s*conformit[eé]\s*/\s*commentaires?)?$",
+    r"^remarques?\b",
+    r"^supplier\s*comment$",
+    r"^(supplier\s*)?(notes?|remarks?|observations?|justification|rationale|evidence|explanation|feedback|deviation|action|response)(\s*/\s*(evidence|details?|proof))?$",
+    r"(supplier|vendor|manufacturer)\s*(notes?|remarks?|observations?|justification|rationale|evidence|explanation|feedback|deviation|action)",
+    r"^(reason|details?|proof|evidence(?:\s*/\s*proof)?|verification\s*evidence|implementation\s*notes?)$",
+    r"^evidence\s*/\s*proof$",
+    r"comments?\s*(from|by)\s*(supplier|fournisseur)",  # "Comments from supplier"
+    r"\bsupplier\s*comments?\b",
     r"commentaires?\s*fnr",
     r"comments?\s*fnr",
     r"supplier\s*comments?",
@@ -299,9 +419,25 @@ _COMMENT_PATTERNS = [
 _STELLANTIS_VERDICT_PATTERNS = [
     r"commentaires?\s*stellantis",
     r"statut\s*stellantis",
+    r"statut\s*status\s*stellantis",
+    r"^statut\s*/\s*status\s*/\s*stellantis$",
+    r"^statut\s*stellantis\s*/\s*stellantis'?s\s*status$",
+    r"(?:statut|status)(?:\s+status)?\s*(?:stellantis|psa)",
+    r"(?:statut|status)\s+stellantis",
     r"stellantis\s*comments?",
     r"stellantis\s*status",
     r"stellantis\s*remark",
+    r"statut\s*psa",          # "Statut PSA / PSA's status"
+    r"psa['’]?s\s*status",
+    r"psa\s*status",
+]
+
+# Test-result fields are separate from the supplier's overall conformity
+# commitment. Do not let broad `status` matching fold them into the main
+# conformity result.
+_TEST_STATUS_PATTERNS = [
+    r"(?:supplier\s+)?test'?s?\s*status",
+    r"statut\s*test\s*fnr",
 ]
 
 # Version applicable column — "Version Version" / "Version appliquée Applied version"
@@ -324,12 +460,43 @@ _VERSION_APPLICABLE_PATTERNS = [
 ]
 
 _REQ_ID_PATTERNS = [
+    r"^(requirement\s*(id|identifier|no\.?|number|#)|req\s*(id|identifier|no\.?|number|#))$",
     r"req[-_]?\d",
     r"exigence",
     r"requirement",
     r"liste\s*des\s*doc",
     r"r[eé]f[eé]rence",
     r"reference",
+    r"^id$",
+    r"^feature$",
+]
+
+# Description column — "Libellé de la dernière version de l'exigence" / "Last
+# Requirement Description" (the requirement text, used for display + coverage).
+_DESCRIPTION_PATTERNS = [
+    r"libell[eé]",
+    r"description",
+    r"descriptif",
+    r"requirement\s*description",
+    r"last\s*requirement\s*description",
+    r"(safety|system|technical|functional)?\s*requirement\s*(text|statement|details?|description)",
+    r"^(requirement|specification)\s*(text|details?|statement)$",
+    r"^requirement$",
+    r"^wording$",
+    r"title\s*of\s*requirement",
+    r"^requirement\s*text$",
+    r"^(safety|system|technical|functional)\s+requirement$",
+    r"^designation$",
+]
+
+# Reference column — "Référence" (spec-side requirement id, column B in the
+# standard Stellantis layout).
+_REFERENCE_PATTERNS = [
+    r"r[eé]f[eé]rence",
+    r"reference",
+    r"^ref$",
+    r"^document$",
+    r"^reference$",
 ]
 
 
@@ -372,27 +539,134 @@ def _find_header_row(sheet: List[List[str]], max_scan: int = 50) -> Optional[int
     """
     best_row = None
     best_score = 0
+    has_labeled_header = any(
+        _match_any(cell, _COMMENT_PATTERNS)
+        for row in sheet[:max_scan]
+        for cell in row
+    )
+    has_combined_header = any(
+        _match_any(cell, _CONFORMITY_PATTERNS)
+        and _match_any(cell, _COMMENT_PATTERNS)
+        for row in sheet[:max_scan]
+        for cell in row
+    )
+    has_verdict_header = any(
+        _match_any(cell, _STELLANTIS_VERDICT_PATTERNS)
+        or _match_any(cell, _TEST_STATUS_PATTERNS)
+        for row in sheet[:max_scan]
+        for cell in row
+    )
+    # Score header rows using both recognizable labels and the data beneath
+    # them. Real supplier files often rename every column, so content evidence
+    # (status-like cells below a candidate header) is a first-class signal.
     for ri, row in enumerate(sheet[:max_scan]):
+        # A row containing both an identifier and a verdict is data, not a
+        # possible header, even if its text matches a broad label pattern.
+        row_has_id = any(_looks_like_req_id_value(_normalize(cell)) for cell in row if cell)
+        row_has_status = any(_looks_like_conformity_value(_normalize(cell)) for cell in row if cell)
+        if row_has_id and row_has_status:
+            continue
         has_conformity = False
         has_comment = False
+        has_requirement_context = False
         has_ok_nok = False
+        has_non_status_context = False
+        has_verdict_label = False
+        has_test_label = False
         for cell in row:
             norm = _normalize(cell)
             if norm == "ok" or norm == "nok":
                 has_ok_nok = True
-            if _match_any(cell, _CONFORMITY_PATTERNS):
+            # Status words are common row values (e.g. "Compliant", "Pass")
+            # and must not make a data row look like a header. Header labels
+            # such as "Compliant status" remain eligible because they are not
+            # themselves conformity values.
+            is_status_value = _looks_like_conformity_value(norm)
+            # A merged group title such as "Conformity Matrix" describes
+            # the table but is not a response-column header. Treating it as
+            # one lets cover pages and summary bands outrank the real header.
+            group_title = (
+                "conformity matrix" in norm
+                or "matrice de conformite" in norm
+            )
+            if (
+                not is_status_value
+                and not group_title
+                and not _match_any(cell, _STELLANTIS_VERDICT_PATTERNS)
+                and not _match_any(cell, _TEST_STATUS_PATTERNS)
+                and _match_any(cell, _CONFORMITY_PATTERNS)
+            ):
                 has_conformity = True
             if _match_any(cell, _COMMENT_PATTERNS):
                 has_comment = True
-        # Gentex-style: OK/NOK columns + Supplier comment
-        if has_ok_nok and has_comment:
-            return ri
-        score = int(has_conformity) + int(has_comment)
+            if _match_any(cell, _STELLANTIS_VERDICT_PATTERNS):
+                has_verdict_label = True
+            if _match_any(cell, _TEST_STATUS_PATTERNS):
+                has_test_label = True
+            if (_match_any(cell, _REQ_ID_PATTERNS)
+                    or _match_any(cell, _DESCRIPTION_PATTERNS)
+                    or _match_any(cell, _REFERENCE_PATTERNS)):
+                has_requirement_context = True
+            if (not is_status_value
+                    and not _match_any(cell, _CONFORMITY_PATTERNS)
+                    and not _match_any(cell, _COMMENT_PATTERNS)
+                    and not _match_any(cell, _STELLANTIS_VERDICT_PATTERNS)
+                    and not _match_any(cell, _TEST_STATUS_PATTERNS)
+                    and norm):
+                has_non_status_context = True
+        content_conf, content_comments = _detect_conformity_columns_by_content(
+            sheet, ri + 1, max_rows=40
+        )
+        # A row is likely the header when its following rows contain a
+        # categorical conformity column and a distinct free-text column.
+        content_score = (3 if content_conf else 0) + (1 if content_comments else 0)
+        has_explicit_verdict_label = has_verdict_label or has_test_label
+        # If any row has explicit comment/verdict labels, do not allow a
+        # merged group-title row to outrank the actual column header based
+        # only on statuses/text found below it.
+        has_verdict_label = has_verdict_label or any(
+            _match_any(cell, _STELLANTIS_VERDICT_PATTERNS)
+            or _match_any(cell, _TEST_STATUS_PATTERNS)
+            for cell in row
+        )
+        if has_labeled_header and not (has_comment or has_verdict_label or has_combined_header):
+            content_score = 0
+        if has_labeled_header and has_comment and not has_explicit_verdict_label:
+            content_score += 4
+        if has_verdict_header and not has_explicit_verdict_label:
+            content_score = 0
+        if has_verdict_header and has_explicit_verdict_label:
+            content_score += 8
+        if group_title:
+            content_score = 0
+        if has_explicit_verdict_label:
+            label_score_boost = 3
+        else:
+            label_score_boost = 0
+        label_score = (4 * int(has_conformity) + 3 * int(has_comment)
+                       + 2 * int(has_requirement_context) + label_score_boost)
+        if has_non_status_context and not group_title:
+            label_score += 4
+        if has_conformity and has_comment and has_requirement_context:
+            label_score += 8
+        if has_conformity and has_comment and has_non_status_context:
+            label_score += 2
+        if (has_combined_header and has_conformity and has_requirement_context
+            and not group_title):
+            label_score += 5
+        if has_labeled_header and not has_comment:
+            # Prefer the actual column header with supplier-comment labels
+            # over an upper merged title that names only the status group.
+            label_score -= 2
+        # Exact OK/NOK split columns are a meaningful status signal, but only
+        # count them as a header when a separate comment or data profile also
+        # supports that interpretation (to avoid matching ordinary prose).
+        if has_ok_nok and (has_comment or content_conf):
+            label_score += 4
+        score = label_score + content_score
         if score > best_score:
             best_score = score
             best_row = ri
-        if score == 2:
-            return ri  # Perfect match
     return best_row if best_score > 0 else None
 
 
@@ -416,6 +690,8 @@ def _find_columns(header_row: List[str]) -> Dict[str, List[int]]:
     req_id_cols: List[int] = []
     version_cols: List[int] = []
     version_applicable_cols: List[int] = []
+    description_cols: List[int] = []
+    reference_cols: List[int] = []
     ok_cols: List[int] = []  # Gentex-style: separate OK column
     nok_cols: List[int] = []  # Gentex-style: separate NOK column
 
@@ -426,7 +702,14 @@ def _find_columns(header_row: List[str]) -> Dict[str, List[int]]:
             ok_cols.append(ci)
         elif norm == "nok":
             nok_cols.append(ci)
-        elif _match_any(cell, _CONFORMITY_PATTERNS):
+        elif (
+            _match_any(cell, _CONFORMITY_PATTERNS)
+            and "conformity matrix" not in norm
+            and "matrice de conformite" not in norm
+            and not _match_any(cell, _COMMENT_PATTERNS)
+            and not _match_any(cell, _STELLANTIS_VERDICT_PATTERNS)
+            and not _match_any(cell, _TEST_STATUS_PATTERNS)
+        ):
             conformity_cols.append(ci)
         # Check version APPLICABLE first (before comment) — in some ODS files,
         # the "Version applicable" column header from a sub-header row says
@@ -436,12 +719,23 @@ def _find_columns(header_row: List[str]) -> Dict[str, List[int]]:
             version_applicable_cols.append(ci)
         if _match_any(cell, _COMMENT_PATTERNS):
             comment_cols.append(ci)
-        if _match_any(cell, _STELLANTIS_VERDICT_PATTERNS):
+        if (_match_any(cell, _STELLANTIS_VERDICT_PATTERNS)
+                and not _match_any(cell, _TEST_STATUS_PATTERNS)):
             stellantis_verdict_cols.append(ci)
         if _match_any(cell, _REQ_ID_PATTERNS):
             req_id_cols.append(ci)
         if _match_any(cell, _VERSION_PATTERNS):
             version_cols.append(ci)
+        if _match_any(cell, _DESCRIPTION_PATTERNS):
+            description_cols.append(ci)
+        if _match_any(cell, _REFERENCE_PATTERNS):
+            reference_cols.append(ci)
+
+    # "Reference" and the abbreviated "Ref" identify source-spec references,
+    # not supplier requirement IDs. The broad ID-header patterns also match
+    # the word "reference", so remove these columns from the ID candidates.
+    req_id_cols = [ci for ci in req_id_cols if ci not in reference_cols
+                   or _normalize(header_row[ci]) in {"id", "requirement id", "requirement identifier"}]
 
     # Remove version_applicable_cols from version_cols (they overlap with "Version appliquée")
     version_cols = [v for v in version_cols if v not in version_applicable_cols]
@@ -449,6 +743,15 @@ def _find_columns(header_row: List[str]) -> Dict[str, List[int]]:
     # Remove version_applicable_cols from comment_cols (in ODS, the sub-header
     # may label the "Version applicable" column as "Commentaires FNR")
     comment_cols = [c for c in comment_cols if c not in version_applicable_cols]
+
+    # Remove overlapping classifications. A column like "Statut Test FNR /
+    # Supplier Test's status" matches generic conformity wording, but it is a
+    # per-delivery test result, not the primary conformity response.
+    conformity_cols = [
+        c for c in conformity_cols
+        if c not in stellantis_verdict_cols
+        and not _match_any(header_row[c], _TEST_STATUS_PATTERNS)
+    ]
 
     # If we found OK/NOK separate column pairs, add them to conformity_cols
     # as pairs (ok_col, nok_col) — the extraction logic will handle them
@@ -466,6 +769,8 @@ def _find_columns(header_row: List[str]) -> Dict[str, List[int]]:
         "req_id": req_id_cols,
         "version": version_cols,
         "version_applicable": version_applicable_cols,
+        "description": description_cols,
+        "reference": reference_cols,
         "ok_cols": ok_cols,
         "nok_cols": nok_cols,
     }
@@ -481,6 +786,15 @@ def _find_data_start(sheet: List[List[str]], header_row_idx: int,
     If col_mapping is provided, also checks req_id columns and conformity columns
     (some files like Gentex have col 0 empty but data in col 2+).
     """
+    # A structural marker is more reliable than a non-empty first column: many
+    # matrices place legends and status totals above the requirements table.
+    for ri in range(header_row_idx + 1, min(len(sheet), header_row_idx + 100)):
+        if any("debut exigences" in _normalize(cell)
+             or "debut exigence" in _normalize(cell)
+             or "requirements start" in _normalize(cell)
+             for cell in sheet[ri] if cell):
+            return ri + 1
+
     # Determine which columns to check for data presence
     check_cols = [0]  # Always check col 0
     if col_mapping:
@@ -516,10 +830,23 @@ def _find_data_start(sheet: List[List[str]], header_row_idx: int,
 
 # ── Conformity value classification ────────────────────────────────
 
-_OK_VALUES = {"ok", "conforme", "conform", "c", "yes", "oui", "/", "ko→ok"}
-_NOK_VALUES = {"nok", "non conforme", "non conform", "nc", "no", "non", "ko"}
+_OK_VALUES = {
+    "ok", "conforme", "conform", "c", "yes", "oui", "/", "ko→ok",
+    "pass", "passed", "compliant", "complies", "compliance", "conforms",
+    "conformant", "meets", "met", "satisfied", "acceptable", "approved",
+    "fully compliant", "fully conforms", "yes - compliant",
+    "accepted", "agreed", "provided",
+}
+_NOK_VALUES = {
+    "nok", "non conforme", "non conform", "nc", "no", "non", "ko",
+    "fail", "failed", "not compliant", "non compliant", "non-compliant", "noncompliant",
+    "does not comply", "does not conform", "not met", "not satisfied",
+    "not acceptable", "rejected", "not approved", "partial", "partially compliant",
+    "partially conforms",
+    "not accepted", "rejected",
+}
 _NA_VALUES = {"na", "n/a", "not applicable", "non applicable", "non app",
-              "non implémenté", "non implemente", "non implante"}
+              "non implémenté", "non implemente", "non implante", "sans objet"}
 _DEV_VALUES = {"deviation", "déviation", "deviation accepted", "écart",
                "ecart", "waiver", "waived", "dev"}
 
@@ -532,6 +859,29 @@ _DOMAIN_CODES = {
     "touch", "all",
 }
 
+# Negation phrasing that indicates genuine non-conformity even when embedded
+# in longer free text or prefixed by a domain code (e.g. "Not OK, needs
+# rework", "EE: NOK", "currently not compliant"). Checked BEFORE the OK
+# regex below so a negated statement is never misread as OK just because the
+# bare word "ok" also appears elsewhere in it (a 2026 audit against real
+# Stellantis phrasing found "Not OK" and "EE: NOK" both silently fell through
+# to EMPTY, and "not compliant" text containing a stray "ok" was misread as
+# OK — this single check fixes both directions).
+_NOK_NEGATION_RE = re.compile(
+    r"\bnot\s+ok(?:ay)?\b|\bnot\s+conform|\bnot\s+compliant\b|"
+    r"\bdoes(?:n'?t| not)\s+(?:meet|comply|conform)|\bfails?\s+to\b|"
+    r"\bnon\s+conforme?\b|\bnok\b"
+)
+
+# "Uncertain/pending" language — the item hasn't actually been assessed yet
+# (as opposed to genuinely N/A or genuinely conforming). Whether this counts
+# as NOK or EMPTY depends on the caller's `is_assessment` flag (see below).
+_UNCERTAIN_PENDING_RE = re.compile(
+    r"\btbd\b|\bto\s+be\s+(?:determined|verified|confirmed|checked)\b|"
+    r"\bpending\b|\bin\s+progress\b|\bunder\s+review\b|\ba\s+verifier\b|"
+    r"\ben\s+cours\b|\bnot\s+yet\b"
+)
+
 
 def classify_conformity(value: str, is_assessment: bool = True) -> str:
     """
@@ -541,10 +891,15 @@ def classify_conformity(value: str, is_assessment: bool = True) -> str:
     Handles Stellantis-specific patterns:
     - "/" = conform (OK)
     - "EE: ok", "SW: ok", "TP: ok", "ME: ok" = domain-specific OK
+    - "EE: NOK", "not compliant", "not ok", "does not meet" = NOK, even when
+      embedded in longer free text or prefixed by a domain code
     - "EE", "SW", "ME", "OD", "VE", "SYS", "DQ" (domain codes without ": ok") = EMPTY (just domain assignment)
-    - "NA" = not applicable
+    - "NA", "N/A", "Sans objet" = not applicable (tolerant of trailing
+      punctuation/free text, e.g. "N/A - not required for this variant")
     - Single letters A-H = version codes (EMPTY)
-    - Uncertain/pending language = NOK (not confirmed conform)
+    - Uncertain/pending language ("TBD", "pending", "en cours") = NOK if
+      is_assessment else EMPTY (not confirmed conform, but severity depends
+      on whether this column is a genuine assessment column)
 
     Args:
         value: The raw conformity value from the spreadsheet cell.
@@ -555,9 +910,23 @@ def classify_conformity(value: str, is_assessment: bool = True) -> str:
         return "EMPTY"
 
     norm = _normalize(value).strip()
+    # Local-only punctuation normalization for classification — NOT applied
+    # to the shared _normalize() since that function is also used for
+    # header/column matching elsewhere in this file, where punctuation can
+    # be meaningful. Periods are REMOVED entirely (so abbreviation-style
+    # "N.A." collapses to "na", not "n a "); hyphens become spaces instead
+    # (so "Non-conforme" still matches "non conforme" as two words).
+    class_norm = norm.replace(".", "")
+    class_norm = re.sub(r"-", " ", class_norm)
+    class_norm = re.sub(r"\s+", " ", class_norm).strip()
 
-    # Check NOK first (before OK, since "NOK" contains "OK")
-    if norm in _NOK_VALUES or norm.startswith("nok"):
+    # Negation-based NOK — checked FIRST so a negated statement is never
+    # misclassified as OK just because it also contains the bare word "ok".
+    if (class_norm in _NOK_VALUES or class_norm.startswith("nok")
+            or _NOK_NEGATION_RE.search(class_norm)
+            or re.search(r"\b(?:non|not)\s+(?:compliant|conformant|conforming)\b", class_norm)
+            or re.search(r"\bdoes\s+not\s+(?:comply|conform|meet)\b", class_norm)
+            or re.search(r"\b(?:fail|failed|fails|partial(?:ly)?)\b", class_norm)):
         return "NOK"
 
     # Declared supplier deviation (accepted gap vs the original requirement)
@@ -571,38 +940,40 @@ def classify_conformity(value: str, is_assessment: bool = True) -> str:
     # Domain-specific OK patterns: "EE: ok", "SW: ok", "TP: ok", "ME: ok", "OPT: OK"
     # Also "EE: ok SW: ok" (multi-domain), "DQ: ok", "CG 20260316:OK"
     # Also "Glass is okay", "okay"
-    if re.search(r"\b(ok|okay)\b", norm):
-        # But not if it also contains NOK or negative words
-        if "nok" not in norm and "not ok" not in norm and "not conform" not in norm:
-            return "OK"
+    if re.search(r"\b(ok|okay|pass|passed|compliant|conformant|satisf(?:y|ies|ied)|approved|meets?|met)\b", class_norm):
+        return "OK"
 
     # Patterns like "DQ: ok,20260413 ME:" or "CG 20260316:OK"
-    if re.search(r":\s*ok", norm) and "nok" not in norm:
+    if re.search(r":\s*ok", class_norm):
         return "OK"
 
-    if norm in _OK_VALUES:
+    if class_norm in _OK_VALUES:
         return "OK"
-    if norm in _NA_VALUES or norm.startswith("not applicable") or norm.startswith("non applic"):
+    if (class_norm in _NA_VALUES or class_norm.startswith("not applicable")
+            or class_norm.startswith("non applic") or class_norm.startswith("n/a")):
         return "NA"
+
+    if _UNCERTAIN_PENDING_RE.search(class_norm):
+        return "NOK" if is_assessment else "EMPTY"
 
     # Stellantis domain codes without ": ok" — just domain assignments (EMPTY)
     # These do NOT indicate non-conformity; they indicate which domain is responsible.
     # The conformity status comes from the primary conformity column (e.g., "/" = OK).
-    if norm in _DOMAIN_CODES:
+    if class_norm in _DOMAIN_CODES:
         return "EMPTY"
 
     # Domain codes with trailing colon (e.g., "DQ:", "EE:") — incomplete assessment (EMPTY)
-    norm_stripped = norm.rstrip(":").strip()
+    norm_stripped = class_norm.rstrip(":").strip()
     if norm_stripped in _DOMAIN_CODES:
         return "EMPTY"
 
     # Check for slash-separated domain codes like "ME/VE", "EE/VE/ME" (EMPTY)
-    slash_parts = [p.strip() for p in norm.split("/") if p.strip()]
+    slash_parts = [p.strip() for p in class_norm.split("/") if p.strip()]
     if len(slash_parts) >= 2 and all(p in _DOMAIN_CODES for p in slash_parts):
         return "EMPTY"
 
     # Single letter versions (A-H) are version codes, not conformity (EMPTY)
-    if len(norm) == 1 and norm in "abcdefgh":
+    if len(class_norm) == 1 and class_norm in "abcdefgh":
         return "EMPTY"
 
     return "EMPTY"
@@ -624,6 +995,7 @@ class ConformityItem:
     column_set: int = 0  # which set of conformity/comment columns (0-based)
     needs_review: bool = False  # True for UNKNOWN/STANDBY items needing manual verification
     classification_confidence: str = "high"  # high/medium/low — confidence in the classification
+    is_requirement: bool = True  # False for document/category rows (non-"REQ-" IDs in Stellantis matrices)
 
 
 @dataclass
@@ -633,7 +1005,7 @@ class ConformityAnalysis:
     header_row: int = -1
     data_start_row: int = -1
     total_rows: int = 0
-    sheet_total_rows: int = 0  # Total rows in the sheet (for debugging)
+    sheet_total_rows: int = 0  # Rows up to the last non-empty row (trailing empties excluded)
     items: List[ConformityItem] = field(default_factory=list)
     # Statistics
     stats: Dict[str, int] = field(default_factory=dict)
@@ -645,10 +1017,6 @@ class ConformityAnalysis:
     ok_deep_method: str = ""
     # Column mapping
     column_mapping: Dict[str, List[int]] = field(default_factory=dict)
-    # Debug info
-    _debug_repeated_rows: int = 0
-    _debug_total_row_elements: int = 0
-    _debug_total_expanded_rows: int = 0
     # Chart (base64 PNG)
     chart_base64: str = ""
     # Report text
@@ -698,6 +1066,37 @@ def _detect_assessment_columns(
     return assessment_cols
 
 
+def _is_bare_domain_code(text: str) -> bool:
+    """True when a comment is just a domain code ('SYS', 'SW', 'EE', 'ME', …)
+    or a short list of them ('ME/EE', 'SYS | SW') rather than a real supplier
+    comment. These are domain-ASSIGNMENT markers that pollute the comment field
+    and make comment comparisons noisy."""
+    norm = _normalize(text).strip()
+    if not norm:
+        return False
+    # exact domain code
+    if norm in _DOMAIN_CODES:
+        return True
+    # a short list of domain codes joined by | / , ; & or a space:
+    # 'SYS | SW', 'ME/EE', 'VE, ME', 'EE ME', 'SYSTEM/SW'
+    parts = [p for p in re.split(r"[\s|/,\u0026;]+", norm) if p]
+    if parts and len(parts) <= 4 and all(p in _DOMAIN_CODES for p in parts):
+        return True
+    return False
+
+
+def _clean_comments(comments: List[str]) -> List[str]:
+    """Drop empty, version, and bare domain-code values from a comment list."""
+    cleaned: List[str] = []
+    for c in comments:
+        if not c or not c.strip():
+            continue
+        if _is_bare_domain_code(c):
+            continue
+        cleaned.append(c.strip())
+    return cleaned
+
+
 # Category priority for combining multiple column sets (higher = worse)
 _CATEGORY_PRIORITY = {
     "NOK": 6,
@@ -706,6 +1105,240 @@ _CATEGORY_PRIORITY = {
     "EMPTY": 0,
     "OK": -1,
 }
+
+
+def _looks_like_conformity_value(norm: str) -> bool:
+    """True when a normalized cell value looks like a conformity status
+    (/, OK, NOK, NA, 'EE: ok', 'non conforme', …) rather than free text."""
+    if norm in _OK_VALUES or norm in _NOK_VALUES or norm in _NA_VALUES:
+        return True
+    if norm in ("/", "ko→ok", "ko->ok"):
+        return True
+    if re.search(r":\s*(ok|nok|na|pass|fail|compliant|non.?compliant)\b", norm):
+        return True
+    if re.match(
+        r"^(ok|nok|na|non\s*conform|conform|not\s*applicable|sans\s*objet|"
+        r"pass(?:ed)?\b|fail(?:ed)?\b|compliant\b|non.?compliant\b|"
+        r"does\s+not\s+(?:comply|conform)|meets?\b|not\s+met\b|"
+        r"satisfied\b|not\s+satisfied\b|acceptable\b|not\s+acceptable\b|"
+        r"approved\b|rejected\b|partial(?:ly)?\b|"
+        r"satisf(?:y|ies|ied)\b|does\s+not\s+meet\b)",
+        norm,
+    ):
+        return True
+    return False
+
+
+def _is_requirement_id(req_id: str) -> bool:
+    """True for requirement-ID patterns (REQ-…, REF-…, APP-…, GEN-…).
+    Document titles / category rows ('Allocation matrix of the LVDS…',
+    'RETRO_511_001', 'GEN') do not match."""
+    return bool(re.match(r"^(REQ|REF|APP|GEN)-", req_id or ""))
+
+
+def _looks_like_gentex_requirement_id(req_id: str) -> bool:
+    """Recognize the Gentex technical-specification IDs, not section titles."""
+    value = (req_id or "").strip()
+    return bool(re.match(r"^RETRO_\d+(?:_\d+)+$", value, re.IGNORECASE))
+
+
+def _looks_like_version_value(norm: str) -> bool:
+    """True when a normalized cell value looks like a version code rather
+    than a comment: a single letter A-I, a 'v\\d' pattern, or a date."""
+    if not norm:
+        return False
+    if re.fullmatch(r"[a-i]", norm):
+        return True
+    if re.match(r"^v?\d", norm):
+        return True
+    if re.match(r"^\d{1,2}[/-]\d{1,2}[/-]\d{2,4}", norm):
+        return True
+    return False
+
+
+def _looks_like_req_id_value(norm: str) -> bool:
+    """True when a normalized cell value looks like a requirement identifier
+    (REQ-…, REF-…, APP-…, GEN-…) rather than a comment."""
+    return bool(
+        re.match(r"^(req|ref|app|gen)-", norm)
+        or re.match(r"^[a-z][a-z0-9]{1,15}[-_/.]\d", norm)
+        or re.match(r"^\d{2,}[-_]\d", norm)
+        # Supplier identifiers often contain several alphabetic segments,
+        # e.g. CR_RAMS_01, SAF-REQ-12, or IEC.61508.4. A stable all-ID column
+        # profile (checked by the caller) distinguishes these from prose.
+        or re.fullmatch(r"[a-z]{1,12}(?:[-_.][a-z0-9]{1,16}){1,5}[-_.]?\d{1,6}[a-z]?", norm)
+    )
+
+
+def _is_non_requirement_row_text(value: str) -> bool:
+    """Identify document titles, summaries, and header labels in ID columns.
+
+    A supplier matrix may repeat a merged cover-page statement down the
+    requirement-ID column. Keep those labels out of the extracted item list
+    even when the same row has a conformity value in a neighbouring column.
+    """
+    normalized = _normalize(value).strip(" :.-")
+    if not normalized:
+        return False
+    exact_labels = {
+        "requirement", "requirements", "requirement identifier",
+        "requirement id", "requirement title", "requirement description",
+        "requirement reference", "requirement status", "requirement summary",
+    }
+    if normalized in exact_labels:
+        return True
+    if normalized.startswith((
+        "therefore the following requirements are applied",
+        "the following requirements are applied",
+        "requirements applied",
+        "requirements ok", "requirements nok",
+        "number of requirements", "total requirements",
+    )):
+        return True
+    # Repeated merged titles/intro paragraphs are prose, not identifiers.
+    if len(normalized) > 80 and not _looks_like_req_id_value(normalized):
+        return True
+    return False
+
+
+def _detect_requirement_id_columns_by_content(
+    sheet: List[List[str]], data_start: int, max_rows: int = 200
+) -> List[int]:
+    """Identify supplier-specific ID columns (e.g. RAMS-001) by value shape.
+
+    Header labels are inconsistent across vendors, but IDs usually have a
+    stable repeated token pattern. Require a clear majority so ordinary
+    descriptions and numeric measurements do not become IDs.
+    """
+    n_cols = max((len(row) for row in sheet), default=0)
+    matches: List[Tuple[int, float, int]] = []
+    for ci in range(n_cols):
+        total = 0
+        ids = 0
+        for row in sheet[data_start:min(data_start + max_rows, len(sheet))]:
+            value = row[ci].strip() if ci < len(row) else ""
+            if not value:
+                continue
+            total += 1
+            if _looks_like_req_id_value(_normalize(value)):
+                ids += 1
+        if total >= 4 and ids / total >= 0.65:
+            matches.append((ci, ids / total, ids))
+    matches.sort(key=lambda candidate: (candidate[1], candidate[2]), reverse=True)
+    return [ci for ci, _, _ in matches]
+
+
+def _detect_description_columns_by_content(
+    sheet: List[List[str]],
+    data_start: int,
+    excluded_cols: set[int],
+    max_rows: int = 200,
+) -> List[int]:
+    """Infer a requirement-description column when the supplier renamed it.
+
+    Descriptions tend to be longer prose than identifiers/statuses and, in
+    conventional matrices, appear before the supplier's status column. Return
+    candidates in confidence order; never reuse already identified ID/status
+    columns.
+    """
+    n_cols = max((len(row) for row in sheet), default=0)
+    candidates: List[Tuple[int, float, float]] = []
+    for ci in range(n_cols):
+        if ci in excluded_cols:
+            continue
+        values = [
+            row[ci].strip()
+            for row in sheet[data_start:min(data_start + max_rows, len(sheet))]
+            if ci < len(row) and row[ci].strip()
+        ]
+        if len(values) < 3:
+            continue
+        prose = [
+            value for value in values
+            if len(value) >= 35
+            and not _looks_like_conformity_value(_normalize(value))
+            and not _looks_like_req_id_value(_normalize(value))
+            and not _looks_like_version_value(_normalize(value))
+        ]
+        ratio = len(prose) / len(values)
+        if ratio >= 0.65:
+            average_length = sum(len(value) for value in prose) / len(prose)
+            candidates.append((ci, ratio, average_length))
+    candidates.sort(key=lambda candidate: (candidate[1], candidate[2]), reverse=True)
+    return [ci for ci, _, _ in candidates]
+
+
+def _detect_conformity_columns_by_content(sheet, data_start: int, max_rows: int = 200):
+    """Find conformity/comment columns by their VALUES when the header names
+    are non-standard (e.g. 'Engagement', 'Commitment', 'Comments').
+
+    A column is a COMMENT column when most of its non-empty values are
+    free text — NOT conformity statuses, NOT version codes, NOT requirement
+    ids, and NOT long descriptions. This makes detection work for ANY header
+    a supplier happens to use ('Remarques', 'Notes', 'Observations', …).
+    """
+    conformity_cols: List[int] = []
+    comment_cols: List[int] = []
+    n_cols = max((len(r) for r in sheet), default=0)
+    profiles = []
+    for ci in range(n_cols):
+        total = 0
+        conf = 0
+        version = 0
+        reqid = 0
+        long_text = 0
+        text = 0
+        for ri in range(data_start, min(data_start + max_rows, len(sheet))):
+            row = sheet[ri]
+            val = row[ci].strip() if ci < len(row) else ""
+            if not val:
+                continue
+            total += 1
+            norm = _normalize(val)
+            if _looks_like_conformity_value(norm):
+                conf += 1
+            elif _looks_like_version_value(norm):
+                version += 1
+            elif _looks_like_req_id_value(norm):
+                reqid += 1
+            elif len(val) > 80:
+                long_text += 1
+            elif len(val) > 3:
+                text += 1
+        profiles.append({
+            "column": ci, "total": total, "conf": conf, "version": version,
+            "reqid": reqid, "long_text": long_text, "text": text,
+        })
+        conf_ratio = conf / total if total else 0
+        if total >= 3 and conf_ratio > 0.5:
+            conformity_cols.append(ci)
+        elif total >= 4 and conf_ratio > 0.25:
+            # Some suppliers mix compact categorical answers with a minority
+            # of explanations in the same status column. Still classify it
+            # as a status field when categorical answers are the clear
+            # majority of all observed values.
+            conformity_cols.append(ci)
+    status_right_edge = max(conformity_cols, default=-1)
+    for profile in profiles:
+        ci = profile["column"]
+        total = profile["total"]
+        text = profile["text"]
+        long_text = profile["long_text"]
+        # Free text after the detected status fields is more likely to be
+        # supplier evidence/rationale than the requirement description. This
+        # permits long evidence text when its header is unfamiliar while
+        # protecting the common pre-status requirement text.
+        if total >= 3 and ci > status_right_edge and profile["reqid"] / total < 0.25:
+            if (text + long_text) / total > 0.5 and profile["version"] / total < 0.5:
+                comment_cols.append(ci)
+                continue
+        if total >= 3 and (text + long_text) / total > 0.5:
+            # A description column is mostly long paragraphs; a comment
+            # column is mostly short/medium free text. Require the short
+            # text to dominate so descriptions are never misread as comments.
+            if long_text / total < 0.5 and text / total > 0.3 and ci > status_right_edge:
+                comment_cols.append(ci)
+    return conformity_cols, comment_cols
 
 
 def extract_conformity_data(filepath: str, file_name: str = "") -> ConformityAnalysis:
@@ -728,27 +1361,398 @@ def extract_conformity_data(filepath: str, file_name: str = "") -> ConformityAna
     best_sheet_idx = -1
     best_header_row = -1
     best_col_mapping = None
+    best_score = -1
 
     for si, sheet in enumerate(sheets_data):
-        header_row = _find_header_row(sheet)
+        # Evaluate all plausible header rows on a sheet. A title/header band
+        # may appear first (e.g. the top of a cover page); the correct table
+        # header later in that same sheet has stronger requirement/data
+        # evidence and should be allowed to compete.
+        header_candidates: List[int] = []
+        candidate_header_maps: Dict[int, Dict[str, List[int]]] = {}
+        requirement_start_markers = [
+            ri for ri, row in enumerate(sheet[:200])
+            if any("debut exigences" in _normalize(cell)
+                   or "debut exigence" in _normalize(cell)
+                   or "requirements start" in _normalize(cell)
+                   for cell in row if cell)
+        ]
+        requirement_region_start = requirement_start_markers[0] if requirement_start_markers else None
+        matrix_candidate_window = range(min(50, len(sheet)))
+        for candidate_row in matrix_candidate_window:
+            # A merged group-title band (e.g. "Conformity Matrix") can sit
+            # immediately above the real leaf headers. When the next row
+            # already names the response/comment roles, do not let values
+            # below the group band make that title row win as the header.
+            if candidate_row + 1 < len(sheet):
+                has_group_title = any(
+                    "conformity matrix" in _normalize(cell)
+                    or "matrice de conformite" in _normalize(cell)
+                    for cell in sheet[candidate_row] if cell
+                )
+                next_row_map = _find_columns(sheet[candidate_row + 1])
+                if (has_group_title
+                        and (next_row_map.get("conformity")
+                             or next_row_map.get("comment")
+                             or next_row_map.get("stellantis_verdict"))):
+                    continue
+            candidate_map = _find_columns(sheet[candidate_row])
+            merged_candidate = list(sheet[candidate_row])
+            for context_idx in range(max(0, candidate_row - 4), candidate_row):
+                context_row = sheet[context_idx]
+                if not any(_match_any(cell, _CONFORMITY_PATTERNS)
+                           or _match_any(cell, _COMMENT_PATTERNS)
+                           or _match_any(cell, _STELLANTIS_VERDICT_PATTERNS)
+                           for cell in context_row):
+                    continue
+                for ci, cell in enumerate(context_row):
+                    if ci < len(merged_candidate) and cell.strip() and not merged_candidate[ci].strip():
+                        merged_candidate[ci] = cell
+            candidate_map = _find_columns(merged_candidate)
+            # An actual requirement identifier header is stronger evidence
+            # than broad words such as "requirement" in cover prose. Do not
+            # allow generic title rows to compete as table headers.
+            if any(
+                _normalize(cell).strip() in (
+                    "requirement identifier", "requirement id",
+                    "req id", "req identifier",
+                )
+                for cell in merged_candidate if cell
+            ):
+                candidate_map["_concrete_req_id_header"] = [1]
+            candidate_header_maps[candidate_row] = candidate_map
+            row_has_id = any(
+                _looks_like_req_id_value(_normalize(cell))
+                for cell in sheet[candidate_row] if cell
+            )
+            if row_has_id:
+                continue
+            content_conf, _ = _detect_conformity_columns_by_content(
+                sheet, candidate_row + 1, max_rows=80
+            )
+            if (candidate_map.get("conformity")
+                    or candidate_map.get("comment")
+                    or candidate_map.get("stellantis_verdict")
+                    or content_conf):
+                header_candidates.append(candidate_row)
+        detected_header = _find_header_row(sheet)
+        if detected_header is not None and detected_header not in header_candidates:
+            header_candidates.append(detected_header)
+        header_row = None
+        header_row_score = -1
+        for candidate_row in header_candidates:
+            candidate_map = candidate_header_maps.get(candidate_row) or _find_columns(sheet[candidate_row])
+            merged_candidate = list(sheet[candidate_row])
+            for context_idx in range(max(0, candidate_row - 4), candidate_row):
+                context_row = sheet[context_idx]
+                if not any(_match_any(cell, _CONFORMITY_PATTERNS)
+                           or _match_any(cell, _COMMENT_PATTERNS)
+                           or _match_any(cell, _STELLANTIS_VERDICT_PATTERNS)
+                           for cell in context_row):
+                    continue
+                for ci, cell in enumerate(context_row):
+                    if ci < len(merged_candidate) and cell.strip() and not merged_candidate[ci].strip():
+                        merged_candidate[ci] = cell
+            candidate_map = _find_columns(merged_candidate)
+            if any(
+                _normalize(cell).strip() in (
+                    "requirement identifier", "requirement id",
+                    "req id", "req identifier",
+                )
+                for cell in merged_candidate if cell
+            ):
+                candidate_map["_concrete_req_id_header"] = [1]
+            if (candidate_map.get("conformity")
+                    and candidate_map.get("comment")
+                    and candidate_map.get("stellantis_verdict")):
+                candidate_map["_complete_header"] = [1]
+            candidate_ids = _detect_requirement_id_columns_by_content(
+                sheet, candidate_row + 1, max_rows=80
+            )
+            candidate_conf, _ = _detect_conformity_columns_by_content(
+                sheet, candidate_row + 1, max_rows=80
+            )
+            if not candidate_map.get("req_id") and candidate_ids:
+                candidate_map["req_id"] = candidate_ids[:1]
+            candidate_stellantis = list(candidate_map.get("stellantis_verdict", []))
+            candidate_map["stellantis_verdict"] = candidate_stellantis
+            candidate_map["conformity"] = [
+                ci for ci in candidate_map.get("conformity", [])
+                if ci not in candidate_stellantis
+                and not _match_any(merged_candidate[ci], _TEST_STATUS_PATTERNS)
+            ]
+            if not candidate_map["conformity"] and candidate_conf:
+                candidate_map["conformity"] = [
+                    ci for ci in candidate_conf
+                    if ci not in candidate_stellantis
+                    and not _match_any(merged_candidate[ci], _TEST_STATUS_PATTERNS)
+                ]
+            if not (candidate_map.get("conformity")
+                    or candidate_map.get("stellantis_verdict")
+                    or candidate_conf):
+                continue
+            score = (6 * int(bool(candidate_map.get("conformity") or candidate_conf))
+                     + 4 * int(bool(candidate_map.get("comment")))
+                     + 3 * int(bool(candidate_map.get("stellantis_verdict")))
+                     + 5 * int(bool(candidate_map.get("req_id") or candidate_ids)))
+            if candidate_map.get("_complete_header"):
+                score += 8
+            if candidate_map.get("_concrete_req_id_header"):
+                score += 20
+            if candidate_ids:
+                score += min(len(candidate_ids), 3)
+            # Prefer the actual table header over an earlier group title by
+            # checking whether the immediately following rows look like
+            # requirement records: an identifier plus supplier-like status.
+            record_rows = 0
+            id_columns = candidate_map.get("req_id", []) or candidate_ids
+            status_columns = candidate_map.get("conformity", []) or candidate_conf
+            for data_row in sheet[candidate_row + 1:candidate_row + 41]:
+                has_id_value = any(
+                    ci < len(data_row) and _looks_like_req_id_value(_normalize(data_row[ci]))
+                    for ci in id_columns
+                )
+                has_status_value = any(
+                    ci < len(data_row) and _looks_like_conformity_value(_normalize(data_row[ci]))
+                    for ci in status_columns
+                )
+                if has_id_value and has_status_value:
+                    record_rows += 1
+            score += min(record_rows, 20)
+            # Some supplier workbooks have a dense legend above the actual
+            # matrix. The legend's status codes and IDs can mimic data rows,
+            # but a structural "requirements start" marker identifies where
+            # real records begin. Headers before that marker should not win.
+            if requirement_region_start is not None:
+                if candidate_row < requirement_region_start - 1:
+                    score -= 100
+                elif candidate_row == requirement_region_start - 1:
+                    score += 12
+            # A cover paragraph may be merged down a detected ID column and
+            # adjacent to generic "Conformity"/"Comments" labels. Do not let
+            # that repeated cover band become the selected header when a later
+            # row has the concrete requirement identifier header.
+            candidate_ids_after_header = sum(
+                1 for data_row in sheet[candidate_row + 1:candidate_row + 41]
+                if any(
+                    ci < len(data_row)
+                    and _looks_like_req_id_value(_normalize(data_row[ci]))
+                    for ci in (candidate_map.get("req_id", []) or candidate_ids)
+                )
+            )
+            if candidate_ids_after_header:
+                score += min(candidate_ids_after_header, 20)
+            elif candidate_map.get("req_id") and candidate_row + 1 < len(sheet):
+                first_candidate_id = candidate_map["req_id"][0]
+                next_value = (sheet[candidate_row + 1][first_candidate_id]
+                              if first_candidate_id < len(sheet[candidate_row + 1]) else "")
+                if next_value and not _looks_like_req_id_value(_normalize(next_value)):
+                    score -= 20
+            if score > header_row_score:
+                header_row = candidate_row
+                header_row_score = score
+        if header_row is None:
+            header_row = detected_header
         if header_row is None:
             continue
-        col_mapping = _find_columns(sheet[header_row])
-        # Prefer sheets with BOTH conformity and comment columns
-        if col_mapping["conformity"] and col_mapping["comment"]:
-            # Found a sheet with both conformity and comment columns
+        col_mapping = dict(candidate_header_maps.get(header_row) or _find_columns(sheet[header_row]))
+        merged_header_row = list(sheet[header_row])
+        # Excel often stores field labels in vertically merged cells one row
+        # above a finer subheader. Carry those labels down by column before
+        # mapping, but preserve explicit child labels in the lower row.
+        header_context_range = range(max(0, header_row - 4), header_row)
+        concrete_leaf_header = False
+        if requirement_region_start is not None:
+            for context_idx in range(requirement_region_start - 1, max(-1, requirement_region_start - 6), -1):
+                if context_idx < 0:
+                    continue
+                context_map = _find_columns(sheet[context_idx])
+                if context_map.get("conformity") and (
+                    context_map.get("comment") or context_map.get("stellantis_verdict")
+                ):
+                    header_row = context_idx
+                    concrete_leaf_header = True
+                    break
+        if concrete_leaf_header:
+            header_context_range = range(header_row, header_row)
+            merged_header_row = list(sheet[header_row])
+            col_mapping = _find_columns(merged_header_row)
+            # The requirements marker may be followed by a document-title row
+            # before the first REQ-ID. Use the actual ID-bearing row as the
+            # classification profile start; otherwise the early legend rows
+            # contaminate content inference and resemble extra status fields.
+            first_requirement_row = next((
+                ri for ri in range(requirement_region_start + 1, len(sheet))
+                if any(_looks_like_req_id_value(_normalize(cell)) for cell in sheet[ri] if cell)
+            ), None)
+            profile_start = first_requirement_row if first_requirement_row is not None else header_row + 1
+        else:
+            profile_start = header_row + 1
+        context_range = header_context_range
+        for context_idx in header_context_range:
+            context_row = sheet[context_idx]
+            if not any(_match_any(cell, _CONFORMITY_PATTERNS)
+                       or _match_any(cell, _COMMENT_PATTERNS)
+                       or _match_any(cell, _STELLANTIS_VERDICT_PATTERNS)
+                       for cell in context_row):
+                continue
+            for ci, cell in enumerate(context_row):
+                if ci >= len(merged_header_row):
+                    continue
+                if cell.strip() and not merged_header_row[ci].strip():
+                    merged_header_row[ci] = cell
+        col_mapping = _find_columns(merged_header_row)
+        # Header rows often span several rows: an upper band says
+        # "Conformity Matrix" while the actual supplier verdict label lives
+        # in a later row. Inspect up to three rows above the chosen header and
+        # merge only role-specific labels into the mapping (without allowing
+        # group titles or test-result columns to become primary answers).
+        context_range = range(max(0, header_row - 3), header_row)
+        if concrete_leaf_header:
+            # This is already the concrete leaf-header row immediately above
+            # the marker; earlier labels belong to group bands/summary rows.
+            context_range = range(header_row, header_row)
+        for context_idx in context_range:
+            context_map = _find_columns(sheet[context_idx])
+            for key in ("conformity", "comment", "stellantis_verdict", "req_id",
+                        "version", "version_applicable", "description", "reference"):
+                existing = set(col_mapping.get(key, []))
+                col_mapping[key] = list(col_mapping.get(key, [])) + [
+                    ci for ci in context_map.get(key, [])
+                    if ci not in existing
+                    and ci < len(merged_header_row)
+                    and not merged_header_row[ci].strip()
+                ]
+        # Combined top-level labels such as "Conformité / Commentaires" can
+        # identify a supplier field whose subheader is blank or generic. Use
+        # content evidence to assign those columns, but avoid fields already
+        # positively identified as Stellantis verdicts or test results.
+        for context_idx in header_context_range:
+            for ci, cell in enumerate(sheet[context_idx]):
+                if (ci < len(merged_header_row)
+                        and _match_any(cell, _CONFORMITY_PATTERNS)
+                        and _match_any(cell, _COMMENT_PATTERNS)
+                        and ci not in col_mapping.get("stellantis_verdict", [])
+                        and ci not in col_mapping.get("conformity", [])):
+                    profile = _detect_conformity_columns_by_content(
+                        sheet, profile_start, max_rows=80
+                    )
+                    if ci in profile[0]:
+                        col_mapping["conformity"].append(ci)
+                    if ci in profile[1] and ci not in col_mapping.get("comment", []):
+                        col_mapping["comment"].append(ci)
+        col_mapping["stellantis_verdict"] = [
+            ci for ci in col_mapping.get("stellantis_verdict", [])
+            if ci not in col_mapping.get("comment", [])
+        ]
+        # On matrices with explicit supplier and customer fields, keep only
+        # the primary supplier comment adjacent to the supplier conformity
+        # column. Later test-delivery comments are not conformity rationale.
+        if concrete_leaf_header:
+            supplier_comment = [
+                ci for ci in col_mapping.get("comment", [])
+                if ci > min(col_mapping.get("conformity", [ci]))
+                and ci < min(col_mapping.get("stellantis_verdict", [ci]))
+            ]
+            if supplier_comment:
+                col_mapping["comment"] = supplier_comment
+        col_mapping["comment"] = [
+            ci for ci in col_mapping.get("comment", [])
+            if not _match_any(merged_header_row[ci], _TEST_STATUS_PATTERNS)
+        ]
+        col_mapping["conformity"] = [
+            ci for ci in col_mapping.get("conformity", [])
+            if ci not in col_mapping.get("stellantis_verdict", [])
+            and not _match_any(merged_header_row[ci], _TEST_STATUS_PATTERNS)
+        ]
+        conf_by_content, comm_by_content = _detect_conformity_columns_by_content(
+            sheet, profile_start
+        )
+        if not col_mapping["conformity"] and conf_by_content:
+            col_mapping["conformity"] = conf_by_content
+        if col_mapping["conformity"]:
+            col_mapping["conformity"] = [
+                ci for ci in col_mapping["conformity"]
+                if ci not in col_mapping.get("stellantis_verdict", [])
+                and not _match_any(merged_header_row[ci], _TEST_STATUS_PATTERNS)
+            ]
+        if not col_mapping["comment"] and comm_by_content:
+            blocked = set(col_mapping.get("conformity", []))
+            col_mapping["comment"] = [ci for ci in comm_by_content if ci not in blocked]
+        # When supplier-specific IDs have unfamiliar labels, identify them
+        # from repeated value structure instead of assuming column A.
+        if not col_mapping.get("req_id"):
+            inferred_ids = _detect_requirement_id_columns_by_content(
+                sheet, profile_start
+            )
+            if inferred_ids:
+                col_mapping["req_id"] = inferred_ids[:1]
+        # Score every viable sheet/header rather than accepting the first
+        # mention of "conformity" in a cover page. Strong requirement IDs,
+        # descriptions, and actual categorical answers identify the matrix;
+        # sheet names and row content help keep help/audit tabs out.
+        requirement_ids = _detect_requirement_id_columns_by_content(sheet, profile_start)
+        if not col_mapping.get("req_id") and requirement_ids:
+            col_mapping["req_id"] = requirement_ids[:1]
+        requirement_density = 0
+        id_col_candidates = col_mapping.get("req_id", []) or requirement_ids
+        for rci in id_col_candidates:
+            requirement_density = max(requirement_density, sum(
+                1 for row in sheet[header_row + 1:header_row + 201]
+                if rci < len(row) and _looks_like_req_id_value(_normalize(row[rci]))
+            ))
+        status_density = sum(
+            1 for row in sheet[header_row + 1:header_row + 201]
+            if any(ci < len(row) and _looks_like_conformity_value(_normalize(row[ci]))
+                   for ci in col_mapping.get("conformity", [])
+                   + col_mapping.get("stellantis_verdict", []))
+        )
+        if not col_mapping["conformity"] and not col_mapping.get("stellantis_verdict"):
+            continue
+        id_anchor = bool(col_mapping.get("req_id"))
+        status_anchor = bool(col_mapping["conformity"] or col_mapping.get("stellantis_verdict"))
+        if not id_anchor or not status_anchor:
+            # Cover pages and instructional tabs often mention “conformity”
+            # and contain free text, but lack an actual requirement-ID field.
+            continue
+        score = (10 * int(bool(col_mapping["conformity"]))
+             + 8 * int(bool(col_mapping.get("stellantis_verdict")))
+                 + 4 * int(bool(col_mapping["comment"]))
+                 + 3 * int(bool(col_mapping.get("req_id")))
+                 + 3 * int(bool(col_mapping.get("description")))
+                 + min(requirement_density, 20)
+                 + min(status_density, 20))
+        sheet_label = _normalize(sheet_names[si] if si < len(sheet_names) else "")
+        if any(marker in sheet_label for marker in ("help", "audit", "check", "config", "first page")):
+            score -= 25
+        if score > best_score:
+            best_score = score
+            best_sheet_idx = si
+            best_header_row = header_row
+            best_col_mapping = col_mapping
+            analysis.sheet_name = sheet_names[si] if si < len(sheet_names) else f"Sheet_{si}"
+
+    # Content-based fallback: when the header names are non-standard (e.g.
+    # 'Engagement', 'Commitment', 'Comments'), detect the conformity and
+    # comment columns from their VALUES instead of their names.
+    if best_sheet_idx == -1 or best_col_mapping is None or not best_col_mapping["conformity"]:
+        for si, sheet in enumerate(sheets_data):
+            header_row = _find_header_row(sheet)
+            data_start = (header_row + 1) if header_row is not None else 1
+            conf_cols, comm_cols = _detect_conformity_columns_by_content(sheet, data_start)
+            if not conf_cols:
+                continue
+            if header_row is None:
+                header_row = 0
+            col_mapping = _find_columns(sheet[header_row])
+            col_mapping["conformity"] = conf_cols
+            if comm_cols:
+                col_mapping["comment"] = comm_cols
             best_sheet_idx = si
             best_header_row = header_row
             best_col_mapping = col_mapping
             analysis.sheet_name = sheet_names[si] if si < len(sheet_names) else f"Sheet_{si}"
             break
-        # Fallback: sheet with only conformity columns (no comment columns)
-        if col_mapping["conformity"] and best_sheet_idx == -1:
-            best_sheet_idx = si
-            best_header_row = header_row
-            best_col_mapping = col_mapping
-            analysis.sheet_name = sheet_names[si] if si < len(sheet_names) else f"Sheet_{si}"
-            # Don't break — keep looking for a sheet with both columns
 
     if best_sheet_idx == -1 or best_col_mapping is None or not best_col_mapping["conformity"]:
         raise ValueError(
@@ -760,33 +1764,56 @@ def extract_conformity_data(filepath: str, file_name: str = "") -> ConformityAna
     analysis.header_row = best_header_row
     analysis.column_mapping = best_col_mapping
     analysis.data_start_row = _find_data_start(sheet, best_header_row, best_col_mapping)
-    analysis.sheet_total_rows = len(sheet)
+    inferred_ids = _detect_requirement_id_columns_by_content(
+        sheet, analysis.data_start_row
+    )
+    if inferred_ids:
+        # Value-shape evidence disambiguates broad labels such as "Requirement"
+        # (often the description column) from the actual supplier ID column.
+        best_col_mapping["req_id"] = inferred_ids[:1]
+        analysis.column_mapping = best_col_mapping
+    if not best_col_mapping.get("description"):
+        excluded_for_description = set(best_col_mapping.get("req_id", []))
+        excluded_for_description.update(best_col_mapping.get("conformity", []))
+        excluded_for_description.update(best_col_mapping.get("comment", []))
+        inferred_descriptions = _detect_description_columns_by_content(
+            sheet, analysis.data_start_row, excluded_for_description
+        )
+        if inferred_descriptions:
+            best_col_mapping["description"] = inferred_descriptions[:1]
+            analysis.column_mapping = best_col_mapping
 
-    # Debug: check for number-rows-repeated in the raw ODS
-    # This helps diagnose if odfpy is handling repeated rows correctly
-    try:
-        from odf.opendocument import load as _load
-        from odf.table import Table as _Table, TableRow as _TableRow
-        _doc = _load(filepath)
-        _tables = _doc.getElementsByType(_Table)
-        _repeated_count = 0
-        _total_table_row_elements = 0
-        _total_expanded_rows = 0
-        for _t in _tables:
-            for _r in _t.getElementsByType(_TableRow):
-                _total_table_row_elements += 1
-                _rep = _r.getAttribute("numberrowsrepeated")
-                _rep_val = int(_rep) if _rep else 1
-                _total_expanded_rows += _rep_val
-                if _rep_val > 1:
-                    _repeated_count += 1
-        analysis._debug_repeated_rows = _repeated_count
-        analysis._debug_total_row_elements = _total_table_row_elements
-        analysis._debug_total_expanded_rows = _total_expanded_rows
-    except Exception:
-        analysis._debug_repeated_rows = -1
-        analysis._debug_total_row_elements = -1
-        analysis._debug_total_expanded_rows = -1
+    # ── Intelligent content-based comment detection ─────────────────────
+    # The header may name the comment column anything ('Remarques', 'Notes',
+    # 'Observations', 'Feedback', …) or nothing at all. As a complement to
+    # header matching, scan the DATA values: any column whose values are
+    # mostly free text (not conformity statuses, version codes, requirement
+    # ids, or long descriptions) is treated as a supplier-comment column.
+    # This makes the agent work for ANY matrix a user uploads, without
+    # requiring the exact header 'Commentaires FNR'.
+    if best_col_mapping["comment"]:
+        # Only add content-detected columns when the header found none —
+        # the header names are the authoritative signal when present.
+        pass
+    else:
+        conf_by_content, comm_by_content = _detect_conformity_columns_by_content(
+            sheet, analysis.data_start_row
+        )
+        if comm_by_content:
+            # Never treat conformity / version / req-id / description
+            # columns as comments.
+            excluded = set(best_col_mapping["conformity"]) \
+                | set(best_col_mapping.get("version", [])) \
+                | set(best_col_mapping.get("version_applicable", [])) \
+                | set(best_col_mapping.get("req_id", [])) \
+                | set(best_col_mapping.get("description", [])) \
+                | set(best_col_mapping.get("reference", [])) \
+                | set(best_col_mapping.get("ok_cols", [])) \
+                | set(best_col_mapping.get("nok_cols", []))
+            extra = [c for c in comm_by_content if c not in excluded]
+            if extra:
+                best_col_mapping["comment"] = extra
+                analysis.column_mapping = best_col_mapping
 
     conformity_cols = best_col_mapping["conformity"]
     comment_cols = best_col_mapping["comment"]
@@ -794,8 +1821,52 @@ def extract_conformity_data(filepath: str, file_name: str = "") -> ConformityAna
     stellantis_verdict_cols = best_col_mapping.get("stellantis_verdict", [])
     version_cols = best_col_mapping.get("version", [])
     version_applicable_cols = best_col_mapping.get("version_applicable", [])
+    description_cols = best_col_mapping.get("description", [])
+    reference_cols = best_col_mapping.get("reference", [])
     ok_cols = best_col_mapping.get("ok_cols", [])
     nok_cols = best_col_mapping.get("nok_cols", [])
+    # The description column ("Libellé de la dernière version de l'exigence")
+    # also matches the req-id patterns ("exigence"/"requirement") — it must
+    # never be treated as a requirement-id column.
+    req_id_cols = [c for c in req_id_cols if c not in description_cols]
+    best_col_mapping["req_id"] = req_id_cols
+    analysis.column_mapping = best_col_mapping
+
+    # Ignore generic preamble/header rows in the extraction range when a
+    # reliable requirement-ID column has already been identified. This also
+    # protects matrices whose cover-page text is repeated down a merged ID
+    # column above the actual table header.
+    if req_id_cols:
+        first_real_id_row = next((
+            ri for ri in range(analysis.data_start_row, len(sheet))
+            if any(
+                ci < len(sheet[ri])
+                and _looks_like_req_id_value(_normalize(sheet[ri][ci]))
+                for ci in req_id_cols
+            )
+        ), None)
+        if first_real_id_row is not None:
+            analysis.data_start_row = first_real_id_row
+
+    # Detect the matrix format: Stellantis matrices use "REQ-…" requirement ids;
+    # spec-style matrices (e.g. the ASU conformity matrix) use "REF-…"/"APP-…".
+    # This decides how requirement rows are recognised (see the row filter and
+    # the is_requirement flag below).
+    uses_req_ids = False
+    uses_supplier_ids = False
+    for ri in range(analysis.data_start_row, min(analysis.data_start_row + 200, len(sheet))):
+        row = sheet[ri]
+        for rci in req_id_cols:
+            if rci >= len(row) or not row[rci].strip():
+                continue
+            value = row[rci].strip()
+            if value.startswith("REQ-"):
+                uses_req_ids = True
+                break
+            if _looks_like_req_id_value(_normalize(value)):
+                uses_supplier_ids = True
+        if uses_req_ids:
+            break
 
     # Heuristic: detect "comment" columns that actually contain version applicable data.
     # In some ODS files, the sub-header row labels the "Version applicable" column as
@@ -878,6 +1949,9 @@ def extract_conformity_data(filepath: str, file_name: str = "") -> ConformityAna
         if row and any(c.strip() for c in row if c):
             last_data_row = ri
 
+    # Rows up to the last non-empty row (trailing empty rows excluded)
+    analysis.sheet_total_rows = last_data_row + 1
+
     # Extract data rows — ONE item per row (combining all column sets)
     items: List[ConformityItem] = []
     for ri in range(analysis.data_start_row, last_data_row + 1):
@@ -886,23 +1960,32 @@ def extract_conformity_data(filepath: str, file_name: str = "") -> ConformityAna
             # Empty row within data range — count as EMPTY
             items.append(ConformityItem(
                 row_index=ri, req_id="", conformity_category="EMPTY",
+                is_requirement=False,
             ))
             continue
         if all(not c.strip() for c in row if c):
             # Completely empty row within data range — count as EMPTY
             items.append(ConformityItem(
                 row_index=ri, req_id="", conformity_category="EMPTY",
+                is_requirement=False,
             ))
             continue
 
-        # Get requirement ID (first non-empty req_id column, or first column)
+        # Get requirement ID from detected identifier columns only. Falling
+        # back to the first cell can turn a merged cover title or description
+        # into the row's ID when a header-like cover band precedes the matrix.
         req_id = ""
         if req_id_cols:
+            detected_id_values = []
             for rci in req_id_cols:
                 if rci < len(row) and row[rci].strip():
-                    req_id = row[rci].strip()
-                    break
-        if not req_id and row:
+                    detected_id_values.append(row[rci].strip())
+            req_id = next(
+                (value for value in detected_id_values
+                 if _looks_like_req_id_value(_normalize(value))),
+                detected_id_values[0] if detected_id_values else "",
+            )
+        if not req_id and not req_id_cols and row:
             req_id = row[0].strip() if row[0] else ""
 
         # Skip non-data rows (section headers, summary rows)
@@ -914,6 +1997,8 @@ def extract_conformity_data(filepath: str, file_name: str = "") -> ConformityAna
             "ATT_RESP@DEV_INT",
         ):
             continue
+        if _is_non_requirement_row_text(req_id):
+            continue
         if req_id and (req_id.startswith("Template") or req_id.startswith("STOP")):
             continue
 
@@ -921,22 +2006,101 @@ def extract_conformity_data(filepath: str, file_name: str = "") -> ConformityAna
         # document names (e.g., "STLA DIAGNOSTIC REQUIREMENT STANDARD - UDS"),
         # category headers (e.g., "GEN"), and document references (e.g., "02017_...RSP-...").
         # Only create items for rows that have a REQ-ID OR conformity-related data.
-        has_req_id = req_id.startswith("REQ-")
+        has_req_id = (
+            req_id.startswith("REQ-") if uses_req_ids
+            else (_looks_like_req_id_value(_normalize(req_id)) if uses_supplier_ids
+                  else (_is_requirement_id(req_id) or _looks_like_gentex_requirement_id(req_id)))
+        )
+        if uses_supplier_ids and not has_req_id:
+            # A generic "Requirement title"/"Description" header can be
+            # misidentified as the ID column. Recover the actual supplier ID
+            # from any other detected ID column before discarding the row.
+            for rci in req_id_cols:
+                if rci < len(row) and _looks_like_req_id_value(_normalize(row[rci])):
+                    req_id = row[rci].strip()
+                    has_req_id = True
+                    break
         has_conformity_data = any(
             (row[ci].strip() if ci < len(row) else "")
-            for ci in conformity_cols + stellantis_verdict_cols + comment_cols
+            for ci in conformity_cols + stellantis_verdict_cols
         )
+        if is_gentex_style and ok_cols and nok_cols:
+            # Commitment/comment cells explain a decision; they do not mean a
+            # supplier supplied an answer when both explicit checkboxes are
+            # empty.
+            has_conformity_data = has_conformity_data or any(
+                ci < len(row) and row[ci].strip() for ci in ok_cols + nok_cols
+            )
+        elif not uses_supplier_ids:
+            has_conformity_data = has_conformity_data or any(
+                (row[ci].strip() if ci < len(row) else "") for ci in comment_cols
+            )
+        elif not has_req_id:
+            # In a supplier-specific identifier matrix, a footer/note row with
+            # free-text in the comment column is not a requirement record.
+            continue
         if not has_req_id and not has_conformity_data:
             continue
 
-        # Get reference (second column if available)
-        reference = row[1].strip() if len(row) > 1 else ""
-        # Get description — try col 5 (Stellantis format) or col 3 (Gentex format)
+        # Get reference — prefer a detected "Référence" column, else column B
+        reference = ""
+        if reference_cols:
+            for rci in reference_cols:
+                if rci < len(row) and row[rci].strip():
+                    reference = row[rci].strip()
+                    break
+        if not reference:
+            # Standard Stellantis allocation matrices commonly have the
+            # reference in column B while the detected ID is in column F.
+            # Some headers label B "Requirement title" or leave it generic,
+            # so retain the value-shape fallback even when a header mapping
+            # exists. A value equal to the requirement ID is not a reference.
+            reference_candidates = [1]
+            reference_candidates.extend(ci for ci in range(0, min(len(row), 8))
+                                        if ci not in req_id_cols)
+            for rci in dict.fromkeys(reference_candidates):
+                if rci >= len(row):
+                    continue
+                candidate_reference = row[rci].strip()
+                if (candidate_reference
+                        and candidate_reference != req_id
+                        and _looks_like_req_id_value(_normalize(candidate_reference))):
+                    reference = candidate_reference
+                    break
+            # An explicit reference/title column may contain a human-readable
+            # reference name rather than a coded identifier. Use it when no
+            # coded reference was found in the conventional reference column.
+            if not reference:
+                for rci in reference_cols:
+                    candidate_reference = row[rci].strip() if rci < len(row) else ""
+                    if candidate_reference and candidate_reference != req_id:
+                        reference = candidate_reference
+                        break
+            if not reference and len(row) > 2:
+                # In allocation matrices, column B may contain only a dash
+                # for requirements without a source-spec clause, while the
+                # adjacent title column still carries their usable reference
+                # label (for example, "Deserializer approved by Stellantis").
+                title_fallback = row[2].strip()
+                if (title_fallback and title_fallback != req_id
+                    and len(title_fallback) >= 15
+                    and " " in title_fallback
+                        and (not description_cols or 2 not in description_cols)):
+                    reference = title_fallback
+        # Get description — prefer a detected description column (e.g.
+        # "Libellé de la dernière version de l'exigence"), else col 5
+        # (Stellantis format) or col 3 (Gentex format)
         description = ""
-        if len(row) > 5 and row[5].strip():
-            description = row[5].strip()
-        elif is_gentex_style and len(row) > 3 and row[3].strip():
-            description = row[3].strip()
+        if description_cols:
+            for dci in description_cols:
+                if dci < len(row) and row[dci].strip():
+                    description = row[dci].strip()
+                    break
+        if not description:
+            if len(row) > 5 and row[5].strip():
+                description = row[5].strip()
+            elif is_gentex_style and len(row) > 3 and row[3].strip():
+                description = row[3].strip()
 
         # ── Gentex-style: OK/NOK separate columns ──
         # In this format, OK and NOK are separate columns.
@@ -975,7 +2139,7 @@ def extract_conformity_data(filepath: str, file_name: str = "") -> ConformityAna
             if ok_cat == "NA" or nok_cat == "NA":
                 best_category = "NA"
                 conf_raw = ok_raw if ok_cat == "NA" else nok_raw
-            elif nok_cat == "NOK":
+            if nok_cat == "NOK":
                 best_category = "NOK"
                 conf_raw = nok_raw
             elif ok_cat == "OK":
@@ -1022,6 +2186,7 @@ def extract_conformity_data(filepath: str, file_name: str = "") -> ConformityAna
                     column_set=0,
                     needs_review=(best_category == "EMPTY" and bool(combined_comment)),
                     classification_confidence="medium" if best_category == "EMPTY" else "high",
+                    is_requirement=True,
                 )
                 items.append(item)
             continue
@@ -1180,7 +2345,9 @@ def extract_conformity_data(filepath: str, file_name: str = "") -> ConformityAna
                         break
 
         # Combine all comments from all column sets, filtering out version values
-        # (the version is often duplicated in the comment column — we want actual comments only)
+        # and bare domain codes (the version is often duplicated in the comment
+        # column, and domain-assignment markers like 'SYS'/'SW' are not real
+        # comments).
         all_comments = []
         for (_, c, _, _) in conf_values:
             if c and c.strip():
@@ -1195,6 +2362,11 @@ def extract_conformity_data(filepath: str, file_name: str = "") -> ConformityAna
                 all_comments.append(c.strip())
         # Note: unpaired comment columns are already in conf_values (added above),
         # so they are collected in the loop above. No separate collection needed.
+        # Drop empty values, then dedupe.  Domain codes ('SYS', 'SW', …) are KEPT
+        # — they ARE the supplier's comment (a domain assignment).  The deep-OK
+        # analysis has its own filter that skips them when looking for suspicious
+        # signals, but the detailed table must show every comment the supplier wrote.
+        all_comments = [c for c in all_comments if c.strip()]
         # Deduplicate comments (ODS may have same value in multiple comment columns)
         seen = set()
         unique_comments = []
@@ -1203,10 +2375,12 @@ def extract_conformity_data(filepath: str, file_name: str = "") -> ConformityAna
                 seen.add(c)
                 unique_comments.append(c)
         combined_comment = " | ".join(unique_comments) if unique_comments else best_comment
-        # Also filter best_comment if it's just the version
-        if best_comment and version:
-            if best_comment.strip() == version or _normalize(best_comment).strip() == _normalize(version).strip():
-                combined_comment = " | ".join(unique_comments) if unique_comments else ""
+        # Filter best_comment if it's just the version (not a domain code)
+        if best_comment and (
+            best_comment.strip() == (version or "")
+            or _normalize(best_comment).strip() == _normalize(version).strip()
+        ):
+            combined_comment = " | ".join(unique_comments) if unique_comments else ""
 
         # Determine if this item needs manual review and its confidence level
         needs_review = False
@@ -1228,6 +2402,11 @@ def extract_conformity_data(filepath: str, file_name: str = "") -> ConformityAna
             column_set=best_set_idx,
             needs_review=needs_review,
             classification_confidence=confidence,
+            is_requirement=(
+                req_id.startswith("REQ-") if uses_req_ids
+                else (_looks_like_req_id_value(_normalize(req_id)) if uses_supplier_ids
+                      else (_is_requirement_id(req_id) or _looks_like_gentex_requirement_id(req_id)))
+            ),
         )
         items.append(item)
 
@@ -1523,6 +2702,12 @@ _OK_SUSPICION_PATTERNS: List[tuple] = [
      r"merci\s+de\s+(confirmer|vérifier|préciser|clarifier))",
      "please_clarify", 2),
 
+    # Conformity depends on a future action / document / decision
+    (r"\bwill\s+(base|depend|rely)\s+on\b|\bwill\s+follow\b|\bwill\s+use\s+on\b",
+     "will_depend", 2),
+    (r"\b(is|are|was|were|be)\s+needed\b",
+     "needed", 2),
+
     # Not applicable / out of scope but marked OK
     (r"\b(not\s+applicable|non\s+applicable|n/?a|hors\s+scope|hors\s+périmètre|"
      r"not\s+in\s+scope|no\s+cybersecurity|no\s+solution)",
@@ -1659,6 +2844,10 @@ _OK_SUSPICION_PATTERNS: List[tuple] = [
     (r"\bno\s+(cybersecurity|security|safety|solution|way|support|capability)\b",
      "no_noun", 2),
 
+    # No guarantee / no warranty — the supplier does not commit to conformity
+    (r"\bno\s+guarantee\b",
+     "no_guarantee", 3),
+
     # Still / remaining / outstanding (single words, broader)
     (r"\b(still|remaining|outstanding|not\s+yet)\b",
      "still_outstanding", 1),
@@ -1688,6 +2877,14 @@ def _generate_ai_comment_ok(
     labels = sorted(set(l for l, _, _ in matches))
     score = sum(w for _, w, _ in matches)
 
+    if "hors_sujet" in labels:
+        return (
+            "⚠️ The comment does not address this requirement — it discusses "
+            "a different subject (meeting, position, another component, a "
+            "pending action) while the status is OK. The supplier has not "
+            "confirmed conformity for THIS requirement. Check the consistency "
+            "between the requirement and the comment."
+        )
     if "na_language" in labels:
         return (
             "⚠️ The comment mentions 'N/A' or 'not applicable' but the "
@@ -1783,6 +2980,65 @@ def _generate_ai_comment_ok(
     return ""
 
 
+def _significant_tokens(text: str) -> set:
+    """Meaningful tokens of a text for overlap comparison: alphanumeric
+    runs of >= 4 chars, lowercased. Short words (domain codes, articles,
+    units) are ignored so they don't inflate the overlap."""
+    return set(re.findall(r"[a-z0-9]{4,}", (text or "").lower()))
+
+
+def _token_overlap(a: str, b: str) -> float:
+    """Jaccard overlap of the significant tokens of two texts (0..1)."""
+    ta = _significant_tokens(a)
+    tb = _significant_tokens(b)
+    if not ta or not tb:
+        return 0.0
+    return len(ta & tb) / len(ta | tb)
+
+
+# Signals that indicate the supplier is discussing / planning / deferring
+# the requirement in a way that does NOT confirm it. When such a signal
+# appears in a comment that shares NO vocabulary with the requirement, the
+# comment is almost certainly about a DIFFERENT subject — the supplier did
+# not actually address this requirement. Deliberately limited to
+# discussion/meeting/action signals: a plain "will follow connector spec"
+# shares no vocabulary either but is still about the same subject, so it is
+# NOT a mismatch (it is a pending signal, handled by the pattern engine).
+_MISMATCH_SIGNAL_LABELS = {
+    "discussion_needed", "stla_action", "please_clarify",
+}
+
+
+def _detect_requirement_mismatch(item: ConformityItem) -> Optional[tuple]:
+    """Detect when an OK comment answers something OTHER than the requirement.
+
+    A comment that (a) shares no significant vocabulary with the requirement
+    description AND (b) carries a pending/discussion/action signal is talking
+    about a different subject — the supplier did not confirm THIS requirement.
+
+    Returns a (label, weight, matched_text) tuple for the pattern engine, or
+    None. Conservative by design: short domain confirmations ("EMC OK",
+    "DQ: ok,20260413") have zero overlap but are legitimate, so they are
+    never flagged here (they carry no pending/discussion signal).
+    """
+    desc = item.description.strip()
+    comment = item.comment.strip()
+    if not desc or not comment:
+        return None
+    # Only substantive comments can be off-topic; short confirmations cannot.
+    if len(comment) < 15:
+        return None
+    if _token_overlap(desc, comment) > 0.0:
+        return None
+    cnorm = _normalize(comment)
+    for pattern, label, weight in _OK_SUSPICION_PATTERNS:
+        if label in _MISMATCH_SIGNAL_LABELS:
+            m = re.search(pattern, cnorm)
+            if m:
+                return ("hors_sujet", 2, m.group())
+    return None
+
+
 def _pattern_finding_for_item(item: ConformityItem) -> Optional[Dict]:
     """
     Pattern-based (regex) suspicion check for a single OK item.
@@ -1797,6 +3053,11 @@ def _pattern_finding_for_item(item: ConformityItem) -> Optional[Dict]:
         m = re.search(pattern, cnorm)
         if m:
             matches.append((label, weight, m.group()))
+
+    # NEW: the comment may answer something else than the requirement.
+    mismatch = _detect_requirement_mismatch(item)
+    if mismatch:
+        matches.append(mismatch)
 
     if not matches:
         return None
@@ -1823,24 +3084,29 @@ def _pattern_finding_for_item(item: ConformityItem) -> Optional[Dict]:
 _LLM_BATCH_SIZE = 25       # items per LLM call
 _LLM_MAX_ITEMS = 150       # beyond this, remaining items fall back to patterns
 _LLM_COMMENT_MAX_CHARS = 600
+_LLM_DESC_MAX_CHARS = 400  # requirement description sent to the LLM
 
 _LLM_SYSTEM_PROMPT = """You are a senior quality auditor specialized in automotive industry supplier conformity matrices (FNR).
 
-For each requirement provided, the supplier has declared the status OK (conform). Your task: judge whether the supplier's COMMENT genuinely justifies this OK status, or whether it actually reveals a hidden problem.
+For each requirement provided, the supplier has declared the status OK (conform). You are given BOTH the requirement description and the supplier's comment. Your task: judge whether the supplier's COMMENT genuinely justifies this OK status FOR THIS SPECIFIC REQUIREMENT, or whether it actually reveals a hidden problem.
+
+The comment must ADDRESS the requirement: it must confirm, explain or justify conformity for that exact requirement. A comment that talks about a different subject, a different requirement, or only gives a generic statement that says nothing about THIS requirement does NOT justify the OK status.
 
 Give a verdict for EACH requirement:
 - "CONTRADICTION": the comment actually describes a non-conformity (refusal, impossibility, missing or unsupported function, not applicable, out of scope, known defect...) → gravite "error"
 - "PARTIAL": partial, limited, conditional conformity, with an unvalidated deviation or alternative solution → gravite "warning"
 - "PENDING": conformity not yet achieved (in progress, to be confirmed, TBD, depends on a future action, delivery, or test...) → gravite "warning"
+- "HORS_SUJET": the comment does NOT address this requirement at all — it talks about a different subject, another requirement, or a generic statement that gives no information about THIS requirement → gravite "warning"
 - "AMBIGUOUS": comment too vague or unrelated to justify an OK → gravite "info"
-- "COHERENT": the comment confirms or is compatible with conformity → gravite "none"
+- "COHERENT": the comment confirms or is compatible with conformity for THIS requirement → gravite "none"
 
 Rules:
 - Comments may be in French or English.
 - A technical comment describing HOW the requirement is satisfied is COHERENT.
-- Comments of the type "<domain>: ok" (e.g. "EE: ok", "SW: ok", "Touch: ok", "EE: ok SW: ok"), possibly with a date, are domain-by-domain conformity confirmations: verdict COHERENT, never AMBIGUOUS.
+- Comments of the type "<domain>: ok" (e.g. "EE: ok", "SW: ok", "Touch: ok", "EE: ok SW: ok", "EMC 2026/03/18 OK", "DQ: ok,20260413"), possibly with a date, are domain-by-domain conformity confirmations: verdict COHERENT, never AMBIGUOUS or HORS_SUJET — even if the wording does not repeat the requirement text.
 - Plain references (document numbers, versions, dates, domain codes) are not problems.
 - Only flag AMBIGUOUS if the comment genuinely prevents understanding why the requirement would be conform.
+- Only flag HORS_SUJET when the comment is a real sentence about a DIFFERENT subject (e.g. the requirement is about appearance defects but the comment discusses a meeting or a different component) — never for short domain confirmations.
 - "citation": copy exactly the fragment of the comment (15 words max) that grounds your verdict; "" if COHERENT.
 - "explication": 1 to 2 precise, professional sentences in English.
 
@@ -1912,10 +3178,13 @@ def _analyze_ok_deep_llm(items: List[ConformityItem]) -> Tuple[List[Dict], set]:
         for offset, item in enumerate(batch):
             idx = start + offset
             comment = item.comment.strip()[:_LLM_COMMENT_MAX_CHARS]
+            desc = item.description.strip()[:_LLM_DESC_MAX_CHARS]
             conf = item.conformity_raw.strip() or "OK"
             lines.append(
                 f"[{idx}] Requirement {item.req_id or '(no id)'} — "
-                f"declared status: {conf}\nComment: {comment}"
+                f"declared status: {conf}\n"
+                f"Requirement: {desc or '(no description available)'}\n"
+                f"Comment: {comment}"
             )
         user_msg = (
             f"Analyze the following {len(batch)} requirements "
@@ -1960,6 +3229,7 @@ def _analyze_ok_deep_llm(items: List[ConformityItem]) -> Tuple[List[Dict], set]:
                     "CONTRADICTION": "error",
                     "PARTIAL": "warning",
                     "PENDING": "warning",
+                    "HORS_SUJET": "warning",
                 }.get(verdict, "info")
             if severity == "info":
                 continue  # only real problems (error/warning) are reported
@@ -2264,6 +3534,11 @@ def generate_report_text(analysis: ConformityAnalysis) -> str:
     for cat, count in sorted(analysis.stats.items(), key=lambda x: -x[1]):
         pct = (count / analysis.total_rows * 100) if analysis.total_rows else 0
         lines.append(f"  {cat:12s} : {count:4d} ({pct:5.1f}%)")
+    req_count = sum(1 for it in analysis.items if it.is_requirement)
+    doc_count = analysis.total_rows - req_count
+    if doc_count:
+        lines.append(f"  (of which {req_count} requirement rows and "
+                     f"{doc_count} document/reference rows)")
     lines.append("")
 
     # OK items
@@ -2380,6 +3655,17 @@ def analyze_conformity_matrix(filepath: str, file_name: str = "") -> ConformityA
 
 def analysis_to_dict(analysis: ConformityAnalysis) -> dict:
     """Convert ConformityAnalysis to a JSON-serializable dict."""
+    req_items = [it for it in analysis.items if it.is_requirement]
+    doc_items = [it for it in analysis.items if not it.is_requirement]
+
+    def _cat_counts(items):
+        counts: Dict[str, int] = {}
+        for it in items:
+            counts[it.conformity_category] = counts.get(it.conformity_category, 0) + 1
+        return counts
+
+    requirement_stats = _cat_counts(req_items)
+
     return {
         "fileName": analysis.file_name,
         "sheetName": analysis.sheet_name,
@@ -2387,10 +3673,10 @@ def analysis_to_dict(analysis: ConformityAnalysis) -> dict:
         "dataStartRow": analysis.data_start_row,
         "totalRows": analysis.total_rows,
         "sheetTotalRows": analysis.sheet_total_rows,
-        "debugRepeatedRows": getattr(analysis, "_debug_repeated_rows", 0),
-        "debugTotalRowElements": getattr(analysis, "_debug_total_row_elements", 0),
-        "debugTotalExpandedRows": getattr(analysis, "_debug_total_expanded_rows", 0),
         "stats": analysis.stats,
+        "requirementStats": requirement_stats,
+        "llmMaxItems": _LLM_MAX_ITEMS,
+        "llmBatchSize": _LLM_BATCH_SIZE,
         "columnMapping": analysis.column_mapping,
         "items": [
             {
@@ -2406,6 +3692,7 @@ def analysis_to_dict(analysis: ConformityAnalysis) -> dict:
                 "columnSet": item.column_set,
                 "needsReview": item.needs_review,
                 "classificationConfidence": item.classification_confidence,
+                "isRequirement": item.is_requirement,
             }
             for item in analysis.items
         ],
@@ -2424,6 +3711,13 @@ def analysis_to_dict(analysis: ConformityAnalysis) -> dict:
             "inconsistencies": len(analysis.inconsistencies),
             "okDeepFindings": len(analysis.ok_deep_findings),
             "needsReview": sum(1 for item in analysis.items if item.needs_review),
+            "totalRequirements": len(req_items),
+            "okRequirements": requirement_stats.get("OK", 0),
+            "nokRequirements": requirement_stats.get("NOK", 0),
+            "naRequirements": requirement_stats.get("NA", 0),
+            "emptyRequirements": requirement_stats.get("EMPTY", 0),
+            "totalDocuments": len(doc_items),
+            "okDocuments": sum(1 for it in doc_items if it.conformity_category == "OK"),
         },
     }
 
@@ -2436,9 +3730,9 @@ def analysis_to_dict(analysis: ConformityAnalysis) -> dict:
 class MatrixComparison:
     """Result of comparing two or more conformity matrices."""
     matrices: List[Dict] = field(default_factory=list)  # per-matrix summaries
-    # Per-requirement comparison: req_id → {matrix_name → category}
+    # Per-requirement comparison: key → {matrix_name → category}
     requirement_comparison: Dict[str, Dict[str, str]] = field(default_factory=dict)
-    # Requirements that changed status between matrices
+    # Requirements that changed status between consecutive matrices
     status_changes: List[Dict] = field(default_factory=list)
     # Requirements present in one matrix but not the other
     missing_in: Dict[str, List[str]] = field(default_factory=dict)
@@ -2450,6 +3744,15 @@ class MatrixComparison:
     total_compared: int = 0
     total_changes: int = 0
     total_missing: int = 0
+    # ── Version-to-version delta (any number of matrices) ──
+    # Requirements added / removed between consecutive matrices (step → keys)
+    new_in: Dict[str, List[str]] = field(default_factory=dict)
+    removed_in: Dict[str, List[str]] = field(default_factory=dict)
+    # Same-status rows whose comment / applicable version changed
+    comment_changes: List[Dict] = field(default_factory=list)
+    version_changes: List[Dict] = field(default_factory=list)
+    # One summary per consecutive pair (v1→v2, v2→v3, …)
+    steps: List[Dict] = field(default_factory=list)
 
 
 def compare_matrices(filepaths: List[str], file_names: Optional[List[str]] = None) -> MatrixComparison:
@@ -2497,54 +3800,53 @@ def compare_matrices(filepaths: List[str], file_names: Optional[List[str]] = Non
             },
         })
 
-    # Build per-requirement comparison
-    # Use the first column set (column_set=0) for each matrix to avoid duplicates
-    all_req_ids: set = set()
-    per_matrix_items: Dict[str, Dict[str, str]] = {}  # matrix_name → {req_id → category}
+    # Build per-requirement comparison keyed by a canonical requirement
+    # identity: the REQ-ID when present, else the first spec-side reference
+    # token found in column B. Only real requirement rows (is_requirement)
+    # participate — applicable-document/category rows are not requirements.
+    all_keys: set = set()
+    per_matrix: Dict[str, Dict[str, dict]] = {}  # matrix_name → key → item info
 
     for analysis in analyses:
         matrix_name = analysis.file_name
-        per_matrix_items[matrix_name] = {}
+        per_matrix[matrix_name] = {}
         for item in analysis.items:
-            if item.column_set == 0:  # Use first column set only
-                per_matrix_items[matrix_name][item.req_id] = item.conformity_category
-                all_req_ids.add(item.req_id)
+            if not item.is_requirement:
+                continue
+            key = _canonical_key(item)
+            if not key:
+                continue
+            per_matrix[matrix_name][key] = {
+                "reqId": item.req_id,
+                "reference": item.reference,
+                "category": item.conformity_category,
+                "comment": item.comment,
+                "version": item.version,
+            }
+            all_keys.add(key)
 
-    # Build comparison dict
-    for req_id in sorted(all_req_ids):
-        row: Dict[str, str] = {}
-        for matrix_name in file_names:
-            row[matrix_name] = per_matrix_items.get(matrix_name, {}).get(req_id, "MISSING")
-        comparison.requirement_comparison[req_id] = row
+    # requirement_comparison: key → {matrix_name → category}
+    for key in sorted(all_keys):
+        comparison.requirement_comparison[key] = {
+            name: per_matrix[name].get(key, {}).get("category", "MISSING")
+            for name in file_names
+        }
 
-    comparison.total_compared = len(all_req_ids)
+    comparison.total_compared = len(all_keys)
 
-    # Detect status changes (only meaningful for 2 matrices)
-    if len(analyses) == 2:
-        m1_name, m2_name = file_names[0], file_names[1]
-        m1_items = per_matrix_items.get(m1_name, {})
-        m2_items = per_matrix_items.get(m2_name, {})
+    # missing_in: for each matrix, the keys present elsewhere but absent here
+    for name in file_names:
+        missing = sorted(k for k in all_keys if k not in per_matrix[name])
+        if missing:
+            comparison.missing_in[name] = missing
+            comparison.total_missing += len(missing)
 
-        for req_id in sorted(all_req_ids):
-            cat1 = m1_items.get(req_id, "MISSING")
-            cat2 = m2_items.get(req_id, "MISSING")
-
-            if cat1 == "MISSING" and cat2 != "MISSING":
-                comparison.missing_in.setdefault(m1_name, []).append(req_id)
-                comparison.total_missing += 1
-            elif cat2 == "MISSING" and cat1 != "MISSING":
-                comparison.missing_in.setdefault(m2_name, []).append(req_id)
-                comparison.total_missing += 1
-            elif cat1 != cat2 and cat1 != "MISSING" and cat2 != "MISSING":
-                comparison.status_changes.append({
-                    "reqId": req_id,
-                    "from": cat1,
-                    "to": cat2,
-                    "matrix1": m1_name,
-                    "matrix2": m2_name,
-                    "improvement": _is_improvement(cat1, cat2),
-                })
-                comparison.total_changes += 1
+    # Consecutive-step deltas (v1→v2, v2→v3, …) — "what changed since the
+    # last gate". Works for any number of matrices, not just two.
+    (comparison.status_changes, comparison.comment_changes,
+     comparison.version_changes, comparison.new_in, comparison.removed_in,
+     comparison.steps) = _compute_deltas(per_matrix, file_names, all_keys)
+    comparison.total_changes = len(comparison.status_changes)
 
     # Generate comparison chart
     _generate_comparison_chart(comparison, file_names)
@@ -2555,11 +3857,156 @@ def compare_matrices(filepaths: List[str], file_names: Optional[List[str]] = Non
     return comparison
 
 
+def _canonical_key(item) -> str:
+    """Stable identity for a requirement row across matrix versions:
+    the REQ-ID when present, else the first spec-side reference token."""
+    rid = normalize_id(item.req_id)
+    if rid:
+        return rid
+    refs = extract_id_tokens(item.reference)
+    return refs[0] if refs else ""
+
+
+def _normalize_comment(text: str) -> str:
+    """Normalize a comment for change-detection: collapse every whitespace run
+    (line breaks, tabs, multiple spaces) to a single space, trim, and drop
+    spaces around measurement/relation symbols (± ≤ ≥ °) and the full-width
+    colon (：) that ODS/XLSX render differently.
+
+    ODS readers preserve the cell's line breaks (\\n) while XLSX readers
+    collapse them to spaces, so the SAME comment can look different between
+    two files. Formatting-only differences must not count as a comment change.
+    """
+    s = re.sub(r"\s+", " ", (text or "")).strip()
+    # 'Center±2mm' vs 'Center ±2mm', '≤1ms' vs ' ≤ 1ms', 'FALD：BLU' vs 'FALD： BLU'
+    s = re.sub(r"\s*([±≤≥°：])\s*", r"\1", s)
+    return s
+
+
+def _comments_differ(a: str, b: str) -> bool:
+    """True when two comments differ in content (ignoring whitespace/line-break
+    formatting)."""
+    return _normalize_comment(a) != _normalize_comment(b)
+
+
+def _compute_deltas(
+    per_matrix: Dict[str, Dict[str, dict]],
+    file_names: List[str],
+    all_keys: set,
+) -> Tuple[List[Dict], List[Dict], List[Dict], Dict[str, List[str]], Dict[str, List[str]], List[Dict]]:
+    """Consecutive-step deltas between matrices (v1→v2, v2→v3, …).
+
+    Returns (status_changes, comment_changes, version_changes, new_in,
+             removed_in, steps). Pure function — unit-testable without files.
+    """
+    status_changes: List[Dict] = []
+    comment_changes: List[Dict] = []
+    version_changes: List[Dict] = []
+    new_in: Dict[str, List[str]] = {}
+    removed_in: Dict[str, List[str]] = {}
+    steps: List[Dict] = []
+
+    for step, (a_name, b_name) in enumerate(zip(file_names, file_names[1:]), 1):
+        a = per_matrix[a_name]
+        b = per_matrix[b_name]
+        step_changes: List[Dict] = []
+        step_new: List[str] = []
+        step_removed: List[str] = []
+        step_comment: List[Dict] = []
+        step_version: List[Dict] = []
+
+        for key in sorted(all_keys):
+            ia = a.get(key)
+            ib = b.get(key)
+            if ia is None and ib is not None:
+                step_new.append(key)
+            elif ia is not None and ib is None:
+                step_removed.append(key)
+            elif ia is not None and ib is not None:
+                if ia["category"] != ib["category"]:
+                    step_changes.append({
+                        "reqId": ib["reqId"] or ia["reqId"],
+                        "reference": ib["reference"] or ia["reference"],
+                        "from": ia["category"],
+                        "to": ib["category"],
+                        "matrix1": a_name,
+                        "matrix2": b_name,
+                        "step": step,
+                        "improvement": _is_improvement(ia["category"], ib["category"]),
+                        "changeType": _change_type(ia["category"], ib["category"]),
+                    })
+                # Comment change — detected even when the category also changed
+                # (a supplier can reword a comment while flipping the status).
+                if _comments_differ(ia["comment"], ib["comment"]):
+                    step_comment.append({
+                        "reqId": ib["reqId"] or ia["reqId"],
+                        "reference": ib["reference"] or ia["reference"],
+                        "matrix1": a_name,
+                        "matrix2": b_name,
+                        "step": step,
+                        "fromComment": ia["comment"],
+                        "toComment": ib["comment"],
+                    })
+                # Version change — likewise independent of the status change.
+                if (ia["version"] or "").strip() != (ib["version"] or "").strip():
+                    step_version.append({
+                        "reqId": ib["reqId"] or ia["reqId"],
+                        "reference": ib["reference"] or ia["reference"],
+                        "matrix1": a_name,
+                        "matrix2": b_name,
+                        "step": step,
+                        "fromVersion": ia["version"],
+                        "toVersion": ib["version"],
+                    })
+
+        status_changes.extend(step_changes)
+        comment_changes.extend(step_comment)
+        version_changes.extend(step_version)
+        new_in[str(step)] = step_new
+        removed_in[str(step)] = step_removed
+        answered_before = sum(1 for v in a.values() if v["category"] != "EMPTY")
+        answered_after = sum(1 for v in b.values() if v["category"] != "EMPTY")
+        steps.append({
+            "step": step,
+            "matrix1": a_name,
+            "matrix2": b_name,
+            "statusChanges": len(step_changes),
+            "new": len(step_new),
+            "removed": len(step_removed),
+            "commentChanges": len(step_comment),
+            "versionChanges": len(step_version),
+            "answeredBefore": answered_before,
+            "answeredAfter": answered_after,
+        })
+
+    return status_changes, comment_changes, version_changes, new_in, removed_in, steps
+
+
 def _is_improvement(from_cat: str, to_cat: str) -> bool:
-    """Check if a status change is an improvement."""
-    # OK is best, then NA, then EMPTY, then NOK
-    ranking = {"OK": 3, "NA": 2, "EMPTY": 0, "NOK": -1}
+    """Check if a status change is an improvement.
+
+    EMPTY ('no answer') is the WORST state — an unanswered requirement is worse
+    than any answered one: X → EMPTY means the supplier WITHDREW their answer
+    (a regression), and EMPTY → X means they newly answered it (an improvement).
+    Among real answers the order is OK > NA > NOK.
+    """
+    ranking = {"EMPTY": 0, "NOK": 1, "NA": 2, "OK": 3}
     return ranking.get(to_cat, 0) > ranking.get(from_cat, 0)
+
+
+def _change_type(from_cat: str, to_cat: str) -> str:
+    """Classify a status change into one of four human-readable kinds.
+
+    - "added"    : EMPTY → real answer (newly answered)
+    - "removed"  : real answer → EMPTY (answer withdrawn)
+    - "improved" : real → real, moved up (OK > NA > NOK)
+    - "regressed": real → real, moved down
+    """
+    if from_cat == "EMPTY" and to_cat != "EMPTY":
+        return "added"
+    if from_cat != "EMPTY" and to_cat == "EMPTY":
+        return "removed"
+    return "improved" if _is_improvement(from_cat, to_cat) else "regressed"
 
 
 def _generate_comparison_chart(comparison: MatrixComparison, file_names: List[str]) -> None:
@@ -2717,18 +4164,22 @@ def _generate_comparison_report(comparison: MatrixComparison, file_names: List[s
         lines.append("─" * 50)
         lines.append(f"STATUS CHANGES — {len(comparison.status_changes)}")
         lines.append("─" * 50)
-        improvements = [c for c in comparison.status_changes if c["improvement"]]
-        regressions = [c for c in comparison.status_changes if not c["improvement"]]
-
-        if improvements:
-            lines.append(f"\n  ✅ IMPROVEMENTS ({len(improvements)}):")
-            for change in improvements[:20]:
-                lines.append(f"    {change['reqId']}: {change['from']} → {change['to']}")
-
-        if regressions:
-            lines.append(f"\n  ❌ REGRESSIONS ({len(regressions)}):")
-            for change in regressions[:20]:
-                lines.append(f"    {change['reqId']}: {change['from']} → {change['to']}")
+        groups = [
+            ("🟢 NEWLY ANSWERED (EMPTY → status)",
+             [c for c in comparison.status_changes if c.get("changeType") == "added"]),
+            ("🔴 ANSWER REMOVED (status → EMPTY)",
+             [c for c in comparison.status_changes if c.get("changeType") == "removed"]),
+            ("✅ IMPROVED",
+             [c for c in comparison.status_changes if c.get("changeType") == "improved"]),
+            ("❌ REGRESSED",
+             [c for c in comparison.status_changes if c.get("changeType") == "regressed"]),
+        ]
+        for label, group in groups:
+            if group:
+                lines.append(f"\n  {label} ({len(group)}):")
+                for change in group[:20]:
+                    lines.append(f"    {change.get('reqId') or change.get('reference')}: "
+                                 f"{change['from']} → {change['to']}")
         lines.append("")
 
     # Missing requirements
@@ -2740,6 +4191,39 @@ def _generate_comparison_report(comparison: MatrixComparison, file_names: List[s
             lines.append(f"\n  Missing in '{matrix_name}': {len(req_ids)} requirements")
             for req_id in req_ids[:20]:
                 lines.append(f"    {req_id}")
+        lines.append("")
+
+    # Version-to-version delta (consecutive steps)
+    if comparison.steps:
+        lines.append("─" * 50)
+        lines.append("VERSION-TO-VERSION DELTA")
+        lines.append("─" * 50)
+        for step in comparison.steps:
+            lines.append(f"\n  Step {step['step']}: {step['matrix1']} → {step['matrix2']}")
+            lines.append(f"     Status changes: {step['statusChanges']} | "
+                         f"New: {step['new']} | Removed: {step['removed']} | "
+                         f"Comment changes: {step['commentChanges']} | "
+                         f"Version changes: {step['versionChanges']}")
+            if "answeredBefore" in step:
+                before, after = step["answeredBefore"], step["answeredAfter"]
+                if before > after:
+                    trend = f"lost {before - after}"
+                elif after > before:
+                    trend = f"gained {after - before}"
+                else:
+                    trend = "unchanged"
+                lines.append(f"     Supplier answers: {before} → {after} ({trend})")
+        if comparison.status_changes:
+            lines.append(f"\n  STATUS CHANGES ({len(comparison.status_changes)}):")
+            arrows = {"added": "🟢", "removed": "🔴", "improved": "✅", "regressed": "❌"}
+            for c in comparison.status_changes[:30]:
+                arrow = arrows.get(c.get("changeType"), "✅" if c["improvement"] else "❌")
+                lines.append(f"    {arrow} step{c['step']} "
+                             f"{c.get('reqId') or c.get('reference')}: {c['from']} → {c['to']}")
+        if comparison.comment_changes:
+            lines.append(f"\n  COMMENT CHANGES ({len(comparison.comment_changes)}):")
+            for c in comparison.comment_changes[:20]:
+                lines.append(f"    step{c['step']} {c.get('reqId') or c.get('reference')}")
         lines.append("")
 
     lines.append("=" * 70)
@@ -2764,4 +4248,9 @@ def comparison_to_dict(comparison: MatrixComparison) -> dict:
         "totalCompared": comparison.total_compared,
         "totalChanges": comparison.total_changes,
         "totalMissing": comparison.total_missing,
+        "newIn": comparison.new_in,
+        "removedIn": comparison.removed_in,
+        "commentChanges": comparison.comment_changes,
+        "versionChanges": comparison.version_changes,
+        "steps": comparison.steps,
     }

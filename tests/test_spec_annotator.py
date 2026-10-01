@@ -138,6 +138,34 @@ class TestCollectTargets:
         }
         assert len(collect_highlight_targets(report)) == 1
 
+    def test_multiline_excerpt_is_split_into_per_line_targets(self):
+        """
+        Regression: the semantic-analysis (AI) check's own quoted excerpt is
+        built from a whole extracted SECTION (potentially several original
+        paragraphs/table rows joined with "\\n"), not a single paragraph.
+        On the real ASU spec, 3 such excerpts (P05/R28/R38 findings)
+        silently produced ZERO highlights: the joined multi-line string can
+        never match any single _iter_docx_units() unit, since each unit is
+        exactly one paragraph or one table row. Splitting on the real "\\n"
+        boundaries — before _clean_target collapses them into spaces —
+        keeps every individual line highlightable.
+        """
+        report = {
+            "findings": [{
+                "severity": "warning",
+                "user_excerpt": (
+                    "Maintainability requirements\n"
+                    "Diagnostic: Circuit malfunction\n"
+                    "REF-ASU-CD-MAINT-0001(0) | The ASU shall record a DTC with the parameters below"
+                ),
+            }]
+        }
+        targets = collect_highlight_targets(report)
+        assert len(targets) == 3
+        assert any("Maintainability requirements" in t for t in targets)
+        assert any("Diagnostic: Circuit malfunction" in t for t in targets)
+        assert any("REF-ASU-CD-MAINT-0001" in t for t in targets)
+
     def test_itemized_excerpts_collected_even_on_a_passing_finding(self):
         # Regression: G_TRACEABILITY can "pass" overall (ratio >= 50%) while
         # still carrying `items` for its remaining untraced requirements —

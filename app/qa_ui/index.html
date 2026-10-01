@@ -629,6 +629,10 @@
           if (!file) return;
           var name = file.name;
           var ext = name.slice(name.lastIndexOf(".")).toLowerCase();
+          if (ext === ".doc") {
+            showToast("Legacy .doc files are not supported — please re-save this file as .docx (Word: File > Save As > Word Document (.docx)) and upload again.", "err");
+            return;
+          }
           if (ext !== ".txt" && ext !== ".docx" && ext !== ".pdf") {
             showToast("Unsupported file type. Accepted: .txt, .docx, .pdf", "err");
             return;

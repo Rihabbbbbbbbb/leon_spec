@@ -571,6 +571,11 @@ def upload_and_validate(req: func.HttpRequest) -> func.HttpResponse:
                     file_name = "uploaded_spec.docx"
                 elif body_bytes[:4] == b"%PDF":
                     file_name = "uploaded_spec.pdf"
+                elif body_bytes[:8] == b"\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1":
+                    # OLE2 Compound File signature — legacy .doc (unsupported,
+                    # named explicitly so the extension check below rejects it
+                    # with clear guidance instead of misreading it as .txt).
+                    file_name = "uploaded_spec.doc"
                 else:
                     file_name = "uploaded_spec.txt"
             logging.info(f"Raw binary path: {file_name}, {len(file_bytes)} bytes")
@@ -1116,6 +1121,8 @@ def upload_and_validate_pdf(req: func.HttpRequest) -> func.HttpResponse:
                     file_name = "uploaded_spec.docx"
                 elif body_bytes[:4] == b"%PDF":
                     file_name = "uploaded_spec.pdf"
+                elif body_bytes[:8] == b"\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1":
+                    file_name = "uploaded_spec.doc"
                 else:
                     file_name = "uploaded_spec.txt"
 
@@ -1663,9 +1670,10 @@ def upload_and_get_url(req: func.HttpRequest) -> func.HttpResponse:
         file_name = "uploaded_spec.docx"
 
     # Validate extension
+    from app.qa.retrieval import ACCEPTED_UPLOAD_EXTENSIONS, unsupported_file_type_message
     suffix = Path(file_name).suffix.lower()
-    if suffix not in {".txt", ".docx", ".pdf"}:
-        return _error_response(f"File type '{suffix}' not accepted. Use .txt, .docx, or .pdf.", 400)
+    if suffix not in ACCEPTED_UPLOAD_EXTENSIONS:
+        return _error_response(unsupported_file_type_message(suffix), 400)
 
     # Max 25 MB
     if len(file_bytes) > 25 * 1024 * 1024:
