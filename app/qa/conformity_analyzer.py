@@ -1648,7 +1648,7 @@ def extract_conformity_data(filepath: str, file_name: str = "") -> ConformityAna
         # On matrices with explicit supplier and customer fields, keep only
         # the primary supplier comment adjacent to the supplier conformity
         # column. Later test-delivery comments are not conformity rationale.
-        if concrete_leaf_header:
+        if col_mapping.get("conformity") and col_mapping.get("stellantis_verdict"):
             supplier_comment = [
                 ci for ci in col_mapping.get("comment", [])
                 if ci > min(col_mapping.get("conformity", [ci]))
@@ -1707,6 +1707,13 @@ def extract_conformity_data(filepath: str, file_name: str = "") -> ConformityAna
                    for ci in col_mapping.get("conformity", [])
                    + col_mapping.get("stellantis_verdict", []))
         )
+        supplier_answer_rows = sum(
+            1 for row in sheet[header_row + 1:header_row + 201]
+            if any(ci < len(row) and _looks_like_req_id_value(_normalize(row[ci]))
+                   for ci in (requirement_ids or id_col_candidates))
+            and any(ci < len(row) and _looks_like_conformity_value(_normalize(row[ci]))
+                    for ci in col_mapping.get("conformity", []))
+        )
         if not col_mapping["conformity"] and not col_mapping.get("stellantis_verdict"):
             continue
         id_anchor = bool(col_mapping.get("req_id"))
@@ -1721,7 +1728,8 @@ def extract_conformity_data(filepath: str, file_name: str = "") -> ConformityAna
                  + 3 * int(bool(col_mapping.get("req_id")))
                  + 3 * int(bool(col_mapping.get("description")))
                  + min(requirement_density, 20)
-                 + min(status_density, 20))
+                 + min(status_density, 20)
+                 + min(supplier_answer_rows, 20))
         sheet_label = _normalize(sheet_names[si] if si < len(sheet_names) else "")
         if any(marker in sheet_label for marker in ("help", "audit", "check", "config", "first page")):
             score -= 25
@@ -1846,6 +1854,15 @@ def extract_conformity_data(filepath: str, file_name: str = "") -> ConformityAna
             )
         ), None)
         if first_real_id_row is not None:
+            if ok_cols or nok_cols:
+                first_real_id_row = next((
+                    ri for ri in range(analysis.data_start_row, first_real_id_row)
+                    if any(ci < len(sheet[ri]) and sheet[ri][ci].strip()
+                           for ci in description_cols)
+                    and any(ci < len(sheet[ri]) and
+                            _looks_like_conformity_value(_normalize(sheet[ri][ci]))
+                            for ci in ok_cols + nok_cols)
+                ), first_real_id_row)
             analysis.data_start_row = first_real_id_row
 
     # Detect the matrix format: Stellantis matrices use "REQ-…" requirement ids;
@@ -2404,7 +2421,9 @@ def extract_conformity_data(filepath: str, file_name: str = "") -> ConformityAna
             classification_confidence=confidence,
             is_requirement=(
                 req_id.startswith("REQ-") if uses_req_ids
-                else (_looks_like_req_id_value(_normalize(req_id)) if uses_supplier_ids
+                else ((_is_requirement_id(req_id)
+                       or (_looks_like_req_id_value(_normalize(req_id))
+                           and bool(best_conf_raw or description.strip()))) if uses_supplier_ids
                       else (_is_requirement_id(req_id) or _looks_like_gentex_requirement_id(req_id)))
             ),
         )
