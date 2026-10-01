@@ -661,8 +661,8 @@
           <div class="upload-zone" id="aeris-evidence-zone" onclick="document.getElementById('aeris-evidence-input').click()">
             <div class="upload-icon">📑</div>
             <p><strong>Click or drag the TDR</strong></p>
-            <p>.pptx, .ppt, .pdf, .docx, .txt — several files allowed</p>
-            <input type="file" id="aeris-evidence-input" accept=".pptx,.ppt,.pdf,.docx,.txt" multiple />
+            <p>.pptx, .pdf, .docx, .txt — several files allowed</p>
+            <input type="file" id="aeris-evidence-input" accept=".pptx,.pdf,.docx,.txt" multiple />
           </div>
           <div id="aeris-evidence-info"></div>
         </div>
@@ -1526,11 +1526,24 @@ function renderAeris(data) {
     `<div class="stat-card ${c.cls}"><div class="value">${c.val}</div><div class="label">${c.label}</div></div>`
   ).join('');
   const ev = (data.evidenceFiles || []).join(', ');
-  document.getElementById('aeris-meta').innerHTML =
-    `Matrix: <strong>${data.matrixFile || ''}</strong> · Evidence: <strong>${ev}</strong>` +
+  const meta = document.getElementById('aeris-meta');
+  meta.replaceChildren();
+  meta.append('Matrix: ');
+  const matrixName = document.createElement('strong');
+  matrixName.textContent = data.matrixFile || '';
+  meta.append(matrixName, ' · Evidence: ');
+  const evidenceNames = document.createElement('strong');
+  evidenceNames.textContent = ev;
+  meta.append(evidenceNames,
     ` · Coverage: ${s.evidenceCoverage || 0}% · Matrix too optimistic: ${s.matrixTooOptimistic || 0}` +
-    ` · Opposite declarations: ${s.declarationOpposite || 0} · TDR self-conflict: ${s.tdrConflict || 0}`;
-  document.getElementById('aeris-notes').innerHTML = (data.notes || []).map(n => `<p>${n}</p>`).join('');
+    ` · Opposite declarations: ${s.declarationOpposite || 0} · TDR self-conflict: ${s.tdrConflict || 0}`);
+  document.getElementById('aeris-notes').replaceChildren(
+    ...(data.notes || []).map(note => {
+      const p = document.createElement('p');
+      p.textContent = note;
+      return p;
+    })
+  );
   document.getElementById('aeris-risks').innerHTML = (data.topRisks || []).length
     ? '<h2 style="margin-bottom:8px">Top risks</h2>' + data.topRisks.map((r, i) =>
         `<span class="risk-chip"><strong>${i+1}. ${r.domain}</strong> — ${r.hardFails} hard / ${r.count} items`

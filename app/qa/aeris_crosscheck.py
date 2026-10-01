@@ -180,15 +180,19 @@ def crosscheck_analysis(
                 "chunks": len(d.chunks),
                 "pagesOrSlides": d.page_count,
                 "parseError": d.parse_error,
+                "warnings": d.warnings,
             }
             for d in documents
         ],
     )
+    for doc in documents:
+        if doc.parse_error:
+            report.notes.append(f"{doc.file_name}: {doc.parse_error}")
+        report.notes.extend(f"{doc.file_name}: {warning}" for warning in doc.warnings)
     if not chunks:
         report.notes.append(
-            "No extractable text in the evidence file(s). "
-            "PPT/PDF scans without a text layer cannot be read — export as PDF "
-            "with text or provide a .pptx / .txt dump."
+            "No extractable evidence in the uploaded files; check the parse errors "
+            "and OCR warnings above. No numeric verdict can be established."
         )
 
     items: List[CrossCheckItem] = []
@@ -440,7 +444,7 @@ def _retrieve(
         body = chunk.text
         low = body.lower()
 
-        if req.req_id and req.req_id.lower() in low:
+        if req.req_id and re.search(r"(?<!\w)" + re.escape(req.req_id) + r"(?!\w)", body, re.I):
             score += 8.0
 
         c_tokens = _tokens(body)
@@ -454,8 +458,9 @@ def _retrieve(
         chunk_qty = {m.quantity for m in chunk_meas if m.quantity}
         if qty and qty & chunk_qty:
             score += 4.0
-        elif qty and chunk_qty and not (qty & chunk_qty):
-            score -= 1.5
+        elif (qty and chunk_qty and not (qty & chunk_qty)
+              and all(m.quantity and m.quantity not in families for m in chunk_meas)):
+            score -= 4.0
         elif families & chunk_families:
             score += 2.5
         elif families and any(f in low for f in families):
@@ -477,7 +482,13 @@ def _retrieve(
                 score += 1.0
                 break
 
-        if score >= 1.4:
+        # A unit is a type, not an identity: PWM at 40 Hz is not proof of
+        # a 40 Hz display refresh rate. Require a named quantity or lexical
+        # evidence beyond the unit family before admitting a passage.
+        has_anchor = bool(qty & chunk_qty or overlap or (
+            req.req_id and re.search(r"(?<!\w)" + re.escape(req.req_id) + r"(?!\w)", body, re.I)
+        ))
+        if score >= 1.4 and has_anchor:
             scored.append((chunk, score))
 
     scored.sort(key=lambda x: x[1], reverse=True)
@@ -492,6 +503,11 @@ def _maybe_embed_rerank(
     query: str,
     ranked: List[Tuple[EvidenceChunk, float]],
 ) -> List[Tuple[EvidenceChunk, float]]:
+    # Evidence can contain confidential supplier material. Do not send it to
+    # an external embedding service as a side effect of an ordinary analysis.
+    import os
+    if os.getenv("AERIS_ENABLE_EMBEDDINGS") != "1":
+        return ranked
     if len(ranked) < 2 or not query.strip():
         return ranked
     try:

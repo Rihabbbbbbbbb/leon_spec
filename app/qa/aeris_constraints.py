@@ -300,6 +300,12 @@ def _is_id_or_condition_number(text: str, start: int, raw_num: str) -> bool:
 def _quantity_of(text: str) -> str:
     """Fine-grained quantity so % attenuation is never compared to % CPU load."""
     t = (text or "").lower()
+    if re.search(r"\brefresh(?:\s+rate)?\b|\bframe\s+rate\b|rafra[iî]chissement", t):
+        return "refresh_frequency"
+    if re.search(r"\bpwm\b|\bdimming\s+frequency\b", t):
+        return "pwm_frequency"
+    if re.search(r"\bsampl(?:ing|e)\s+(?:rate|frequency)\b", t):
+        return "sampling_frequency"
     if re.search(r"attenuat|lcf", t):
         return "attenuation"
     if re.search(r"\bcd\s*/\s*m|nits?\b", t) or (
@@ -380,6 +386,13 @@ def _prefer_quantity(window: str, text: str, unit_family: str = "") -> str:
     return a or b
 
 
+def _frequency_clause(text: str, start: int, end: int) -> tuple[str, str, str]:
+    left = max(text.rfind("\n", 0, start), text.rfind(";", 0, start)) + 1
+    ends = [pos for pos in (text.find("\n", end), text.find(";", end)) if pos >= 0]
+    right = min(ends) if ends else len(text)
+    return text[left:start][-40:], text[end:right][:40], text[left:right]
+
+
 # Famille d'unité attendue pour chaque grandeur nommée. Sert à refuser
 # une étiquette empruntée à une autre ligne de la même diapositive.
 _QTY_FAMILY = {
@@ -391,6 +404,8 @@ _QTY_FAMILY = {
     "storage_temperature": "temperature", "display_temperature": "temperature",
     "operating_temperature": "temperature", "temperature": "temperature",
     "startup_time": "time",
+    "refresh_frequency": "frequency", "pwm_frequency": "frequency",
+    "sampling_frequency": "frequency",
 }
 
 
@@ -481,6 +496,11 @@ def extract_constraints(text: str, source: str = "requirement") -> List[Constrai
             else:
                 continue
         value = to_canonical(_norm_num(raw_num), family, factor)
+        if family == "frequency":
+            prefix, after, clause = _frequency_clause(text, m.start(), m.end())
+            window = prefix + m.group(0) + after
+        else:
+            clause = text
         found.append(Constraint(
             raw=m.group(0).strip(),
             value=value,
@@ -488,7 +508,7 @@ def extract_constraints(text: str, source: str = "requirement") -> List[Constrai
             unit_family=family,
             unit=_CANONICAL_UNIT.get(family, unit or family),
             condition=_extract_condition(after) or _extract_condition(window) or _extract_condition(text),
-            quantity=_prefer_quantity(window, text, family) or family,
+            quantity=_prefer_quantity(window, clause, family) or family,
             source=source,
             display_unit=unit or family,
             display_factor=factor,
@@ -564,7 +584,12 @@ def extract_measurements(text: str, location: str = "") -> List[Measurement]:
                 family, unit, factor = "temperature", "°c", 1.0
             else:
                 continue
-        qty = _prefer_quantity(window, text, family)
+        if family == "frequency":
+            prefix, after, clause = _frequency_clause(text, m.start(), m.end())
+            window = prefix + m.group(0) + after
+        else:
+            clause = text
+        qty = _prefer_quantity(window, clause, family)
         if family == "percent" and not qty:
             if re.search(r"attenuat|lcf", window + " " + after, re.I):
                 qty = "attenuation"

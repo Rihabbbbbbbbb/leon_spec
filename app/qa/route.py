@@ -1274,7 +1274,7 @@ def conformity_compare(req: CompareRequest) -> dict:
 
 # ── AERIS matrix ↔ TDR evidence cross-check ────────────────────────
 _AERIS_MATRIX_EXT = {".ods", ".xlsx", ".xlsm", ".xls"}
-_AERIS_EVIDENCE_EXT = {".pptx", ".ppt", ".pdf", ".docx", ".txt"}
+_AERIS_EVIDENCE_EXT = {".pptx", ".pdf", ".docx", ".txt"}
 _AERIS_MAX_BYTES = 40 * 1024 * 1024
 
 
@@ -1288,7 +1288,7 @@ async def aeris_crosscheck(
 
     Multipart fields:
       - matrix:   ODS / XLSX / XLSM conformity matrix
-      - evidence: one or more TDR files (.pptx, .ppt, .pdf, .docx, .txt)
+      - evidence: one or more TDR files (.pptx, .pdf, .docx, .txt)
 
     Returns the synthesis JSON plus a color-coded Excel report (base64).
     The numeric verdicts do not require Azure OpenAI.
@@ -1322,11 +1322,13 @@ async def aeris_crosscheck(
         if not ev.filename:
             continue
         ext = _Path(ev.filename).suffix.lower()
+        if ext == ".ppt":
+            raise HTTPException(status_code=400, detail="Export legacy .ppt as .pptx or PDF before uploading.")
         if ext not in _AERIS_EVIDENCE_EXT:
             raise HTTPException(
                 status_code=400,
                 detail=f"Unsupported evidence type '{ext}' ({ev.filename}). "
-                       f"Accepted: .pptx, .ppt, .pdf, .docx, .txt",
+                       f"Accepted: .pptx, .pdf, .docx, .txt",
             )
         blob = await ev.read()
         if not blob:
