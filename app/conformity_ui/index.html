@@ -360,10 +360,6 @@
     }
     .said-box.disagree { border-color: #f0b4b0; background: #fff6f5; }
     .said-box.agree { border-color: #b7e4c7; background: #f3fbf6; }
-    .crosswalk-row {
-      border: 1px solid var(--border); border-radius: 10px;
-      padding: 12px 14px; margin-bottom: 10px; background: var(--panel);
-    }
     .dual-upload { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
     @media (max-width: 800px) { .dual-upload { grid-template-columns: 1fr; } }
     .risk-chip {
@@ -704,48 +700,32 @@
         </p>
         <div id="aeris-contra-list"></div>
       </div>
-      <div class="panel" id="aeris-crosswalk-panel">
-        <h2>3. Comparatif déclaration ↔ TDR</h2>
-        <p class="muted mb-16">
-          Contrôle à trois niveaux : exigence Stellantis ↔ déclaration dans la
-          matrice ↔ ce qui est écrit dans le TDR. Un NOK assumé (la matrice dit
-          déjà NOK et le TDR le confirme) n'est pas une incohérence.
-        </p>
-        <div class="filter-bar">
-          <button class="filter-btn active" data-wfilter="INCOMPLIANT" onclick="setWalkFilter('INCOMPLIANT')">Incohérentes seulement</button>
-          <button class="filter-btn" data-wfilter="OPPOSITE" onclick="setWalkFilter('OPPOSITE')">Déclarations opposées</button>
-          <button class="filter-btn" data-wfilter="VALUE_MISMATCH" onclick="setWalkFilter('VALUE_MISMATCH')">Chiffres différents</button>
-          <button class="filter-btn" data-wfilter="WRONG_TARGET" onclick="setWalkFilter('WRONG_TARGET')">Mauvaise cible</button>
-          <button class="filter-btn" data-wfilter="TDR_CONFLICT" onclick="setWalkFilter('TDR_CONFLICT')">TDR contradictoire</button>
-          <button class="filter-btn" data-wfilter="ALL" onclick="setWalkFilter('ALL')">Tout afficher</button>
-        </div>
-        <div id="aeris-crosswalk-list"></div>
-      </div>
       <div class="panel">
-        <h2>4. Détail des exigences</h2>
+        <h2>3. Détail des exigences</h2>
+        <p class="muted mb-16">
+          Le détail complet, si vous voulez vérifier une exigence précise.
+          Par défaut, seules les exigences incohérentes sont affichées.
+        </p>
         <div class="filter-bar">
           <input type="text" class="search-box" id="aeris-search" placeholder="Rechercher REQ-ID, cible, preuve…" oninput="filterAerisTable()" />
           <button class="filter-btn active" data-afilter="INCOHERENTES" onclick="setAerisFilter('INCOHERENTES')">Incohérentes seulement</button>
+          <button class="filter-btn" data-afilter="NON_CONFORME" onclick="setAerisFilter('NON_CONFORME')">Non conformes</button>
+          <button class="filter-btn" data-afilter="PARTIELLEMENT_CONFORME" onclick="setAerisFilter('PARTIELLEMENT_CONFORME')">Partiellement conformes</button>
+          <button class="filter-btn" data-afilter="MANQUANT" onclick="setAerisFilter('MANQUANT')">Sans preuve TDR</button>
+          <button class="filter-btn" data-afilter="CONFORME" onclick="setAerisFilter('CONFORME')">Conformes</button>
           <button class="filter-btn" data-afilter="ALL" onclick="setAerisFilter('ALL')">Tout afficher</button>
-          <button class="filter-btn" data-afilter="NON_CONFORME" onclick="setAerisFilter('NON_CONFORME')">Non-conforme</button>
-          <button class="filter-btn" data-afilter="PARTIELLEMENT_CONFORME" onclick="setAerisFilter('PARTIELLEMENT_CONFORME')">Partial</button>
-          <button class="filter-btn" data-afilter="DEVIATION" onclick="setAerisFilter('DEVIATION')">Deviation</button>
-          <button class="filter-btn" data-afilter="CONFORME" onclick="setAerisFilter('CONFORME')">Conforme</button>
-          <button class="filter-btn" data-afilter="MANQUANT" onclick="setAerisFilter('MANQUANT')">Missing</button>
-          <button class="filter-btn" data-afilter="PREUVE_INSUFFISANTE" onclick="setAerisFilter('PREUVE_INSUFFISANTE')">Weak proof</button>
         </div>
         <div class="table-container">
           <table id="aeris-table">
             <thead>
               <tr>
-                <th>REQ-ID</th>
-                <th>Verdict</th>
-                <th>Matrix</th>
-                <th>Said</th>
-                <th>Coherence</th>
-                <th>Target</th>
-                <th>Supplier result</th>
-                <th>Evidence</th>
+                <th>Exigence</th>
+                <th>Verdict AERIS</th>
+                <th>Matrice</th>
+                <th>Incohérence</th>
+                <th>Demandé</th>
+                <th>Résultat TDR</th>
+                <th>Preuve</th>
               </tr>
             </thead>
             <tbody id="aeris-tbody"></tbody>
@@ -1448,7 +1428,6 @@ let aerisEvidence = [];
 let aerisReport = null;
 let aerisExcel = null;
 let aerisFilter = 'ALL';
-let aerisWalkFilter = 'ALL';
 
 function _bindDrop(zone, input, onFiles) {
   input.addEventListener('change', () => { if (input.files.length) onFiles(input.files); });
@@ -1559,7 +1538,6 @@ function renderAeris(data) {
       ).join('')
     : '';
   renderAerisContradictions(data.incoherences || []);
-  setWalkFilter('INCOMPLIANT');
   setAerisFilter('INCOHERENTES');
 }
 
@@ -1595,63 +1573,26 @@ function renderAerisContradictions(list) {
   }).join('');
 }
 
-function setWalkFilter(f) {
-  aerisWalkFilter = f;
-  document.querySelectorAll('#results-aeris [data-wfilter]').forEach(b => b.classList.remove('active'));
-  const btn = document.querySelector(`#results-aeris [data-wfilter="${f}"]`);
-  if (btn) btn.classList.add('active');
-  renderAerisCrosswalk((aerisReport && aerisReport.crosswalk) || []);
-}
-
-function renderAerisCrosswalk(list) {
-  const box = document.getElementById('aeris-crosswalk-list');
-  if (!box) return;
-  const incompliant = new Set(['OPPOSITE', 'VALUE_MISMATCH', 'WRONG_TARGET', 'TDR_CONFLICT']);
-  const filtered = list.filter(w => {
-    if (aerisWalkFilter === 'ALL') return true;
-    if (aerisWalkFilter === 'INCOMPLIANT') return incompliant.has(w.alignment);
-    return w.alignment === aerisWalkFilter;
-  });
-  if (!filtered.length) {
-    box.innerHTML = '<p class="muted">No statement row in this filter.</p>';
-    return;
-  }
-  box.innerHTML = filtered.map(w => {
-    const bad = incompliant.has(w.alignment);
-    const valBad = w.values_agree === 'DISAGREE';
-    const polBad = w.polarity_agree === 'OPPOSITE';
-    return `<div class="crosswalk-row">
-      <div class="header" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-        <strong style="font-family:var(--mono)">${_esc(w.req_id)}</strong>
-        <span class="badge badge-${w.alignment || 'ALIGNED'}">${_esc(w.alignment || 'ALIGNED')}</span>
-        ${w.incompliance_type ? `<span class="badge badge-${w.incompliance_type}">${_esc(w.incompliance_type)}</span>` : ''}
-        ${w.stellatis_target ? `<span class="muted" style="font-size:12px">Target ${_esc(w.stellatis_target)}</span>` : ''}
-      </div>
-      ${w.incompliance_title ? `<div class="explanation" style="margin-top:6px">${_esc(w.incompliance_title)}</div>` : ''}
-      <div class="said-grid">
-        <div class="said-box ${valBad || polBad ? 'disagree' : 'agree'}">
-          <div class="lbl">Matrix said · ${ _esc(w.matrix_polarity || '') }</div>
-          ${_esc(w.matrix_said)}
-        </div>
-        <div class="said-box ${valBad || polBad ? 'disagree' : 'agree'}">
-          <div class="lbl">TDR said · ${ _esc(w.tdr_polarity || '') }${w.tdr_location ? ' · ' + _esc(w.tdr_location) : ''}</div>
-          ${_esc(w.tdr_said)}
-        </div>
-      </div>
-      <div class="meta muted" style="margin-top:8px;font-size:12px">
-        Values: ${_esc(w.values_agree)} · Polarity: ${_esc(w.polarity_agree)}
-        ${w.restated_target ? ' · Restated target: ' + _esc(w.restated_target) + ' (' + _esc(w.restated_target_match) + ')' : ''}
-        ${w.tdr_internal_conflict ? ' · TDR conflict: ' + _esc(w.tdr_internal_conflict) : ''}
-      </div>
-      ${w.action ? `<div class="meta muted" style="font-size:12px">Action: ${_esc(w.action)}</div>` : ''}
-    </div>`;
-  }).join('');
-}
-
 function _esc(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
   }[c]));
+}
+
+function _matrixFr(code) {
+  return ({ DEVIATION: 'Déviation', EMPTY: 'Case vide' })[code] || _esc(code || '');
+}
+
+function _verdictFr(code) {
+  return ({
+    CONFORME: 'Conforme',
+    NON_CONFORME: 'Non conforme',
+    PARTIELLEMENT_CONFORME: 'Partiellement conforme',
+    DEVIATION: 'Déviation',
+    PREUVE_INSUFFISANTE: 'Preuve insuffisante',
+    MANQUANT: 'Aucune preuve TDR',
+    NA: 'Non applicable',
+  })[code] || _esc(code || '');
 }
 
 function setAerisFilter(f) {
@@ -1676,21 +1617,25 @@ function filterAerisTable() {
     return blob.includes(q);
   });
   const maxRows = 400;
-  document.getElementById('aeris-tbody').innerHTML = filtered.slice(0, maxRows).map(it => `
+  const inco = {};
+  for (const r of (aerisReport && aerisReport.incoherences) || []) inco[r.req_id] = r;
+  document.getElementById('aeris-tbody').innerHTML = filtered.slice(0, maxRows).map(it => {
+    const r = inco[it.req_id];
+    return `
     <tr>
-      <td><strong style="font-family:var(--mono)">${it.req_id || ''}</strong></td>
-      <td><span class="badge badge-${it.final_status}">${it.final_status}</span>
-          <div class="muted" style="font-size:11px">${it.confidence || ''}</div></td>
-      <td><span class="badge badge-${it.matrix_status}">${it.matrix_status}</span></td>
-      <td>${it.declaration_alignment ? `<span class="badge badge-${it.declaration_alignment}">${it.declaration_alignment}</span>` : '<span class="muted">—</span>'}</td>
-      <td><span class="badge badge-${it.coherence}">${it.coherence}</span></td>
-      <td>${it.target || '<span class="muted">—</span>'}</td>
-      <td>${it.supplier_result || '<span class="muted">—</span>'}
-          ${it.gap ? `<div class="muted">gap ${it.gap}</div>` : ''}</td>
-      <td>${it.evidence_location ? `<strong>${it.evidence_location}</strong>` : '<span class="muted">—</span>'}
-          ${it.evidence_excerpt ? `<div class="muted" style="font-size:12px">${it.evidence_excerpt.substring(0,160)}</div>` : ''}
-          ${it.rationale ? `<div class="muted" style="font-size:11px;margin-top:4px">${it.rationale}</div>` : ''}</td>
-    </tr>`).join('');
+      <td><strong style="font-family:var(--mono)">${_esc(it.req_id)}</strong></td>
+      <td><span class="badge badge-${it.final_status}">${_verdictFr(it.final_status)}</span></td>
+      <td><span class="badge badge-${it.matrix_status}">${_matrixFr(it.matrix_status)}</span></td>
+      <td>${r ? `<span class="badge badge-NON_CONFORME">${_esc(r.gravite)}</span>
+             <div class="muted" style="font-size:12px;margin-top:4px">${_esc(r.motif)}</div>`
+            : '<span class="muted">—</span>'}</td>
+      <td>${_esc(it.target) || '<span class="muted">—</span>'}</td>
+      <td>${_esc(it.supplier_result) || '<span class="muted">—</span>'}
+          ${it.gap ? `<div class="muted">écart ${_esc(it.gap)}</div>` : ''}</td>
+      <td>${it.evidence_location ? `<strong>${_esc(it.evidence_location)}</strong>` : '<span class="muted">—</span>'}
+          ${it.evidence_excerpt ? `<div class="muted" style="font-size:12px">${_esc(it.evidence_excerpt.substring(0,160))}</div>` : ''}</td>
+    </tr>`;
+  }).join('');
   document.getElementById('aeris-count').textContent =
     filtered.length > maxRows
       ? `${filtered.length} exigences (${maxRows} premières affichées)`

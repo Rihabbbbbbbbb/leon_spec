@@ -44,6 +44,7 @@ from app.qa.aeris_constraints import (
     extract_constraints,
     extract_measurements,
     operator_symbol,
+    pretty_value,
     summarize_verdicts,
 )
 from app.qa.aeris_contradictions import (
@@ -359,9 +360,9 @@ def _check_one(
         final_status=final_status,
         coherence=coherence,
         confidence=confidence,
-        target=target,
-        supplier_result=supplier_result,
-        gap=gap,
+        target=pretty_value(target),
+        supplier_result=pretty_value(supplier_result),
+        gap=pretty_value(gap),
         evidence_location=evidence_loc,
         evidence_excerpt=excerpt,
         evidence_file=evidence_file,
