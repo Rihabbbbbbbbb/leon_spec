@@ -1282,6 +1282,102 @@ def conformity_compare(req: CompareRequest) -> dict:
         raise HTTPException(status_code=422, detail=f"Comparison failed: {str(exc)}")
 
 
+# ── AERIS matrix ↔ TDR evidence cross-check ────────────────────────
+_AERIS_MATRIX_EXT = {".ods", ".xlsx", ".xlsm", ".xls"}
+_AERIS_EVIDENCE_EXT = {".pptx", ".pdf", ".docx", ".txt"}
+_AERIS_MAX_BYTES = 40 * 1024 * 1024
+
+
+@router.post("/aeris-crosscheck")
+async def aeris_crosscheck(
+    matrix: UploadFile = File(...),
+    evidence: List[UploadFile] = File(...),
+) -> dict:
+    """
+    Cross-check a supplier conformity matrix against TDR / PPT / PDF evidence.
+
+    Multipart fields:
+      - matrix:   ODS / XLSX / XLSM conformity matrix
+      - evidence: one or more TDR files (.pptx, .pdf, .docx, .txt)
+
+    Returns the synthesis JSON plus a color-coded Excel report (base64).
+    The numeric verdicts do not require Azure OpenAI.
+    """
+    import base64 as _b64
+    import tempfile
+    from pathlib import Path as _Path
+
+    from app.qa.aeris_crosscheck import run_crosscheck, report_to_dict
+    from app.qa.aeris_report import generate_aeris_excel
+    from fastapi.concurrency import run_in_threadpool
+
+    if not matrix or not matrix.filename:
+        raise HTTPException(status_code=400, detail="A conformity matrix file is required.")
+    matrix_ext = _Path(matrix.filename).suffix.lower()
+    if matrix_ext not in _AERIS_MATRIX_EXT:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported matrix type '{matrix_ext}'. Accepted: .ods, .xlsx, .xlsm",
+        )
+
+    matrix_bytes = await matrix.read()
+    if not matrix_bytes:
+        raise HTTPException(status_code=400, detail="Empty matrix file.")
+    if len(matrix_bytes) > _AERIS_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="Matrix file exceeds 40 MB.")
+
+    evidence_payload = []
+    if not evidence:
+        raise HTTPException(status_code=400, detail="At least one TDR / PPT / PDF evidence file is required.")
+    for ev in evidence:
+        if not ev.filename:
+            continue
+        ext = _Path(ev.filename).suffix.lower()
+        if ext == ".ppt":
+            raise HTTPException(status_code=400, detail="Export legacy .ppt as .pptx or PDF before uploading.")
+        if ext not in _AERIS_EVIDENCE_EXT:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported evidence type '{ext}' ({ev.filename}). "
+                       f"Accepted: .pptx, .pdf, .docx, .txt",
+            )
+        blob = await ev.read()
+        if not blob:
+            raise HTTPException(status_code=400, detail=f"Empty evidence file: {ev.filename}")
+        if len(blob) > _AERIS_MAX_BYTES:
+            raise HTTPException(status_code=413, detail=f"Evidence file exceeds 40 MB: {ev.filename}")
+        evidence_payload.append((ev.filename, blob))
+
+    if not evidence_payload:
+        raise HTTPException(status_code=400, detail="No readable evidence file was uploaded.")
+
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=matrix_ext, delete=False) as tmp:
+            tmp.write(matrix_bytes)
+            tmp_path = tmp.name
+        def analyze():
+            report = run_crosscheck(tmp_path, evidence_payload, matrix.filename)
+            payload = report_to_dict(report)
+            xlsx = generate_aeris_excel(payload)
+            payload["reportExcel"] = _b64.b64encode(xlsx).decode("ascii")
+            payload["reportFileName"] = _Path(matrix.filename).stem + "_AERIS_synthesis.xlsx"
+            return payload
+
+        return await run_in_threadpool(analyze)
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"AERIS cross-check failed: {exc}")
+    finally:
+        if tmp_path:
+            try:
+                _Path(tmp_path).unlink(missing_ok=True)
+            except OSError:
+                import logging
+                logging.getLogger(__name__).exception("Failed to remove AERIS temporary matrix")
 # ── Spec ↔ Matrix Coverage & Traceability ──────────────────────────
 @router.post("/conformity-coverage")
 async def conformity_coverage(
@@ -1456,5 +1552,3 @@ async def conformity_pdf_evidence_report(request: EvidenceReportRequest) -> dict
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f"Evidence report generation failed: {exc}") from exc
     return {"reportExcel": base64.b64encode(report).decode("ascii")}
-
-

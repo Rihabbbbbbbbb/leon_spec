@@ -8,6 +8,8 @@ How to open and use the Conformity Matrix web interface — no installation, no 
 
 Suppliers return conformity matrices (ODS/XLSX spreadsheets) marking each requirement **OK**, **NOK** (not conforming), or **NA** (not applicable), with a comment. Reviewing them by hand is slow, and a row marked "OK" can hide a problem in its comment ("pending validation", "partially covered"…).
 
+The third tab (AERIS) goes further: it treats the matrix row as a *claim* and the TDR as *evidence*, then builds a statement crosswalk of what the supplier wrote on each side.
+
 The analyzer does this automatically. Upload a matrix and it:
 
 - **Finds the data by itself** — the right sheet, header row, and "Conformité FNR" / "Commentaires FNR" columns, even when suppliers change names or layout.
@@ -24,12 +26,36 @@ Open this link in any browser (works from anywhere, nothing to install):
 
 > **https://leon-spec-gbexcnefdmakfpdg.francecentral-01.azurewebsites.net/api/conformity-ui**
 
-The interface has two tabs:
+The interface has three tabs:
 
 **📊 Matrice de Conformité**
 1. **Click or drag** your matrix file (`.ods`, `.xlsx`, `.xlsm`) into the upload zone.
 2. Click **📊 Analyser la conformité** — statistics, pie chart, points d'attention and the full requirements table appear on screen.
 3. Click **📗 Rapport Excel** to download the color-coded Excel report.
+
+**🔎 Matrix ↔ TDR (AERIS)**
+1. Upload the supplier conformity matrix **and** the TDR / PPT / PDF technical dossier.
+2. Click **🔎 Cross-check matrix ↔ TDR**. AERIS extracts measurable targets, finds the matching slide/page, compares the numbers, then compares **what the supplier said in the TDR** with **what they declared in the matrix** (opposite OK/NOK, different figures, restated-wrong target, TDR self-conflict).
+3. The screen opens on the **incohérences** — one card per requirement, with what Stellantis asks, what the matrix declares, what the TDR says, where, and why it is an incoherence. Conforming requirements are not listed.
+4. Download the **📗 Rapport des incohérences (Excel)**. It opens on the `Incohérences` sheet; `Synthèse` and `Détail complet` are there only if you need them.
+
+AERIS reads individual text boxes, table rows, chart values and (when OCR is
+available) embedded images in PPTX; PDF pages use positioned text, tables and
+image regions. Repeated page furniture and copyright footers are excluded.
+Measurements are matched to the *named property* (for example, display refresh
+rate rather than any value in Hz), not the first number with the same unit.
+Unsupported `.ppt` files must first be exported as `.pptx` or PDF.
+
+OCR of scans and images requires **Tesseract OCR** on the server, with its
+executable available on `PATH`, in addition to the Python packages in
+`requirements.txt`. Without it, AERIS shows an OCR warning under the results
+and treats unread image-only evidence as unverified, **not compliant**. The
+Azure Functions deployment must provide the Tesseract executable separately;
+installing the Python package alone does not enable OCR. Native vector
+diagrams, SmartArt and visual chart trends cannot always be interpreted from
+their text/series; these still require human review. If a supplier changes
+templates, check the displayed source slide/page and evidence excerpt before
+accepting an automated decision.
 
 **📄 Validation de Spec**
 1. **Click or drag** a specification file (`.docx`, `.pdf`, `.txt`).
@@ -69,3 +95,10 @@ The interface is a single page ([app/conformity_ui/index.html](app/conformity_ui
 - Publicly by the Azure Function ([azure_function/function_app.py](azure_function/function_app.py), endpoint `GET /api/conformity-ui`, anonymous).
 
 Other API endpoints (PDF report, multi-matrix comparison, Power BI dataset) exist under `/api/conformity*` — see [app/qa/route.py](app/qa/route.py) and the analyzer engine [app/qa/conformity_analyzer.py](app/qa/conformity_analyzer.py).
+
+The Matrix ↔ TDR tab calls `POST /api/aeris-crosscheck` (multipart `matrix` + `evidence[]`). The engine lives in `app/qa/aeris_*.py`: deterministic number compare, statement crosswalk, contradiction queue. Azure OpenAI is optional and never overrides a numeric verdict.
+Embedding reranking is **off by default** to avoid transmitting supplier TDR
+content; set `AERIS_ENABLE_EMBEDDINGS=1` only when the configured embedding
+service is approved for that content. See `tests/test_aeris_layout.py` and
+`tests/test_aeris_robustness.py` for the presentation and negative-control
+fixtures.

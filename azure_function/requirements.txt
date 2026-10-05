@@ -15,6 +15,11 @@ fpdf2>=2.7.8
 # Conformity matrix analysis (ODS/XLSX reading + charts)
 openpyxl>=3.1.0
 matplotlib>=3.8.0
+python-pptx>=1.0.0
+pdfplumber>=0.11.0
+pypdfium2>=4.30.0
+Pillow>=10.0.0
+pytesseract>=0.3.13
 # Azure Blob Storage (for Excel report file delivery)
 azure-storage-blob>=12.19.0
 # lxml (for ODS XML parsing)

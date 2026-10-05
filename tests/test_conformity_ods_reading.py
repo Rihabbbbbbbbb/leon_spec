@@ -321,8 +321,10 @@ class TestRealDm12fWorkbooks:
         assert a.column_mapping["req_id"] == [1]
         assert a.column_mapping["conformity"] == [6]
         assert a.column_mapping["comment"] == [7]
-        assert len([item for item in a.items if item.is_requirement]) == 46
-        assert all(item.conformity_category == "OK" for item in a.items if item.is_requirement)
+        req_items = [item for item in a.items if item.is_requirement]
+        assert len(req_items) == 45
+        assert {category: sum(item.conformity_category == category for item in req_items)
+                for category in ("OK", "NA")} == {"OK": 42, "NA": 3}
 
     def test_supplier_xlsm_uses_application_matrix_and_supplier_conformity(self):
         fp = DATA_DIR / "01843_26_00005_v1-0_Conf_Matrix_LEVEL1_TS_DM12F_Supplier.xlsm"
@@ -330,14 +332,16 @@ class TestRealDm12fWorkbooks:
             pytest.skip("DM12F supplier conformity workbook not found")
         a = analyze_conformity_matrix(str(fp), fp.name)
         assert a.sheet_name == "Application & Conformity matrix"
-        assert a.header_row == 34
+        assert a.header_row == 33
+        assert a.data_start_row == 35
         assert a.column_mapping["req_id"] == [0]
         assert a.column_mapping["conformity"] == [8]
         assert a.column_mapping["stellantis_verdict"] == [10]
         req_items = [item for item in a.items if item.is_requirement]
-        assert len(req_items) >= 10
-        assert all(item.conformity_category == "OK" for item in req_items)
-        assert any(item.conformity_raw == "OK" for item in req_items)
+        assert len(req_items) == 136
+        assert {category: sum(item.conformity_category == category for item in req_items)
+                for category in ("OK", "NOK")} == {"OK": 116, "NOK": 20}
+        assert all(item.req_id.startswith("REF-") for item in req_items)
 
 
 class TestInvalidXlsxFilterMetadata:

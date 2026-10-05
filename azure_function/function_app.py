@@ -1845,3 +1845,46 @@ def conformity_ui(req: func.HttpRequest) -> func.HttpResponse:
         status_code=404,
         mimetype="text/plain",
     )
+
+
+# ═══════════════════════════════════════════════════════════════════
+# ENDPOINT 20: /api/aeris-crosscheck — Matrix ↔ TDR evidence synthesis
+# ═══════════════════════════════════════════════════════════════════
+@app.route(route="aeris-crosscheck", methods=["POST"], auth_level=func.AuthLevel.ANONYMOUS)
+def aeris_crosscheck_route(req: func.HttpRequest) -> func.HttpResponse:
+    """
+    Cross-check a conformity matrix against supplier TDR / PPT / PDF evidence.
+
+    Multipart: one spreadsheet (matrix) + one or more evidence files.
+    JSON fallback: { "files": [{"fileName": "...", "fileContent": "<base64>"}, ...] }
+    """
+    logging.info("=== /api/aeris-crosscheck called ===")
+    content_type = req.headers.get("Content-Type", "")
+    body_bytes = req.get_body()
+    files = []
+
+    if "multipart/form-data" in content_type:
+        try:
+            files = _parse_multipart_multi(body_bytes, content_type)
+        except Exception as exc:
+            logging.warning(f"AERIS multipart parse failed: {exc}")
+
+    if not files:
+        body = _get_body(req)
+        if body and isinstance(body.get("files"), list):
+            for item in body["files"]:
+                try:
+                    fname = item.get("fileName") or item.get("name") or "upload.bin"
+                    raw = item.get("fileContent") or item.get("content") or ""
+                    files.append((fname, _decode_file_content(raw)))
+                except Exception as exc:
+                    logging.warning(f"AERIS JSON file decode failed: {exc}")
+
+    if not files:
+        return _error_response(
+            "Upload a conformity matrix and at least one TDR/PPT/PDF evidence file.",
+            400,
+        )
+
+    from azure_handler import handle_aeris_crosscheck
+    return _safe_handler(handle_aeris_crosscheck, files)

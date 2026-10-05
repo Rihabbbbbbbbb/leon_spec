@@ -264,11 +264,16 @@ def _load_xlsx_workbook(filepath: str, *, data_only: bool = True):
     from zipfile import ZIP_DEFLATED, ZipFile
 
     from openpyxl import load_workbook
+    from openpyxl.reader.excel import SUPPORTED_FORMATS
     from openpyxl.utils.exceptions import InvalidFileException
 
     load_error = None
     try:
-        return load_workbook(filepath, data_only=data_only)
+        if "." + str(filepath).lower().rsplit(".", 1)[-1] not in SUPPORTED_FORMATS:
+            return load_workbook(filepath, data_only=data_only)
+        # Own the file handle so malformed XML cannot leave uploads locked on Windows.
+        with open(filepath, "rb") as source:
+            return load_workbook(source, data_only=data_only)
     except (ValueError, InvalidFileException) as exc:
         # Limit compatibility retry to the precise openpyxl validation failure.
         cause = exc
@@ -847,6 +852,8 @@ _NOK_VALUES = {
 }
 _NA_VALUES = {"na", "n/a", "not applicable", "non applicable", "non app",
               "non implémenté", "non implemente", "non implante", "sans objet"}
+_DEV_VALUES = {"deviation", "déviation", "deviation accepted", "écart",
+               "ecart", "waiver", "waived", "dev"}
 
 # Stellantis domain responsibility codes — when these appear alone (without ": ok"),
 # they are just domain assignments (EMPTY — no conformity assessment yet).
@@ -884,7 +891,7 @@ _UNCERTAIN_PENDING_RE = re.compile(
 def classify_conformity(value: str, is_assessment: bool = True) -> str:
     """
     Classify a conformity value into a normalized category.
-    Returns one of: OK, NOK, NA, EMPTY
+    Returns one of: OK, NOK, NA, DEVIATION, EMPTY
 
     Handles Stellantis-specific patterns:
     - "/" = conform (OK)
@@ -926,6 +933,14 @@ def classify_conformity(value: str, is_assessment: bool = True) -> str:
             or re.search(r"\bdoes\s+not\s+(?:comply|conform|meet)\b", class_norm)
             or re.search(r"\b(?:fail|failed|fails|partial(?:ly)?)\b", class_norm)):
         return "NOK"
+
+    # Declared supplier deviation (accepted gap vs the original requirement)
+    if norm in _DEV_VALUES or norm.startswith("deviation") or norm.startswith("déviation"):
+        return "DEVIATION"
+    if re.search(r"\b(deviation|d[ée]viation|[ée]cart)\b", norm) and not re.search(
+        r"\b(no|sans|without)\s+(deviation|d[ée]viation|[ée]cart)\b", norm
+    ):
+        return "DEVIATION"
 
     # Domain-specific OK patterns: "EE: ok", "SW: ok", "TP: ok", "ME: ok", "OPT: OK"
     # Also "EE: ok SW: ok" (multi-domain), "DQ: ok", "CG 20260316:OK"
@@ -1090,6 +1105,7 @@ def _clean_comments(comments: List[str]) -> List[str]:
 # Category priority for combining multiple column sets (higher = worse)
 _CATEGORY_PRIORITY = {
     "NOK": 6,
+    "DEVIATION": 5,
     "NA": 1,
     "EMPTY": 0,
     "OK": -1,
@@ -1637,7 +1653,7 @@ def extract_conformity_data(filepath: str, file_name: str = "") -> ConformityAna
         # On matrices with explicit supplier and customer fields, keep only
         # the primary supplier comment adjacent to the supplier conformity
         # column. Later test-delivery comments are not conformity rationale.
-        if concrete_leaf_header:
+        if col_mapping.get("conformity") and col_mapping.get("stellantis_verdict"):
             supplier_comment = [
                 ci for ci in col_mapping.get("comment", [])
                 if ci > min(col_mapping.get("conformity", [ci]))
@@ -1696,6 +1712,13 @@ def extract_conformity_data(filepath: str, file_name: str = "") -> ConformityAna
                    for ci in col_mapping.get("conformity", [])
                    + col_mapping.get("stellantis_verdict", []))
         )
+        supplier_answer_rows = sum(
+            1 for row in sheet[header_row + 1:header_row + 201]
+            if any(ci < len(row) and _looks_like_req_id_value(_normalize(row[ci]))
+                   for ci in (requirement_ids or id_col_candidates))
+            and any(ci < len(row) and _looks_like_conformity_value(_normalize(row[ci]))
+                    for ci in col_mapping.get("conformity", []))
+        )
         if not col_mapping["conformity"] and not col_mapping.get("stellantis_verdict"):
             continue
         id_anchor = bool(col_mapping.get("req_id"))
@@ -1710,7 +1733,8 @@ def extract_conformity_data(filepath: str, file_name: str = "") -> ConformityAna
                  + 3 * int(bool(col_mapping.get("req_id")))
                  + 3 * int(bool(col_mapping.get("description")))
                  + min(requirement_density, 20)
-                 + min(status_density, 20))
+                 + min(status_density, 20)
+                 + min(supplier_answer_rows, 20))
         sheet_label = _normalize(sheet_names[si] if si < len(sheet_names) else "")
         if any(marker in sheet_label for marker in ("help", "audit", "check", "config", "first page")):
             score -= 25
@@ -1835,6 +1859,15 @@ def extract_conformity_data(filepath: str, file_name: str = "") -> ConformityAna
             )
         ), None)
         if first_real_id_row is not None:
+            if ok_cols or nok_cols:
+                first_real_id_row = next((
+                    ri for ri in range(analysis.data_start_row, first_real_id_row)
+                    if any(ci < len(sheet[ri]) and sheet[ri][ci].strip()
+                           for ci in description_cols)
+                    and any(ci < len(sheet[ri]) and
+                            _looks_like_conformity_value(_normalize(sheet[ri][ci]))
+                            for ci in ok_cols + nok_cols)
+                ), first_real_id_row)
             analysis.data_start_row = first_real_id_row
 
     # Detect the matrix format: Stellantis matrices use "REQ-…" requirement ids;
@@ -1929,8 +1962,10 @@ def extract_conformity_data(filepath: str, file_name: str = "") -> ConformityAna
     # This determines whether domain codes should be classified as NOK or EMPTY
     assessment_cols = _detect_assessment_columns(sheet, conformity_cols, analysis.data_start_row)
 
-    # Find the last row with any data to avoid counting trailing empty rows
-    last_data_row = analysis.data_start_row
+    # Find the last row with any data to avoid counting trailing empty rows.
+    # Clamped to the sheet: a file with headers but no requirement row used
+    # to index past the end and abort the whole analysis.
+    last_data_row = min(analysis.data_start_row, len(sheet) - 1)
     for ri in range(analysis.data_start_row, len(sheet)):
         row = sheet[ri]
         if row and any(c.strip() for c in row if c):
@@ -2165,7 +2200,7 @@ def extract_conformity_data(filepath: str, file_name: str = "") -> ConformityAna
                     row_index=ri,
                     req_id=req_id,
                     reference=reference,
-                    description=description[:200],
+                    description=description,
                     conformity_raw=conf_raw,
                     conformity_category=best_category,
                     comment=combined_comment,
@@ -2381,7 +2416,7 @@ def extract_conformity_data(filepath: str, file_name: str = "") -> ConformityAna
             row_index=ri,
             req_id=req_id,
             reference=reference,
-            description=description[:200],
+            description=description,
             conformity_raw=best_conf_raw,
             conformity_category=best_category,
             comment=combined_comment,
@@ -2391,7 +2426,9 @@ def extract_conformity_data(filepath: str, file_name: str = "") -> ConformityAna
             classification_confidence=confidence,
             is_requirement=(
                 req_id.startswith("REQ-") if uses_req_ids
-                else (_looks_like_req_id_value(_normalize(req_id)) if uses_supplier_ids
+                else ((_is_requirement_id(req_id)
+                       or (_looks_like_req_id_value(_normalize(req_id))
+                           and bool(best_conf_raw or description.strip()))) if uses_supplier_ids
                       else (_is_requirement_id(req_id) or _looks_like_gentex_requirement_id(req_id)))
             ),
         )
@@ -3319,6 +3356,7 @@ def analyze_ok_deep(analysis: ConformityAnalysis) -> List[Dict]:
 _CHART_COLORS = {
     "OK": "#28a745",        # Green
     "NOK": "#dc3545",       # Red
+    "DEVIATION": "#e6a817", # Amber
     "NA": "#6c757d",        # Gray
     "EMPTY": "#e9ecef",     # Light gray
 }
@@ -3691,6 +3729,7 @@ def analysis_to_dict(analysis: ConformityAnalysis) -> dict:
             "total": analysis.total_rows,
             "ok": analysis.stats.get("OK", 0),
             "nok": analysis.stats.get("NOK", 0),
+            "deviation": analysis.stats.get("DEVIATION", 0),
             "na": analysis.stats.get("NA", 0),
             "empty": analysis.stats.get("EMPTY", 0),
             "inconsistencies": len(analysis.inconsistencies),

@@ -22,6 +22,8 @@ data/reference_index.json
 # Fichiers uploadés
 data/uploads/*
 !data/uploads/.gitkeep
+data/tdr_review/
+data/tdr_bench/
 
 # IDE
 .vscode/
