@@ -1309,6 +1309,7 @@ async def aeris_crosscheck(
 
     from app.qa.aeris_crosscheck import run_crosscheck, report_to_dict
     from app.qa.aeris_report import generate_aeris_excel
+    from fastapi.concurrency import run_in_threadpool
 
     if not matrix or not matrix.filename:
         raise HTTPException(status_code=400, detail="A conformity matrix file is required.")
@@ -1355,14 +1356,15 @@ async def aeris_crosscheck(
         with tempfile.NamedTemporaryFile(suffix=matrix_ext, delete=False) as tmp:
             tmp.write(matrix_bytes)
             tmp_path = tmp.name
-        report = run_crosscheck(tmp_path, evidence_payload, matrix.filename)
-        payload = report_to_dict(report)
-        xlsx = generate_aeris_excel(payload)
-        payload["reportExcel"] = _b64.b64encode(xlsx).decode("ascii")
-        payload["reportFileName"] = (
-            _Path(matrix.filename).stem + "_AERIS_synthesis.xlsx"
-        )
-        return payload
+        def analyze():
+            report = run_crosscheck(tmp_path, evidence_payload, matrix.filename)
+            payload = report_to_dict(report)
+            xlsx = generate_aeris_excel(payload)
+            payload["reportExcel"] = _b64.b64encode(xlsx).decode("ascii")
+            payload["reportFileName"] = _Path(matrix.filename).stem + "_AERIS_synthesis.xlsx"
+            return payload
+
+        return await run_in_threadpool(analyze)
     except HTTPException:
         raise
     except ValueError as exc:
@@ -1373,8 +1375,9 @@ async def aeris_crosscheck(
         if tmp_path:
             try:
                 _Path(tmp_path).unlink(missing_ok=True)
-            except Exception:
-                pass
+            except OSError:
+                import logging
+                logging.getLogger(__name__).exception("Failed to remove AERIS temporary matrix")
 # ── Spec ↔ Matrix Coverage & Traceability ──────────────────────────
 @router.post("/conformity-coverage")
 async def conformity_coverage(

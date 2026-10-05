@@ -65,6 +65,16 @@ def tdr_polarity(text: str) -> str:
     """Return FAIL / PASS / MIXED / NONE from the evidence passage wording."""
     if not text:
         return "NONE"
+    text = re.sub(
+        r"\b(?:no|without)\s+(?:known\s+)?(?:failures?|deviations?)\b"
+        r"|\b(?:failures?|deviations?)\s*:\s*(?:none|0)\b",
+        "", text, flags=re.I,
+    )
+    text = re.sub(
+        r"\b(?:not|non)[\s-]+(?:compliant|conform(?:e|ing)?|ok|pass(?:ed)?)\b"
+        r"|\bdoes\s+not\s+meet\b",
+        "NOK", text, flags=re.I,
+    )
     fail = bool(_TDR_FAIL.search(text))
     pass_ = bool(_TDR_PASS.search(text))
     if fail and pass_:

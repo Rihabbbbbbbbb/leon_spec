@@ -11,6 +11,7 @@ power, frequency, time, length, dimensionless load/percentage.
 from __future__ import annotations
 
 import re
+import math
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
@@ -51,6 +52,8 @@ class Measurement:
     quantity: str = ""       # attenuation | cpu_load | contrast | current…
     display_unit: str = ""
     display_factor: float = 1.0
+    bound: str = ""
+    file_name: str = ""
 
     def shown(self) -> str:
         return display_amount(self.value, self.display_unit or self.unit,
@@ -65,6 +68,15 @@ class ConditionVerdict:
     status: str              # CONFORME | NON_CONFORME | INCOMPARABLE
     gap: Optional[float] = None
     gap_unit: str = ""
+    evidence_file: str = ""
+    evidence_location: str = ""
+    evidence_excerpt: str = ""
+    operator: str = ""
+    target_value: float | None = None
+    measured_value: float | None = None
+    normalized_unit: str | None = None
+    measurement_bound: str | None = None
+    calculation: str | None = None
 
 
 # ── Unit catalogue ─────────────────────────────────────────────────
@@ -162,7 +174,7 @@ _OPERATOR_MAP = [
 ]
 
 _NUM_RE = re.compile(
-    r"(?<![A-Za-z0-9])(-?\d+(?:[.,]\d+)?)\s*(:1)?"
+    r"(?<![A-Za-z0-9.,])(-?\d+(?:[.,]\d+)?)\s*(:1)?"
     r"(?:\s*([µuμ]?[A-Za-z%°]+(?:\s*[Cc])?))?",
 )
 
@@ -184,14 +196,16 @@ _RESTATE_LEAD = re.compile(
 
 _CONDITION_RE = re.compile(
     r"(?:"
-    r"@\s*V\s*=\s*[\d.,]+\s*°?"
-    r"|@\s*[\d.,]+\s*°C"
-    r"|at\s+V\s*=\s*[\d.,]+\s*°?"
-    r"|at\s+[\d.,]+\s*°C"
-    r"|V\s*=\s*[\d.,]+\s*°"
+    r"@\s*[VH]\s*=?\s*-?[\d.,]+\s*°?"
+    r"|@\s*-?[\d.,]+\s*°C"
+    r"|at\s+[VH]\s*=\s*-?[\d.,]+\s*°?"
+    r"|at\s+-?[\d.,]+\s*°C"
+    r"|(?:@|at\s+)\s*-?[\d.,]+\s*(?:mV|kV|V)\b"
+    r"|[VH]\s*=\s*-?[\d.,]+\s*°"
     r"|reduced(?:\s+consumption)?\s+mode"
     r"|full(?:\s+consumption)?\s+mode"
     r"|normal(?:\s+consumption)?\s+mode"
+    r"|(?:under\s+an\s+angle\s+of|at\s+an\s+angle\s+of)\s*[\d.,]+\s*°"
     r")",
     re.I,
 )
@@ -210,6 +224,60 @@ _QUANTITY_HINTS = [
 
 def _norm_num(text: str) -> float:
     return float(text.replace(",", "."))
+
+
+def _engineering_text(text: str) -> str:
+    text = text.replace("℃", "°C").replace("＞", ">").replace("＜", "<").replace("：", ":")
+    for pattern, operator in (
+        (r"\b(?:greater|higher|more)\s+than\s+or\s+equal\s+to\b|\bno\s+less\s+than\b", ">="),
+        (r"\b(?:less|lower)\s+than\s+or\s+equal\s+to\b|\bno\s+more\s+than\b", "<="),
+        (r"\b(?:greater|higher|more)\s+than\b", ">"),
+        (r"\b(?:less|lower)\s+than\b", "<"),
+    ):
+        text = re.sub(pattern, operator, text, flags=re.I)
+    return re.sub(r"\b(typ|max|min)(?=\d)", r"\1 ", text, flags=re.I)
+
+
+def _measurement_bound(prefix: str) -> str:
+    match = re.search(r"(<=|>=|≤|≥|<|>)\s*$", prefix)
+    return _detect_operator(match.group(1), default="") if match else ""
+
+
+def _is_quoted_spec(text: str, start: int, end: int) -> bool:
+    prefix = text[max(0, start - 48):start]
+    if _RESTATE_LEAD.search(prefix):
+        return True
+    line_start = text.rfind("\n", 0, start) + 1
+    line_end = text.find("\n", end)
+    line = text[line_start:line_end if line_end >= 0 else len(text)]
+    normative = re.search(
+        r"\b(?:shall|must|required|minimum|maximum|target|requirement|specification|limit)\b",
+        line, re.I,
+    )
+    observed = re.search(r"\b(?:measured|achieved|actual|result|tested|observed)\b", line, re.I)
+    return bool(normative and not observed)
+
+
+def _bounded_status(constraint: Constraint, measurement: Measurement) -> str:
+    op, bound = constraint.operator, measurement.bound
+    value, target = measurement.value, constraint.value
+    lower = bound in ("ge", "gt")
+    if op in ("ge", "gt"):
+        if lower and (value > target or value == target and (op == "ge" or bound == "gt")):
+            return "CONFORME"
+        if not lower and (value < target or value == target and (op == "gt" or bound == "lt")):
+            return "NON_CONFORME"
+    elif op in ("le", "lt"):
+        if not lower and (value < target or value == target and (op == "le" or bound == "lt")):
+            return "CONFORME"
+        if lower and (value > target or value == target and (op == "lt" or bound == "gt")):
+            return "NON_CONFORME"
+    elif op == "eq":
+        if lower and (value > target or value == target and bound == "gt"):
+            return "NON_CONFORME"
+        if not lower and (value < target or value == target and bound == "lt"):
+            return "NON_CONFORME"
+    return "INCOMPARABLE"
 
 
 def _norm_unit_token(token: str) -> str:
@@ -288,11 +356,16 @@ def _is_id_or_condition_number(text: str, start: int, raw_num: str) -> bool:
     if re.search(r"(slide|page|block|section)\s*$", prefix):
         return True
     digits = raw_num.lstrip("-")
-    if digits.isdigit() and len(digits) >= 6:
-        return True
-    if re.match(r"20\d{2}$", raw_num):
-        return True
+    suffix = text[start + len(raw_num):]
+    has_unit = bool(re.match(r"\s*(?:[µuμ]?[A-Za-z%°]|:)", suffix))
+    if not has_unit:
+        if digits.isdigit() and len(digits) >= 6:
+            return True
+        if re.match(r"20\d{2}$", raw_num):
+            return True
     if re.search(r"v\s*=\s*$", prefix):
+        return True
+    if any(m.start() <= start < m.end() for m in _CONDITION_RE.finditer(text)):
         return True
     return False
 
@@ -306,14 +379,16 @@ def _quantity_of(text: str) -> str:
         return "pwm_frequency"
     if re.search(r"\bsampl(?:ing|e)\s+(?:rate|frequency)\b", t):
         return "sampling_frequency"
-    if re.search(r"attenuat|lcf", t):
+    if re.search(r"attenuat", t):
         return "attenuation"
     if re.search(r"\bcd\s*/\s*m|nits?\b", t) or (
-        re.search(r"luminance|brightness", t) and not re.search(r"attenuat|lcf", t)
+        re.search(r"luminance|brightness", t) and not re.search(r"attenuat", t)
     ):
         return "luminance"
     if re.search(r"contrast", t):
         return "contrast"
+    if re.search(r"\blcf\b", t):
+        return "attenuation"
     if re.search(r"\bcpu\b|cpu\s+load|\bload\b", t):
         return "cpu_load"
     # Les courants doivent rester séparés : un courant d'appel n'est pas
@@ -435,13 +510,43 @@ def _detect_operator(text: str, default: str = "le") -> str:
     if re.search(r"\bshall\s+not\s+exceed\b|\bmust\s+not\s+exceed\b", text, re.I):
         return "le"
     if re.search(r"\bshall\s+(?:be\s+)?(?:greater|higher|above)\b", text, re.I):
-        return "ge"
+        return "gt"
+    if re.search(r"\b(?:shall|must)\s+(?:be\s+)?(?:lower|below)\b", text, re.I):
+        return "lt"
     return default
+
+
+def constraint_parse_warning(text: str) -> str:
+    """Expressions not supported by the scalar comparator require review."""
+    text = _engineering_text(text)
+    if re.search(r"±|\+/-|\+\s*/\s*-", text):
+        return "Explicit tolerance requires engineering review; scalar limits were not inferred."
+    if re.search(r"\b(?:from|between)\b[^;\n]*\d[^;\n]*\b(?:to|and)\b[^;\n]*\d", text, re.I):
+        return "Range coverage requires engineering review; endpoints were not treated as scalar limits."
+    if re.search(r"\b(?:or|ou)\b", text, re.I):
+        return "Alternative acceptance criteria require engineering review."
+    return ""
+
+
+def _constraint_operator(text: str, start: int, end: int, default: str) -> str:
+    prefix = text[:start]
+    symbolic = re.search(r"(<=|>=|=<|=>|≤|≥|<|>|(?<![<>=])=)\s*$", prefix)
+    if symbolic:
+        token = symbolic.group(1)
+        return "eq" if token == "=" else _detect_operator(token, default)
+    # Another number or clause must not supply this value's operator.
+    prefix = re.split(r"\n|;|\band\b|\bet\b", prefix, flags=re.I)[-1][-64:]
+    suffix = re.split(r"\n|;|\band\b|\bet\b", text[end:], flags=re.I)[0]
+    suffix = re.split(r"\d|<=|>=|≤|≥|<|>", suffix)[0][:32]
+    return _detect_operator(prefix + " " + suffix, default)
 
 
 def extract_constraints(text: str, source: str = "requirement") -> List[Constraint]:
     """Extract measurable constraints from a requirement or comment."""
     if not text or not text.strip():
+        return []
+    text = _engineering_text(text)
+    if constraint_parse_warning(text):
         return []
 
     found: List[Constraint] = []
@@ -452,7 +557,7 @@ def extract_constraints(text: str, source: str = "requirement") -> List[Constrai
         found.append(Constraint(
             raw=m.group(0).strip(),
             value=_norm_num(m.group(1)),
-            operator=_detect_operator(window, default="ge"),
+            operator=_constraint_operator(text, m.start(), m.end(), "ge"),
             unit_family="luminance",
             unit="cd/m²",
             condition=_extract_condition(window) or _extract_condition(text),
@@ -468,7 +573,7 @@ def extract_constraints(text: str, source: str = "requirement") -> List[Constrai
         found.append(Constraint(
             raw=m.group(0),
             value=value,
-            operator=_detect_operator(window, default="ge"),
+            operator=_constraint_operator(text, m.start(), m.end(), "ge"),
             unit_family="ratio",
             unit=":1",
             condition=_extract_condition(window) or _extract_condition(text),
@@ -496,6 +601,8 @@ def extract_constraints(text: str, source: str = "requirement") -> List[Constrai
             else:
                 continue
         value = to_canonical(_norm_num(raw_num), family, factor)
+        if family in ("angle", "temperature") and _quantity_of(text) in ("attenuation", "contrast"):
+            continue
         if family == "frequency":
             prefix, after, clause = _frequency_clause(text, m.start(), m.end())
             window = prefix + m.group(0) + after
@@ -504,7 +611,10 @@ def extract_constraints(text: str, source: str = "requirement") -> List[Constrai
         found.append(Constraint(
             raw=m.group(0).strip(),
             value=value,
-            operator=_detect_operator(window, default="le" if family in ("current", "temperature", "power") else "ge"),
+            operator=_constraint_operator(
+                text, m.start(), m.end(),
+                "le" if family in ("current", "temperature", "power") else "ge",
+            ),
             unit_family=family,
             unit=_CANONICAL_UNIT.get(family, unit or family),
             condition=_extract_condition(after) or _extract_condition(window) or _extract_condition(text),
@@ -521,11 +631,14 @@ def extract_measurements(text: str, location: str = "") -> List[Measurement]:
     """Extract measured values from a TDR/PPT/PDF passage."""
     if not text or not text.strip():
         return []
+    text = _engineering_text(text)
 
     found: List[Measurement] = []
 
     for m in _LUMINANCE_RE.finditer(text):
         prefix = text[max(0, m.start() - 24): m.start()]
+        if _is_quoted_spec(text, m.start(), m.end()):
+            continue
         after = text[m.end(): m.end() + 36]
         window = prefix + m.group(0) + after
         found.append(Measurement(
@@ -538,10 +651,13 @@ def extract_measurements(text: str, location: str = "") -> List[Measurement]:
             location=location,
             quantity="luminance",
             display_unit="cd/m²",
+            bound=_measurement_bound(prefix),
         ))
 
     for m in re.finditer(r"(\d+(?:[.,]\d+)?)\s*:\s*1\b", text):
         prefix = text[max(0, m.start() - 24): m.start()]
+        if _is_quoted_spec(text, m.start(), m.end()):
+            continue
         after = text[m.end(): m.end() + 36]
         window = prefix + m.group(0) + after
         found.append(Measurement(
@@ -553,6 +669,7 @@ def extract_measurements(text: str, location: str = "") -> List[Measurement]:
             qualifier=_qualifier(window, prefix=prefix),
             location=location,
             quantity=_quantity_of(window) or _quantity_of(text) or "contrast",
+            bound=_measurement_bound(prefix),
         ))
 
     for m in _NUM_RE.finditer(text):
@@ -565,7 +682,7 @@ def extract_measurements(text: str, location: str = "") -> List[Measurement]:
         after = text[m.end(): m.end() + 36]
         window = prefix + m.group(0) + after
         # Skip quoted spec limits (“target 800ms”, “requirement ≤100mA”).
-        if _RESTATE_LEAD.search(prefix):
+        if _is_quoted_spec(text, m.start(), m.end()):
             continue
         family, unit, factor = classify_unit(unit_tok, window)
         if not family:
@@ -590,6 +707,8 @@ def extract_measurements(text: str, location: str = "") -> List[Measurement]:
         else:
             clause = text
         qty = _prefer_quantity(window, clause, family)
+        if family in ("angle", "temperature") and _quantity_of(text) in ("attenuation", "contrast"):
+            continue
         if family == "percent" and not qty:
             if re.search(r"attenuat|lcf", window + " " + after, re.I):
                 qty = "attenuation"
@@ -606,6 +725,7 @@ def extract_measurements(text: str, location: str = "") -> List[Measurement]:
             quantity=qty,
             display_unit=unit or family,
             display_factor=factor,
+            bound=_measurement_bound(prefix),
         ))
 
     return _dedupe_measurements(found)
@@ -639,7 +759,7 @@ def _dedupe_constraints(items: List[Constraint]) -> List[Constraint]:
     seen = set()
     out = []
     for c in items:
-        key = (round(c.value, 6), c.operator, c.unit_family, c.condition.lower())
+        key = (c.value, c.operator, c.unit_family, c.condition.lower(), c.quantity)
         if key in seen:
             continue
         seen.add(key)
@@ -651,7 +771,7 @@ def _dedupe_measurements(items: List[Measurement]) -> List[Measurement]:
     seen = set()
     out = []
     for m in items:
-        key = (round(m.value, 6), m.unit_family, m.condition.lower(), m.qualifier, m.quantity)
+        key = (round(m.value, 6), m.unit_family, m.condition.lower(), m.qualifier, m.quantity, m.bound)
         if key in seen:
             continue
         seen.add(key)
@@ -663,12 +783,31 @@ def conditions_compatible(a: str, b: str) -> bool:
     """True if two condition strings refer to the same operating point, or one is empty."""
     if not a or not b:
         return True
+    def dimension(condition: str) -> str:
+        if re.search(r"°\s*c|deg\s*c|℃", condition, re.I):
+            return "temperature"
+        if re.search(r"\d\s*(?:mV|kV|V)\b", condition, re.I):
+            return "voltage"
+        if re.search(r"°|degree|\b[VH]\s*=?\s*-?\d", condition, re.I):
+            return "angle"
+        return ""
+    da, db = dimension(a), dimension(b)
+    if da and db and da != db:
+        return False
     na, nb = _norm_condition(a), _norm_condition(b)
     if na == nb:
         return True
+    axis_a = re.search(r"\b([vh])\s*=?\s*-?\d", na)
+    axis_b = re.search(r"\b([vh])\s*=?\s*-?\d", nb)
+    if axis_a and axis_b and axis_a.group(1) != axis_b.group(1):
+        return False
+    numbers_a = re.findall(r"-?\d+(?:\.\d+)?", na)
+    numbers_b = re.findall(r"-?\d+(?:\.\d+)?", nb)
+    if numbers_a and numbers_b:
+        return numbers_a == numbers_b
     # Shared distinctive tokens (32°, 25c, reduced…)
     ta, tb = set(na.split()), set(nb.split())
-    distinctive = {t for t in ta & tb if re.search(r"\d|reduc|full|normal|mode", t)}
+    distinctive = {t for t in ta & tb if re.search(r"\d|reduc|full|normal", t)}
     return bool(distinctive)
 
 
@@ -676,7 +815,8 @@ def _norm_condition(text: str) -> str:
     t = text.lower()
     t = t.replace("°c", "c").replace("degc", "c").replace("degrees", "")
     t = t.replace("degree", "").replace("°", "")
-    t = re.sub(r"[^a-z0-9.\s=]", " ", t)
+    t = re.sub(r"([vh])\s*=?\s*(?=\d)", r"\1 ", t)
+    t = re.sub(r"[^a-z0-9.\s=-]", " ", t)
     t = re.sub(r"\s+", " ", t).strip()
     return t
 
@@ -691,22 +831,17 @@ def _compare_one(op: str, measured: float, target: float) -> bool:
     if op == "gt":
         return measured > target + 1e-12
     if op == "eq":
-        return abs(measured - target) <= max(0.01 * abs(target), 1e-6)
+        return math.isclose(measured, target, rel_tol=1e-12, abs_tol=1e-9)
     return False
 
 
 def _pick_worst(op: str, candidates: List[Measurement]) -> Measurement:
     """For an upper-bound, the worst value is the largest; for a lower-bound, the smallest."""
     if op in ("le", "lt"):
-        # Prefer an explicit max qualifier when present.
-        maxed = [m for m in candidates if m.qualifier == "max"]
-        pool = maxed or candidates
-        return max(pool, key=lambda m: m.value)
+        return max(candidates, key=lambda m: m.value)
     if op in ("ge", "gt"):
-        mined = [m for m in candidates if m.qualifier == "min"]
-        pool = mined or candidates
-        return min(pool, key=lambda m: m.value)
-    return candidates[0]
+        return min(candidates, key=lambda m: m.value)
+    return max(candidates, key=lambda m: m.value)
 
 
 def compare_constraint(
@@ -723,14 +858,15 @@ def compare_constraint(
     if constraint.quantity:
         same_qty = [m for m in same_family
                     if quantities_compatible(m.quantity, constraint.quantity)]
-        if same_qty:
-            same_family = same_qty
+        same_family = same_qty
     if not same_family:
         return []
 
     # Group measurements by normalized condition.
     groups: Dict[str, List[Measurement]] = {}
     for m in same_family:
+        if constraint.condition and not m.condition and re.search(r"\d", constraint.condition):
+            continue
         if not conditions_compatible(constraint.condition, m.condition):
             continue
         key = _norm_condition(m.condition) or _norm_condition(constraint.condition) or ""
@@ -743,9 +879,16 @@ def compare_constraint(
     for cond_key, group in groups.items():
         # Typ/Max are one operating point (use the worst). Two bare results
         # that disagree are two tests — emit both so PARTIELLEMENT is possible.
-        members = group if _bare_results_conflict(group) else [_pick_worst(constraint.operator, group)]
+        individual = (
+            constraint.operator == "eq" or any(m.bound for m in group)
+            or _bare_results_conflict(group)
+        )
+        members = group if individual else [_pick_worst(constraint.operator, group)]
         for chosen in members:
             ok = _compare_one(constraint.operator, chosen.value, constraint.value)
+            status = "CONFORME" if ok else "NON_CONFORME"
+            if chosen.bound:
+                status = _bounded_status(constraint, chosen)
             gap = chosen.value - constraint.value
             op_sym = {"le": "<=", "lt": "<", "ge": ">=", "gt": ">", "eq": "="}.get(constraint.operator, constraint.operator)
             # Afficher dans l'unité de l'exigence, pas dans l'unité interne.
@@ -754,11 +897,27 @@ def compare_constraint(
             verdicts.append(ConditionVerdict(
                 condition=chosen.condition or constraint.condition or cond_key,
                 target=f"{op_sym}{display_amount(constraint.value, shown_unit, shown_factor)}",
-                measured=f"{chosen.qualifier + ' ' if chosen.qualifier else ''}"
+                measured=f"{operator_symbol(chosen.bound) if chosen.bound else ''}"
+                         f"{chosen.qualifier + ' ' if chosen.qualifier else ''}"
                          f"{display_amount(chosen.value, shown_unit, shown_factor)}".strip(),
-                status="CONFORME" if ok else "NON_CONFORME",
-                gap=gap / shown_factor,
+                status=status,
+                gap=None if chosen.bound else gap / shown_factor,
                 gap_unit=pretty_unit(shown_unit),
+                evidence_file=chosen.file_name,
+                evidence_location=chosen.location,
+                evidence_excerpt=chosen.raw,
+                operator=constraint.operator,
+                target_value=constraint.value,
+                measured_value=chosen.value,
+                normalized_unit=constraint.unit,
+                measurement_bound=chosen.bound or None,
+                calculation=(
+                    f"Interval {operator_symbol(chosen.bound)}{chosen.value:g} "
+                    f"compared with {op_sym}{constraint.value:g} {constraint.unit}"
+                    if chosen.bound else
+                    f"{chosen.value:g} {op_sym} {constraint.value:g} "
+                    f"[{constraint.unit}]; delta = {gap:g} {constraint.unit}"
+                ),
             ))
     return verdicts
 
@@ -784,6 +943,8 @@ def summarize_verdicts(verdicts: List[ConditionVerdict]) -> str:
         return "NON_CONFORME"
     if "NON_CONFORME" in statuses and "CONFORME" in statuses:
         return "PARTIELLEMENT_CONFORME"
+    if "NON_CONFORME" in statuses:
+        return "NON_CONFORME"
     return "PREUVE_INSUFFISANTE"
 
 

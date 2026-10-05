@@ -2,15 +2,13 @@
 Evidence document parser for AERIS matrix↔TDR cross-check.
 
 Reads supplier technical proof (TDR / PPT / PDF / DOCX / TXT) into
-page-or-slide-aware chunks. Never invents content: a failed parse yields
-an empty chunk list so the engine can mark requirements MANQUANT.
+page-or-slide-aware chunks. Failed parsing is exposed in document metadata;
+an evidence set with no usable text cannot produce a successful synthesis.
 """
 from __future__ import annotations
 
 import io
-import os
 import re
-import tempfile
 import zipfile
 from collections import Counter
 from dataclasses import dataclass, field
@@ -36,6 +34,7 @@ class EvidenceChunk:
     text: str
     chunk_id: int = 0
     kind: str = "slide"    # slide | page | section | paragraph
+    measurement_text: str | None = None
 
 
 @dataclass
@@ -73,10 +72,12 @@ def parse_evidence_bytes(file_name: str, content: bytes) -> EvidenceDocument:
             chunks = _extract_docx(content, file_name)
             doc.kind = "docx"
         else:
-            text = content.decode("utf-8", errors="replace")
+            text = content.decode("utf-8-sig")
             chunks = _chunk_plain(text, file_name)
             doc.kind = "txt"
         doc.chunks = chunks
+        if not chunks:
+            doc.warnings.append("No usable text was extracted from this evidence document")
         doc.page_count = _count_locations(chunks)
         doc.warnings = list(dict.fromkeys(doc.warnings))
     except Exception as exc:
@@ -98,6 +99,51 @@ _DECORATION = re.compile(
 )
 _MAX_IMAGES_PER_PAGE = 20
 _MAX_IMAGE_BYTES = 8_000_000
+
+
+def _table_row_blocks(
+    rows: List[List[str | None]],
+) -> List[tuple[str, str | None]]:
+    """Keep supplier cells separate from the requirement copied in the table."""
+    if not rows:
+        return []
+    header_index = next((
+        i for i, row in enumerate(rows[:5])
+        if any(re.search(r"req(?:uirement)?(?:\s+(?:id|reference))|description|measurement", cell or "", re.I)
+               for cell in row)
+        and sum(bool(cell) for cell in row) >= 2
+    ), 0)
+    headers = [re.sub(r"\s+", " ", cell or "").strip() for cell in rows[header_index]]
+    if len(rows) == 1 and len(re.findall(r"\b(?:REQ|REF)-[\w.-]+", " ".join(headers))) > 1:
+        return []
+    supplier_cols = [
+        i for i, header in enumerate(headers)
+        if re.search(r"(?:(?:tm|supplier)\s+(?:proposal|offer|result)|measured|measurement result|^result$)", header, re.I)
+    ]
+    context_cols = [
+        i for i, header in enumerate(headers)
+        if re.fullmatch(r"topic|measurement|parameter|module type", header, re.I)
+    ]
+    specification_cols = [
+        i for i, header in enumerate(headers)
+        if re.search(r"description|customer\s+spec|requirement\s+text", header, re.I)
+    ]
+    result = []
+    for row in rows[header_index + 1:] if len(rows) > 1 else rows:
+        pairs = [
+            f"{header}: {value}" if header and header != value else value
+            for header, value in zip(headers, row) if value
+        ]
+        text = " | ".join(pairs)
+        if not text or len(set(re.findall(r"\b(?:REQ|REF)-[\w.-]+", text))) > 1:
+            continue
+        measurement_text = "" if specification_cols else None
+        if supplier_cols:
+            measurement_text = "\n".join(
+                row[i] or "" for i in context_cols + supplier_cols if i < len(row) and row[i]
+            )
+        result.append((text, measurement_text))
+    return result
 
 
 def _clean_evidence(text: str) -> str:
@@ -167,6 +213,7 @@ def _extract_pptx(content: bytes, file_name: str, warnings: List[str]) -> List[E
         return _extract_pptx_xml(content, file_name)
 
     blocks: List[tuple[str, str, bool, str]] = []
+    supplier_texts: dict[tuple[str, str], str | None] = {}
     for i, slide in enumerate(prs.slides, 1):
         loc = f"Slide {i}"
         title = _clean_evidence(slide.shapes.title.text) if slide.shapes.title else ""
@@ -178,14 +225,9 @@ def _extract_pptx(content: bytes, file_name: str, warnings: List[str]) -> List[E
                 edge = shape.top >= prs.slide_height * 0.88
                 if shape.has_table:
                     rows = [[cell.text.strip() for cell in row.cells] for row in shape.table.rows]
-                    headers = rows[0] if rows else []
-                    for row in rows[1:] if len(rows) > 1 else rows:
-                        pairs = [
-                            f"{header}: {value}" if header and header != value else value
-                            for header, value in zip(headers, row) if value
-                        ]
-                        if pairs:
-                            blocks.append((loc, " | ".join(pairs), edge, "table_row"))
+                    for text, supplier_text in _table_row_blocks(rows):
+                        blocks.append((loc, text, edge, "table_row"))
+                        supplier_texts[(loc, _clean_evidence(text))] = supplier_text
                 elif shape.has_text_frame:
                     blocks.append((loc, shape.text_frame.text, edge, "slide"))
                 if shape.shape_type == MSO_SHAPE_TYPE.PICTURE:
@@ -236,7 +278,10 @@ def _extract_pptx(content: bytes, file_name: str, warnings: List[str]) -> List[E
         cleaned = _clean_evidence(text)
         if cleaned and allowed[(loc, cleaned)]:
             allowed[(loc, cleaned)] -= 1
-            chunks.append(EvidenceChunk(file_name, loc, cleaned, len(chunks) + 1, kind))
+            chunks.append(EvidenceChunk(
+                file_name, loc, cleaned, len(chunks) + 1, kind,
+                supplier_texts.get((loc, cleaned)),
+            ))
     return chunks
 
 
@@ -274,28 +319,34 @@ def _extract_pdf(content: bytes, file_name: str, warnings: List[str]) -> List[Ev
         return _extract_pdf_text_only(content, file_name)
 
     blocks: List[tuple[str, str, bool, str]] = []
+    supplier_texts: dict[tuple[str, str], str | None] = {}
     with pdfplumber.open(io.BytesIO(content)) as pdf:
         renderer = pypdfium2.PdfDocument(content)
         try:
             for i, page in enumerate(pdf.pages, 1):
                 loc = f"Page {i}"
+                tables = page.find_tables()
+                table_boxes = [
+                    table.bbox for table in tables
+                    if len(table.rows) > 1 and len(table.columns) > 1
+                ]
                 lines = page.extract_text_lines()
                 for line in lines:
+                    if any(
+                        x0 <= line["x0"] and line["x1"] <= x1
+                        and top <= line["top"] and line["bottom"] <= bottom
+                        for x0, top, x1, bottom in table_boxes
+                    ):
+                        continue
                     blocks.append((
                         loc, line["text"],
                         line["top"] >= page.height * 0.88,
                         "page",
                     ))
-                for table in page.find_tables():
-                    rows = table.extract()
-                    headers = rows[0] if rows else []
-                    for row in rows[1:] if len(rows) > 1 else rows:
-                        cells = [
-                            f"{header}: {value}" if header and header != value else value
-                            for header, value in zip(headers, row) if value
-                        ]
-                        if cells:
-                            blocks.append((loc, " | ".join(cells), False, "table_row"))
+                for table in tables:
+                    for text, supplier_text in _table_row_blocks(table.extract()):
+                        blocks.append((loc, text, False, "table_row"))
+                        supplier_texts[(loc, _clean_evidence(text))] = supplier_text
 
                 images = page.images
                 if len(images) > _MAX_IMAGES_PER_PAGE:
@@ -335,7 +386,10 @@ def _extract_pdf(content: bytes, file_name: str, warnings: List[str]) -> List[Ev
         cleaned = _clean_evidence(text)
         if cleaned and allowed[(loc, cleaned)]:
             allowed[(loc, cleaned)] -= 1
-            chunks.append(EvidenceChunk(file_name, loc, cleaned, len(chunks) + 1, kind))
+            chunks.append(EvidenceChunk(
+                file_name, loc, cleaned, len(chunks) + 1, kind,
+                supplier_texts.get((loc, cleaned)),
+            ))
     return chunks
 
 
@@ -363,68 +417,48 @@ def _extract_pdf_text_only(content: bytes, file_name: str) -> List[EvidenceChunk
 
 
 def _extract_docx(content: bytes, file_name: str) -> List[EvidenceChunk]:
-    # Nom de fichier unique : deux analyses simultanées portant le même
-    # nom de TDR écrivaient au même endroit.
-    suffix = Path(file_name).suffix or ".docx"
-    handle, tmp_name = tempfile.mkstemp(prefix="aeris_", suffix=suffix)
-    tmp = Path(tmp_name)
-    text = ""
-    try:
-        with os.fdopen(handle, "wb") as fh:
-            fh.write(content)
-        from app.qa.retrieval import extract_text_from_file, _split_into_chunks
-        text = extract_text_from_file(tmp)
-    except Exception:
-        text = ""
-    finally:
-        try:
-            tmp.unlink(missing_ok=True)
-        except Exception:
-            pass
-    if not text:
-        return _extract_docx_xml(content, file_name)
-    from app.qa.retrieval import _split_into_chunks
-    inner = _split_into_chunks(text, file_name)
-    return [
-        EvidenceChunk(
-            file_name=file_name,
-            location=c.section or f"Chunk {c.chunk_id}",
-            text=c.text,
-            chunk_id=c.chunk_id,
-            kind="section",
-        )
-        for c in inner if c.text.strip()
-    ]
+    return _extract_docx_xml(content, file_name)
 
 
 def _extract_docx_xml(content: bytes, file_name: str) -> List[EvidenceChunk]:
-    """Repli DOCX : lire les runs w:t directement dans word/document.xml."""
-    try:
-        with zipfile.ZipFile(io.BytesIO(content)) as zf:
-            if "word/document.xml" not in zf.namelist():
-                return []
-            root = ET.fromstring(zf.read("word/document.xml"))
-    except Exception:
-        return []
+    """Read paragraphs and supplier table cells without flattening the table."""
+    with zipfile.ZipFile(io.BytesIO(content)) as zf:
+        root = ET.fromstring(zf.read("word/document.xml"))
     ns = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
-    paragraphs: List[str] = []
-    for para in root.iter(f"{ns}p"):
-        runs = [el.text for el in para.iter(f"{ns}t") if el.text]
-        line = _clean_block(" ".join(runs))
-        if line:
-            paragraphs.append(line)
-    if not paragraphs:
-        return []
-    return [
-        EvidenceChunk(
-            file_name=file_name,
-            location=f"Paragraph {i}",
-            text=line,
-            chunk_id=i,
-            kind="paragraph",
-        )
-        for i, line in enumerate(paragraphs, 1)
-    ]
+    body = root.find(f"{ns}body")
+    if body is None:
+        raise ValueError("DOCX document has no body")
+
+    def paragraph_text(para):
+        return "".join(el.text or "" for el in para.iter(f"{ns}t"))
+
+    chunks = []
+    paragraph_count = table_count = 0
+    for node in body:
+        if node.tag == f"{ns}p":
+            paragraph_count += 1
+            text = _clean_evidence(paragraph_text(node))
+            if text:
+                chunks.append(EvidenceChunk(
+                    file_name, f"Paragraph {paragraph_count}", text,
+                    len(chunks) + 1, "paragraph",
+                ))
+        elif node.tag == f"{ns}tbl":
+            table_count += 1
+            rows = [
+                [
+                    "\n".join(paragraph_text(p) for p in cell.findall(f"{ns}p"))
+                    for cell in row.findall(f"{ns}tc")
+                ] for row in node.findall(f"{ns}tr")
+            ]
+            for row_index, (text, measured) in enumerate(_table_row_blocks(rows), 1):
+                cleaned = _clean_evidence(text)
+                if cleaned:
+                    chunks.append(EvidenceChunk(
+                        file_name, f"Table {table_count}, data row {row_index}", cleaned,
+                        len(chunks) + 1, "table_row", measured,
+                    ))
+    return chunks
 
 
 def _chunk_plain(text: str, file_name: str) -> List[EvidenceChunk]:
@@ -456,10 +490,13 @@ def _chunk_plain(text: str, file_name: str) -> List[EvidenceChunk]:
 
     blocks = [b.strip() for b in re.split(r"\n\s*\n", text) if b.strip()]
     for i, block in enumerate(blocks, 1):
+        cleaned = _clean_evidence(block)
+        if not cleaned:
+            continue
         chunks.append(EvidenceChunk(
             file_name=file_name,
             location=f"Block {i}",
-            text=_clean_evidence(block),
+            text=cleaned,
             chunk_id=i,
             kind="paragraph",
         ))

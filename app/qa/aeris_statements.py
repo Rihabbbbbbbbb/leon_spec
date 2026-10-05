@@ -194,7 +194,8 @@ def format_measurements(measurements: Sequence[Measurement], limit: int = 4) -> 
         cond = ""
         if m.condition:
             cond = m.condition if m.condition.lstrip().startswith("@") else f" @{m.condition}"
-        bits.append(f"{q}{m.value:g} {m.unit}{cond}".strip())
+        bound = operator_symbol(m.bound) if m.bound else ""
+        bits.append(f"{bound}{q}{m.value:g} {m.unit}{cond}".strip())
     return ", ".join(bits)
 
 
@@ -211,7 +212,11 @@ def values_relation(
     if not pairs:
         return "INCOMPARABLE"
     disagreed = any(_values_disagree(a, b) for a, b in pairs)
-    return "DISAGREE" if disagreed else "AGREE"
+    if disagreed:
+        return "DISAGREE"
+    if any((a.bound or b.bound) and (a.bound != b.bound or a.value != b.value) for a, b in pairs):
+        return "INCOMPARABLE"
+    return "AGREE"
 
 
 def polarity_relation(matrix_pol: str, tdr_pol: str) -> str:
@@ -234,16 +239,21 @@ def restated_vs_requirement(
         f"{operator_symbol(t.operator)}{t.value:g} {t.unit}" + (f" ({t.location})" if t.location else "")
         for t in restated[:3]
     )
+    matched = False
     for t in restated:
-        for c in constraints:
-            if t.unit_family != c.unit_family:
-                continue
-            if not quantities_compatible(t.quantity, c.quantity):
-                continue
-            if _numeric_disagree(t.value, c.value, t.unit_family):
-                return display, "WRONG_TARGET"
-            return display, "MATCH"
-    return display, "NONE"
+        candidates = [
+            c for c in constraints if t.unit_family == c.unit_family
+            and quantities_compatible(t.quantity, c.quantity)
+        ]
+        if not candidates:
+            continue
+        if not any(
+            abs(t.value - c.value) <= 1e-9 and t.operator == c.operator
+            for c in candidates
+        ):
+            return display, "WRONG_TARGET"
+        matched = True
+    return display, "MATCH" if matched else "NONE"
 
 
 def tdr_self_conflicts(tdr_m: Sequence[Measurement]) -> str:
@@ -409,7 +419,10 @@ def build_tdr_ledger(chunks) -> List[Dict]:
         loc = getattr(chunk, "location", "") or ""
         fname = getattr(chunk, "file_name", "") or ""
         pol = tdr_polarity(text)
-        meas = extract_measurements(text, location=loc)
+        measurement_text = getattr(chunk, "measurement_text", None)
+        meas = extract_measurements(
+            measurement_text if measurement_text is not None else text, location=loc,
+        )
         rest = extract_restated_targets(text, location=loc, source="tdr")
         reqs = cited_req_ids(text)
         if pol == "NONE" and not meas and not rest and not reqs:
@@ -581,6 +594,18 @@ def _pair_measurements(
 
 
 def _values_disagree(a: Measurement, b: Measurement) -> bool:
+    if a.bound or b.bound:
+        low_a = a.value if a.bound in ("", "ge", "gt") else float("-inf")
+        high_a = a.value if a.bound in ("", "le", "lt") else float("inf")
+        low_b = b.value if b.bound in ("", "ge", "gt") else float("-inf")
+        high_b = b.value if b.bound in ("", "le", "lt") else float("inf")
+        if high_a < low_b or high_b < low_a:
+            return True
+        if high_a == low_b and (a.bound == "lt" or b.bound == "gt"):
+            return True
+        if high_b == low_a and (b.bound == "lt" or a.bound == "gt"):
+            return True
+        return False
     return _numeric_disagree(a.value, b.value, a.unit_family)
 
 

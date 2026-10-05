@@ -533,7 +533,13 @@
     <button class="tab" data-tab="validator" onclick="switchTab('validator')">📄 Spec Validation</button>
     <button class="tab" data-tab="trace" onclick="switchTab('trace')">� Version Delta</button>
     <button class="tab" data-tab="evidence" onclick="switchTab('evidence')">🔎 Matrix + TDR Evidence</button>
+    <button class="tab" data-tab="bench" onclick="switchTab('bench')">🏁 TDR Benchmark</button>
   </div>
+
+  <!-- ═══════════════════════════════════════════════════════════════ -->
+  <!-- TAB: Multi-supplier TDR technical benchmark (rendered by tdr_bench.js) -->
+  <!-- ═══════════════════════════════════════════════════════════════ -->
+  <div id="tab-bench" class="hidden"></div>
 
   <!-- ═══════════════════════════════════════════════════════════════ -->
   <!-- TAB: Matrix + TDR evidence -->
@@ -684,7 +690,7 @@
   <!-- ═══════════════════════════════════════════════════════════════ -->
   <div id="tab-aeris" class="hidden">
     <div class="panel">
-      <h2>AERIS — prove each matrix row against the supplier TDR</h2>
+      <h2>TDR Review — compare requirements, verify evidence, record human reviews</h2>
       <p class="muted mb-16">
         Upload the conformity matrix <strong>and</strong> the supplier technical dossier
         (PPT / PDF / DOCX / TXT). AERIS         extracts measurable targets (≤100&nbsp;mA, &gt;95&nbsp;% @32°,
@@ -692,6 +698,9 @@
         and then compares <em>what the supplier wrote in the TDR</em> with
         <em>what they declared in the matrix</em> (opposite OK/NOK, different
         figures, restated-wrong target, TDR self-conflict).
+        Qualitative requirements need human review. Image content requires local OCR;
+        extraction warnings are shown in the synthesis. A numeric bound is not an exact
+        measurement, and a declared deviation is not automatically accepted.
       </p>
       <div class="dual-upload">
         <div>
@@ -715,6 +724,20 @@
           <div id="aeris-evidence-info"></div>
         </div>
       </div>
+      <details class="mt-16">
+        <summary>Document scope and local saved reviews</summary>
+        <p class="muted">Local MVP: source passages and review history are saved on this server.
+          Reviewer names are self-declared. No automatic technical acceptance.
+          Confirm identity per document; do not copy matrix scope to a TDR without checking it.</p>
+        <div id="tdr-scope-inputs"></div>
+        <label>Optional server access key <input type="password" id="tdr-access-key" autocomplete="off" /></label>
+        <div class="btn-row">
+          <button class="btn btn-secondary" onclick="loadTdrCases()">Refresh saved cases</button>
+          <button class="btn btn-secondary" onclick="loadTdrCases(true)">Load older cases</button>
+          <select id="tdr-saved-cases" aria-label="Saved TDR review case"></select>
+          <button class="btn btn-secondary" onclick="resumeTdrCase()">Resume case</button>
+        </div>
+      </details>
       <div class="btn-row">
         <button class="btn btn-primary" id="aeris-btn" disabled onclick="doAeris()">
           🔎 Cross-check matrix ↔ TDR
@@ -722,6 +745,7 @@
         <button class="btn btn-secondary" id="aeris-excel-btn" disabled onclick="downloadAerisExcel()">
           📗 Rapport des incohérences (Excel)
         </button>
+        <button class="btn btn-secondary" id="tdr-json-btn" disabled onclick="downloadTdrJson()">Review JSON</button>
       </div>
     </div>
 
@@ -731,8 +755,33 @@
     </div>
 
     <div class="results" id="results-aeris">
+      <div class="panel" id="tdr-review-panel">
+        <h2>Saved TDR review — AI proposal / human decision</h2>
+        <div id="tdr-scope-banner"></div>
+        <div id="tdr-status-chart" class="mt-16"></div>
+        <div id="tdr-top-alerts" class="mt-16"></div>
+        <p id="tdr-review-progress" class="muted"></p>
+        <details><summary>Document hashes, extraction, detected columns and limitations</summary><pre id="tdr-manifest" style="white-space:pre-wrap"></pre></details>
+        <div class="filter-bar mt-16">
+          <select id="tdr-status-filter" aria-label="AI proposal status" onchange="filterTdrReviews()"></select>
+          <select id="tdr-review-filter" aria-label="Human review status" onchange="filterTdrReviews()">
+            <option value="ALL">All review states</option><option value="UNREVIEWED">Not reviewed</option><option value="REVIEWED">Reviewed</option>
+          </select>
+          <select id="tdr-confidence-filter" aria-label="Match confidence" onchange="filterTdrReviews()">
+            <option value="ALL">All match confidence</option><option>VERY_HIGH</option><option>HIGH</option><option>MEDIUM</option><option>LOW</option><option>NONE</option>
+          </select>
+          <input class="search-box" id="tdr-review-search" placeholder="ID, requirement, domain, variant, source..." oninput="filterTdrReviews()" />
+        </div>
+        <div id="tdr-review-rows"></div>
+        <div id="tdr-review-detail"></div>
+        <details class="mt-16"><summary>Delete local case and its review history</summary>
+          <p>This removes this case from the application. Database backups/OS storage may retain copies.</p>
+          <label><input type="checkbox" id="tdr-delete-confirm" /> I confirm deletion of this case and its history</label>
+          <button class="btn btn-secondary" onclick="deleteTdrCase()">Delete case</button>
+        </details>
+      </div>
       <div class="panel">
-        <h2>1. Synthèse</h2>
+        <h2>1. Analysis synthesis — proposals, not technical acceptance</h2>
         <div class="stats-grid" id="aeris-stats-grid"></div>
         <p class="muted" id="aeris-meta" style="font-size:12px;margin-top:8px"></p>
         <div id="aeris-notes" class="muted mt-16"></div>
@@ -768,7 +817,7 @@
             <thead>
               <tr>
                 <th>Exigence</th>
-                <th>Verdict AERIS</th>
+                <th>Technical result (before review gates)</th>
                 <th>Matrice</th>
                 <th>Incohérence</th>
                 <th>Demandé</th>
@@ -974,6 +1023,8 @@ function switchTab(tab) {
   document.getElementById('tab-validator').classList.toggle('hidden', tab !== 'validator');
   document.getElementById('tab-trace').classList.toggle('hidden', tab !== 'trace');
   document.getElementById('tab-evidence').classList.toggle('hidden', tab !== 'evidence');
+  document.getElementById('tab-bench').classList.toggle('hidden', tab !== 'bench');
+  if (tab === 'bench' && window.TdrBench) window.TdrBench.reloadJobs();
 }
 
 // ── Matrix + TDR PDF evidence candidates ─────────────────────────
@@ -1815,6 +1866,19 @@ let aerisEvidence = [];
 let aerisReport = null;
 let aerisExcel = null;
 let aerisFilter = 'ALL';
+let aerisBusy = false;
+let aerisRevision = 0;
+
+function invalidateAeris() {
+  aerisRevision++;
+  aerisReport = null;
+  aerisExcel = null;
+  document.getElementById('aeris-excel-btn').disabled = true;
+  document.getElementById('results-aeris').classList.remove('show');
+  document.getElementById('tdr-json-btn').disabled = true;
+  document.getElementById('tdr-review-detail').replaceChildren();
+  renderTdrScopeInputs();
+}
 
 function _bindDrop(zone, input, onFiles) {
   input.addEventListener('change', () => { if (input.files.length) onFiles(input.files); });
@@ -1831,8 +1895,10 @@ _bindDrop(document.getElementById('aeris-matrix-zone'), document.getElementById(
   const ext = file.name.split('.').pop().toLowerCase();
   if (!['ods','xlsx','xlsm'].includes(ext)) { toast('Matrix must be .ods / .xlsx / .xlsm', 'error'); return; }
   aerisMatrix = file;
+  tdrScopes.delete('MATRIX:' + file.name);
+  invalidateAeris();
   document.getElementById('aeris-matrix-info').innerHTML =
-    `<div class="file-info"><span>📊</span><span class="name">${file.name}</span>
+    `<div class="file-info"><span>📊</span><span class="name">${_esc(file.name)}</span>
      <span class="size">${(file.size/1024).toFixed(0)} KB</span>
      <button class="remove" onclick="clearAerisMatrix()">×</button></div>`;
   _aerisReady();
@@ -1842,10 +1908,14 @@ _bindDrop(document.getElementById('aeris-evidence-zone'), document.getElementByI
   for (const file of files) {
     const ext = file.name.split('.').pop().toLowerCase();
     if (!accepted.includes(ext)) { toast('Ignored ' + file.name + ' — use PPT/PDF/DOCX/TXT', 'error'); continue; }
-    if (!aerisEvidence.some(f => f.name === file.name && f.size === file.size)) aerisEvidence.push(file);
+    if (!aerisEvidence.some(f => f.name === file.name && f.size === file.size)) {
+      tdrScopes.delete('TDR:' + file.name);
+      aerisEvidence.push(file);
+    }
   }
+  invalidateAeris();
   document.getElementById('aeris-evidence-info').innerHTML = aerisEvidence.map((file, i) =>
-    `<div class="file-info"><span>📑</span><span class="name">${file.name}</span>
+    `<div class="file-info"><span>📑</span><span class="name">${_esc(file.name)}</span>
      <span class="size">${(file.size/1024).toFixed(0)} KB</span>
      <button class="remove" onclick="removeAerisEvidence(${i})">×</button></div>`
   ).join('');
@@ -1853,33 +1923,45 @@ _bindDrop(document.getElementById('aeris-evidence-zone'), document.getElementByI
 });
 function clearAerisMatrix() {
   aerisMatrix = null;
+  invalidateAeris();
   document.getElementById('aeris-matrix-input').value = '';
   document.getElementById('aeris-matrix-info').innerHTML = '';
   _aerisReady();
 }
 function removeAerisEvidence(i) {
   aerisEvidence.splice(i, 1);
+  invalidateAeris();
+  document.getElementById('aeris-evidence-input').value = '';
   document.getElementById('aeris-evidence-info').innerHTML = aerisEvidence.map((file, idx) =>
-    `<div class="file-info"><span>📑</span><span class="name">${file.name}</span>
+    `<div class="file-info"><span>📑</span><span class="name">${_esc(file.name)}</span>
      <span class="size">${(file.size/1024).toFixed(0)} KB</span>
      <button class="remove" onclick="removeAerisEvidence(${idx})">×</button></div>`
   ).join('');
   _aerisReady();
 }
 function _aerisReady() {
-  document.getElementById('aeris-btn').disabled = !(aerisMatrix && aerisEvidence.length);
+  document.getElementById('aeris-btn').disabled = aerisBusy || tdrCaseBusy || !(aerisMatrix && aerisEvidence.length);
 }
 
 async function doAeris() {
-  if (!aerisMatrix || !aerisEvidence.length) return;
+  if (aerisBusy || tdrCaseBusy || !aerisMatrix || !aerisEvidence.length) return;
+  invalidateAeris();
+  const revision = aerisRevision;
+  aerisBusy = true;
+  _aerisReady();
   showLoading('loading-aeris', true, 'Matching requirements to TDR evidence…');
   document.getElementById('results-aeris').classList.remove('show');
   const form = new FormData();
   form.append('matrix', aerisMatrix);
   for (const f of aerisEvidence) form.append('evidence', f);
+  form.append('context', JSON.stringify(tdrReviewContext()));
   try {
-    const res = await fetch(apiUrl('/aeris-crosscheck'), { method: 'POST', body: form });
+    const res = await fetch(apiUrl('/tdr-review/analyze'), { method: 'POST', headers: tdrHeaders(), body: form });
     const data = await res.json();
+    if (revision !== aerisRevision) {
+      toast('Files changed during analysis. Run the cross-check again.', 'error');
+      return;
+    }
     if (!res.ok || !data.summary) {
       toast('Error: ' + (data.detail || data.answer || 'cross-check failed'), 'error');
       return;
@@ -1888,12 +1970,15 @@ async function doAeris() {
     aerisExcel = data.reportExcel || null;
     document.getElementById('aeris-excel-btn').disabled = !aerisExcel;
     renderAeris(data);
+    renderTdrReview(data);
     document.getElementById('results-aeris').classList.add('show');
     toast('AERIS — ' + ((data.summary || {}).incoherences || 0) + ' incohérence(s) matrice ↔ TDR');
   } catch (e) {
     toast('Network error: ' + e.message, 'error');
   } finally {
     showLoading('loading-aeris', false);
+    aerisBusy = false;
+    _aerisReady();
   }
 }
 
@@ -1907,8 +1992,19 @@ function renderAeris(data) {
     {cls:'stat-total', val:s.total||0, label:'Exigences analysées'},
     {cls:'stat-ok', val:s.conforme||0, label:'Conformes'},
     {cls:'stat-na', val:s.manquant||0, label:'Sans preuve TDR'},
-    {cls:'stat-total', val:(s.conformityRate||0)+'%', label:'Taux de conformité'},
-  ];
+    {cls:'stat-total', val:(s.conformityRate||0)+'%', label:'Conformité des exigences jugées'},
+    {cls:'stat-partial', val:s.preuveInsuffisante||0, label:'Preuve insuffisante / revue'},
+  ].slice(0, 6);
+  if (data.caseId) {
+    const proposals = data.reviewSummary || {};
+    cards.splice(0, cards.length,
+      {cls:'stat-total', val:data.items.length, label:'Requirements'},
+      {cls:'stat-ok', val:proposals.CONFORME_AVEC_PREUVE||0, label:'Evidence-backed proposals (not acceptance)'},
+      {cls:'stat-nok', val:(proposals.NON_CONFORME_CONFIRME||0)+(proposals.DEVIATION_NON_DECLAREE||0)+(proposals.DEVIATION_DECLAREE||0), label:'Failures / deviations'},
+      {cls:'stat-partial', val:proposals.STATUT_CONTRADICTOIRE||0, label:'Conflicting status'},
+      {cls:'stat-na', val:(proposals.AUCUNE_REPONSE_TROUVEE||0)+(proposals.REPONSE_SANS_PREUVE||0)+(proposals.ANALYSE_EN_COURS_TBD||0), label:'Missing / pending evidence'},
+      {cls:'stat-total', val:data.reviewedCount||0, label:'Human-reviewed rows'});
+  }
   document.getElementById('aeris-stats-grid').innerHTML = cards.map(c =>
     `<div class="stat-card ${c.cls}"><div class="value">${c.val}</div><div class="label">${c.label}</div></div>`
   ).join('');
@@ -1922,7 +2018,8 @@ function renderAeris(data) {
   const evidenceNames = document.createElement('strong');
   evidenceNames.textContent = ev;
   meta.append(evidenceNames,
-    ` · Coverage: ${s.evidenceCoverage || 0}% · Matrix too optimistic: ${s.matrixTooOptimistic || 0}` +
+    ` · Numeric judgments: ${s.judged || 0}/${s.applicable || 0} applicable requirements` +
+    ` · Coverage: ${s.applicableEvidenceCoverage || 0}% · Matrix too optimistic: ${s.matrixTooOptimistic || 0}` +
     ` · Opposite declarations: ${s.declarationOpposite || 0} · TDR self-conflict: ${s.tdrConflict || 0}`);
   document.getElementById('aeris-notes').replaceChildren(
     ...(data.notes || []).map(note => {
@@ -1932,9 +2029,9 @@ function renderAeris(data) {
     })
   );
   document.getElementById('aeris-risks').innerHTML = (data.topRisks || []).length
-    ? '<h2 style="margin-bottom:8px">Top risks</h2>' + data.topRisks.map((r, i) =>
-        `<span class="risk-chip"><strong>${i+1}. ${r.domain}</strong> — ${r.hardFails} hard / ${r.count} items`
-        + (r.examples && r.examples.length ? ` (${r.examples.join(', ')})` : '') + '</span>'
+    ? '<h2 style="margin-bottom:8px">Top risks</h2>' + data.topRisks.slice(0, 5).map((r, i) =>
+        `<span class="risk-chip"><strong>${i+1}. ${_esc(r.domain)}</strong> — ${r.hardFails} hard / ${r.count} items`
+        + (r.examples && r.examples.length ? ` (${_esc(r.examples.join(', '))})` : '') + '</span>'
       ).join('')
     : '';
   renderAerisContradictions(data.incoherences || []);
@@ -1944,7 +2041,7 @@ function renderAeris(data) {
 function renderAerisContradictions(list) {
   const box = document.getElementById('aeris-contra-list');
   if (!list.length) {
-    box.innerHTML = '<p class="muted">Aucune incohérence détectée entre la matrice et le TDR fourni.</p>';
+    box.innerHTML = '<p class="muted">Aucune incohérence détectée. Ce résultat ne certifie pas la conformité : vérifier la couverture, les preuves insuffisantes et les remarques.</p>';
     return;
   }
   box.innerHTML = list.map(r => {
@@ -1966,7 +2063,7 @@ function renderAerisContradictions(list) {
         </div>
       </div>
       <div class="meta">Demandé : <strong>${_esc(r.demande) || '—'}</strong>
-        ${r.ecart ? ' · Écart : ' + _esc(r.ecart) : ''}
+        ${r['écart'] ? ' · Écart : ' + _esc(r['écart']) : ''}
         ${r.autres_motifs ? ' · Aussi : ' + _esc(r.autres_motifs) : ''}</div>
       ${r.action ? `<div class="meta">Action : ${_esc(r.action)}</div>` : ''}
     </div>`;
@@ -1990,6 +2087,7 @@ function _verdictFr(code) {
     PARTIELLEMENT_CONFORME: 'Partiellement conforme',
     DEVIATION: 'Déviation',
     PREUVE_INSUFFISANTE: 'Preuve insuffisante',
+    INCOMPARABLE: 'Non comparable / preuve manquante',
     MANQUANT: 'Aucune preuve TDR',
     NA: 'Non applicable',
   })[code] || _esc(code || '');
@@ -2033,7 +2131,13 @@ function filterAerisTable() {
       <td>${_esc(it.supplier_result) || '<span class="muted">—</span>'}
           ${it.gap ? `<div class="muted">écart ${_esc(it.gap)}</div>` : ''}</td>
       <td>${it.evidence_location ? `<strong>${_esc(it.evidence_location)}</strong>` : '<span class="muted">—</span>'}
-          ${it.evidence_excerpt ? `<div class="muted" style="font-size:12px">${_esc(it.evidence_excerpt.substring(0,160))}</div>` : ''}</td>
+          ${it.evidence_file ? `<div class="muted">${_esc(it.evidence_file)}</div>` : ''}
+          ${it.evidence_excerpt ? `<div class="muted" style="font-size:12px">${_esc(it.evidence_excerpt.substring(0,160))}</div>` : ''}
+          ${(it.evidence_sources || []).length ? `<details><summary>Sources des mesures</summary>${it.evidence_sources.map(s =>
+            `<p><strong>${_esc(s.file_name)} · ${_esc(s.location)}</strong><br>${_esc(s.excerpt)}</p>`).join('')}</details>` : ''}
+          ${(it.condition_verdicts || []).length ? `<details><summary>Comparaisons par condition</summary>${it.condition_verdicts.map(v =>
+            `<p>${_esc(v.condition)} ${_esc(v.target)} / ${_esc(v.measured) || 'aucune mesure'} : ${_verdictFr(v.status)}<br>${_esc(v.evidence_file)} · ${_esc(v.evidence_location)}</p>`).join('')}</details>` : ''}
+          <div class="muted">${_esc(it.rationale)}</div></td>
     </tr>`;
   }).join('');
   document.getElementById('aeris-count').textContent =
@@ -2199,5 +2303,7 @@ function showLoading(id, show, text) {
   }
 }
 </script>
+<script src="/tdr-review-ui.js"></script>
+<script src="/tdr-bench-ui.js"></script>
 </body>
 </html>

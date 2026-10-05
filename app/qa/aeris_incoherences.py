@@ -207,9 +207,22 @@ def _pourquoi(contra, item, walk, demande, matrice, tdr, ou) -> str:
             f"NOK / Déviation sur ce sujet."
         )
     if kind == "CLAIM_OK_NO_EVIDENCE":
+        if item and item.evidence_location:
+            if item.target:
+                return (
+                    f"La matrice déclare OK. Un passage lié a été retrouvé dans le TDR{ref}, "
+                    f"mais il ne permet pas de vérifier la cible {demande} dans les bonnes "
+                    "conditions. Une déclaration ou une borne ambiguë ne suffit pas."
+                )
+            return (
+                f"La matrice déclare OK. Un passage lié a été retrouvé dans le TDR{ref}, "
+                "mais cette exigence qualitative nécessite une preuve de test ou de conception "
+                "et une revue humaine ; la conformité n'est pas démontrée automatiquement."
+            )
         return (
-            "La matrice déclare OK mais le TDR ne contient aucune preuve "
-            "exploitable : c'est une affirmation, pas une conformité démontrée."
+            "La matrice déclare OK, mais aucun passage exploitable n'a été retrouvé "
+            "par l'extraction et le rapprochement. Vérifier aussi les avertissements "
+            "d'extraction/OCR avant de conclure que la preuve est absente du document."
         )
     if kind == "CLAIM_NOK_EVIDENCE_PASSES":
         return (
@@ -256,7 +269,9 @@ def _points(item) -> str:
     bits = []
     for v in item.condition_verdicts[:4]:
         cond = v.get("condition") or "nominal"
-        statut = "conforme" if v.get("status") == "CONFORME" else "non conforme"
+        statut = {
+            "CONFORME": "conforme", "NON_CONFORME": "non conforme",
+        }.get(v.get("status"), "non démontré")
         bits.append(f"{pretty_value(cond)} {pretty_value(v.get('measured',''))} {statut}")
     return " ; ".join(bits)
 

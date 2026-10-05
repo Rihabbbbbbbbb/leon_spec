@@ -166,3 +166,20 @@ def test_http_rejects_legacy_ppt(tmp_path):
         )
     assert response.status_code == 400
     assert ".pptx" in response.json()["detail"]
+
+
+def test_http_failed_extraction_is_not_a_successful_all_missing_report(tmp_path):
+    from fastapi.testclient import TestClient
+    from app.conformity_server import app
+
+    with _matrix(tmp_path).open("rb") as matrix:
+        response = TestClient(app).post(
+            "/api/aeris-crosscheck",
+            files=[
+                ("matrix", ("matrix.xlsx", matrix, "application/octet-stream")),
+                ("evidence", ("broken.pdf", b"not a PDF", "application/pdf")),
+            ],
+        )
+    assert response.status_code == 422
+    assert "No usable TDR evidence" in response.json()["detail"]
+    assert "items" not in response.json()

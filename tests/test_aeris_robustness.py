@@ -398,8 +398,8 @@ class TestDegradedInput:
             tmp_path / "m.xlsx",
             [("REQ-1", "EE", "Current <=100mA", "OK", "80 mA")],
         )
-        report = run_crosscheck(str(matrix), [], matrix.name)
-        assert report.items[0].final_status == "MANQUANT"
+        with pytest.raises(ValueError, match="No usable TDR evidence"):
+            run_crosscheck(str(matrix), [], matrix.name)
 
     def test_rows_without_id_or_with_huge_text(self, tmp_path):
         rows = [
@@ -416,19 +416,23 @@ class TestExcelSafety:
     """Le texte vient d'un fournisseur externe : il ne doit jamais s'exécuter."""
 
     def test_formulas_are_neutralised(self, tmp_path):
+        import zipfile
+
         rows = [
             ("REQ-E1", "EE", "Current <=100mA", "OK", "=cmd|'/c calc'!A1"),
             ("REQ-E2", "EE", "@SUM(1+1)*cmd", "OK", "+1+1"),
             ("REQ-E3", "EE", "Storage temperature >=-40°C", "OK", "-40 °C"),
         ]
         report = run(tmp_path, rows, "Slide 1\nStorage temperature -40 °C", "evil")
-        workbook = load_workbook(
-            io.BytesIO(generate_aeris_excel(report_to_dict(report)))
-        )
+        content = generate_aeris_excel(report_to_dict(report))
+        workbook = load_workbook(io.BytesIO(content))
         unprotected: List[str] = []
+        formulas: List[str] = []
         for sheet in workbook.worksheets:
             for row in sheet.iter_rows():
                 for cell in row:
+                    if cell.data_type == "f":
+                        formulas.append(f"{sheet.title}!{cell.coordinate}={cell.value!r}")
                     value = cell.value
                     if not isinstance(value, str):
                         continue
@@ -439,6 +443,14 @@ class TestExcelSafety:
                     if not cell._style.quotePrefix:
                         unprotected.append(f"{sheet.title}!{cell.coordinate}={value!r}")
         assert not unprotected, f"formules exécutables : {unprotected}"
+        assert not formulas, f"cellules encore sérialisées comme formules : {formulas}"
+        with zipfile.ZipFile(io.BytesIO(content)) as package:
+            formula_xml = [
+                name for name in package.namelist()
+                if name.startswith("xl/worksheets/sheet")
+                and b"<f" in package.read(name)
+            ]
+        assert not formula_xml, f"formules présentes dans le XML Excel : {formula_xml}"
 
     def test_negative_values_stay_readable(self, tmp_path):
         rows = [("REQ-N", "EE", "Storage temperature >=-40°C", "OK", "-40 °C")]

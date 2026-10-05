@@ -264,11 +264,16 @@ def _load_xlsx_workbook(filepath: str, *, data_only: bool = True):
     from zipfile import ZIP_DEFLATED, ZipFile
 
     from openpyxl import load_workbook
+    from openpyxl.reader.excel import SUPPORTED_FORMATS
     from openpyxl.utils.exceptions import InvalidFileException
 
     load_error = None
     try:
-        return load_workbook(filepath, data_only=data_only)
+        if "." + str(filepath).lower().rsplit(".", 1)[-1] not in SUPPORTED_FORMATS:
+            return load_workbook(filepath, data_only=data_only)
+        # Own the file handle so malformed XML cannot leave uploads locked on Windows.
+        with open(filepath, "rb") as source:
+            return load_workbook(source, data_only=data_only)
     except (ValueError, InvalidFileException) as exc:
         # Limit compatibility retry to the precise openpyxl validation failure.
         cause = exc
@@ -2195,7 +2200,7 @@ def extract_conformity_data(filepath: str, file_name: str = "") -> ConformityAna
                     row_index=ri,
                     req_id=req_id,
                     reference=reference,
-                    description=description[:200],
+                    description=description,
                     conformity_raw=conf_raw,
                     conformity_category=best_category,
                     comment=combined_comment,
@@ -2411,7 +2416,7 @@ def extract_conformity_data(filepath: str, file_name: str = "") -> ConformityAna
             row_index=ri,
             req_id=req_id,
             reference=reference,
-            description=description[:200],
+            description=description,
             conformity_raw=best_conf_raw,
             conformity_category=best_category,
             comment=combined_comment,

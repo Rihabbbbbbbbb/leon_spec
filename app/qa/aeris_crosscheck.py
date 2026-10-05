@@ -14,10 +14,9 @@ then for each requirement:
      the evidence verdict.
   6. Produce a quality synthesis (rate, coverage, top risks).
 
-The LLM is OPTIONAL and never overrides a numeric verdict. If Azure OpenAI
-is unavailable the engine still returns correct answers for every
-quantitative requirement — that is the industrial-grade path used by
-speXcompl.ai-style RFP checkers and the automotive RAG literature.
+Numeric verdicts are local and deterministic. Only supported scalar constraints
+and comparable extracted measurements are judged; unsupported expressions and
+missing evidence require review. Retrieval confidence is not certification.
 
 Statuses
 --------
@@ -33,7 +32,7 @@ from __future__ import annotations
 
 import re
 from collections import Counter
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
@@ -41,10 +40,13 @@ from app.qa.aeris_constraints import (
     Constraint,
     Measurement,
     compare_constraint,
+    ConditionVerdict,
+    constraint_parse_warning,
     extract_constraints,
     extract_measurements,
     operator_symbol,
     pretty_value,
+    quantities_compatible,
     summarize_verdicts,
 )
 from app.qa.aeris_contradictions import (
@@ -71,7 +73,7 @@ from app.qa.aeris_evidence import EvidenceChunk, EvidenceDocument, parse_evidenc
 from app.qa.conformity_analyzer import (
     ConformityAnalysis,
     ConformityItem,
-    analyze_conformity_matrix,
+    extract_conformity_data,
     analysis_to_dict,
 )
 
@@ -123,6 +125,7 @@ class CrossCheckItem:
     matrix_said: str = ""
     tdr_said: str = ""
     declaration_alignment: str = ""
+    evidence_sources: List[Dict] = field(default_factory=list)
 
 
 @dataclass
@@ -159,7 +162,7 @@ def run_crosscheck(
         evidence_files: list of (file_name, bytes) for TDR/PPT/PDF/…
         matrix_file_name: display name (defaults to basename).
     """
-    analysis = analyze_conformity_matrix(matrix_path, matrix_file_name or Path(matrix_path).name)
+    analysis = extract_conformity_data(matrix_path, matrix_file_name or Path(matrix_path).name)
     documents = [parse_evidence_bytes(name, blob) for name, blob in evidence_files]
     return crosscheck_analysis(analysis, documents)
 
@@ -190,22 +193,32 @@ def crosscheck_analysis(
             report.notes.append(f"{doc.file_name}: {doc.parse_error}")
         report.notes.extend(f"{doc.file_name}: {warning}" for warning in doc.warnings)
     if not chunks:
-        report.notes.append(
-            "No extractable evidence in the uploaded files; check the parse errors "
-            "and OCR warnings above. No numeric verdict can be established."
+        details = " ".join(report.notes)
+        raise ValueError(
+            "No usable TDR evidence was extracted. Check the Python environment, "
+            "PDF dependencies and OCR availability before judging supplier compliance. "
+            + details
         )
+    index = _EvidenceIndex(chunks)
 
     items: List[CrossCheckItem] = []
     found: List[Contradiction] = []
     walks: List[StatementCrosswalk] = []
     for req in analysis.items:
+        if not req.is_requirement:
+            continue
         if not req.req_id and not req.description:
             continue
-        item, contras, walk = _check_one(req, chunks)
+        item, contras, walk = _check_one(req, chunks, index)
         items.append(item)
         found.extend(contras)
         walks.append(walk)
+        warning = constraint_parse_warning(req.description or "")
+        if warning:
+            report.notes.append(f"{req.req_id or 'Unnamed requirement'}: {warning}")
 
+    if not items:
+        report.notes.append("No requirement rows were found in the matrix. Check the sheet and column headers.")
     report.items = items
     report.crosswalk = walks
     report.crosswalk_summary = crosswalk_summary(walks)
@@ -227,23 +240,80 @@ def crosscheck_analysis(
     return report
 
 
+class _EvidenceIndex:
+    def __init__(self, chunks: List[EvidenceChunk]):
+        self.tokens = {id(c): _tokens(c.text) for c in chunks}
+        self.measurements = {
+            id(c): [
+                replace(m, file_name=c.file_name)
+                for m in extract_measurements(
+                    c.measurement_text if c.measurement_text is not None else c.text,
+                    location=c.location,
+                )
+            ] for c in chunks
+        }
+        self.lower = {id(c): c.text.lower() for c in chunks}
+        self.condition_tokens = {
+            id(c): set(re.findall(r"[a-z0-9°]+", self.lower[id(c)])) for c in chunks
+        }
+        self.families = {
+            id(c): {m.unit_family for m in self.measurements[id(c)]} for c in chunks
+        }
+        self.quantities = {
+            id(c): {m.quantity for m in self.measurements[id(c)] if m.quantity} for c in chunks
+        }
+        self.domains = {
+            id(c): {name for name, pat in _RISK_DOMAINS if re.search(pat, c.text, re.I)}
+            for c in chunks
+        }
+        self.linked_chunks: Dict[str, List[EvidenceChunk]] = {}
+        for chunk in chunks:
+            for req_id in set(re.findall(r"\b(?:REQ|REF|APP)-[\w.-]+", chunk.text, re.I)):
+                self.linked_chunks.setdefault(req_id.upper(), []).append(chunk)
+
+
 def _check_one(
-    req: ConformityItem, chunks: List[EvidenceChunk]
+    req: ConformityItem, chunks: List[EvidenceChunk], index: Optional[_EvidenceIndex] = None,
 ) -> Tuple[CrossCheckItem, List[Contradiction], StatementCrosswalk]:
     blob = " ".join(p for p in (req.description, req.comment, req.reference) if p)
+    parse_warning = constraint_parse_warning(req.description or "")
     constraints = extract_constraints(req.description or "", source="requirement")
-    if not constraints and req.comment:
-        # Some matrices only put the measurable target in the comment.
-        constraints = extract_constraints(req.comment, source="comment")
 
-    ranked = _retrieve(req, constraints, chunks)
+    index = index or _EvidenceIndex(chunks)
+    ranked = _retrieve(req, constraints, chunks, index)
     best = ranked[0] if ranked else None
     evidence_text = best[0].text if best else ""
     evidence_loc = best[0].location if best else ""
     evidence_file = best[0].file_name if best else ""
     match_score = best[1] if best else 0.0
 
-    measurements = _gather_measurements(ranked, constraints)
+    linked = [
+        chunk for chunk, _ in ranked if req.req_id
+        and re.search(r"(?<!\w)" + re.escape(req.req_id) + r"(?!\w)", chunk.text, re.I)
+    ]
+    declaration_conflict = False
+    if len(linked) > 1:
+        declarations = {tdr_polarity(c.text) for c in linked}
+        declaration_conflict = {"PASS", "FAIL"} <= declarations
+        evidence_text = "\n\n".join(c.text for c in linked)
+        evidence_loc = "; ".join(dict.fromkeys(
+            f"{c.location} ({c.file_name})" for c in linked
+        ))
+        evidence_file = "; ".join(dict.fromkeys(c.file_name for c in linked))
+
+    measurements = _gather_measurements(ranked, constraints, index)
+    measurement_ids = {id(m) for m in measurements}
+    evidence_sources = []
+    for chunk, _ in ranked:
+        if chunk in linked or any(
+            id(m) in measurement_ids for m in index.measurements[id(chunk)]
+        ):
+            source = {
+                "file_name": chunk.file_name, "location": chunk.location,
+                "excerpt": chunk.text[:1000],
+            }
+            if source not in evidence_sources:
+                evidence_sources.append(source)
 
     condition_verdicts: List[Dict] = []
     evidence_status = "MANQUANT"
@@ -253,25 +323,28 @@ def _check_one(
 
     if req.conformity_category == "NA":
         evidence_status = "NA"
+    elif parse_warning:
+        evidence_status = "PREUVE_INSUFFISANTE"
     elif constraints and measurements:
         all_v = []
         for c in constraints:
             vs = compare_constraint(c, measurements)
+            if not vs:
+                vs = [ConditionVerdict(
+                    condition=c.condition,
+                    target=f"{operator_symbol(c.operator)}{c.shown()}",
+                    measured="",
+                    status="INCOMPARABLE",
+                    operator=c.operator,
+                    target_value=c.value,
+                    normalized_unit=c.unit,
+                )]
             all_v.extend(vs)
-            if not target:
-                target = f"{operator_symbol(c.operator)}{c.shown()}"
-                if c.condition:
-                    target += f" ({c.condition})"
-        condition_verdicts = [
-            {
-                "condition": v.condition,
-                "target": v.target,
-                "measured": v.measured,
-                "status": v.status,
-                "gap": v.gap,
-            }
-            for v in all_v
-        ]
+        target = "; ".join(
+            f"{operator_symbol(c.operator)}{c.shown()}"
+            + (f" ({c.condition})" if c.condition else "") for c in constraints
+        )
+        condition_verdicts = [asdict(v) for v in all_v]
         evidence_status = summarize_verdicts(all_v)
         if all_v:
             supplier_result = "; ".join(f"{v.condition + ': ' if v.condition else ''}{v.measured}" for v in all_v)
@@ -283,12 +356,12 @@ def _check_one(
                 gap = f"{sign}{worst.gap:.4g} {worst.gap_unit}".strip()
     elif constraints and ranked:
         evidence_status = "PREUVE_INSUFFISANTE"
-        c0 = constraints[0]
-        target = f"{operator_symbol(c0.operator)}{c0.value:g} {c0.unit}"
+        target = "; ".join(
+            f"{operator_symbol(c.operator)}{c.shown()}"
+            + (f" ({c.condition})" if c.condition else "") for c in constraints
+        )
     elif ranked and match_score >= 4:
         evidence_status = "PREUVE_INSUFFISANTE"
-    elif req.conformity_category == "NA":
-        evidence_status = "NA"
     else:
         evidence_status = "MANQUANT"
 
@@ -308,6 +381,8 @@ def _check_one(
         req, evidence_status, final_status, coherence,
         constraints, measurements, condition_verdicts, match_score,
     )
+    if parse_warning:
+        rationale += " " + parse_warning
 
     excerpt = ""
     if evidence_text:
@@ -328,6 +403,17 @@ def _check_one(
         tdr_location=evidence_loc,
         confidence=confidence,
     )
+    if declaration_conflict and req.conformity_category != "NA":
+        extra_types = list(walk.extra_types)
+        if walk.incompliance_type and walk.incompliance_type != "TDR_INTERNAL_CONFLICT":
+            extra_types.append(walk.incompliance_type)
+        walk = replace(
+            walk, alignment="TDR_CONFLICT",
+            incompliance_type="TDR_INTERNAL_CONFLICT",
+            incompliance_severity="high",
+            tdr_internal_conflict="Explicit OK and NOK declarations on linked TDR passages",
+            extra_types=extra_types,
+        )
     primary = classify_contradiction(
         req_id=req.req_id,
         matrix_status=req.conformity_category,
@@ -376,6 +462,7 @@ def _check_one(
         matrix_said=walk.matrix_said,
         tdr_said=walk.tdr_said,
         declaration_alignment=walk.alignment,
+        evidence_sources=evidence_sources,
     )
     return item, contras, walk
 
@@ -383,6 +470,7 @@ def _check_one(
 def _gather_measurements(
     ranked: List[Tuple[EvidenceChunk, float]],
     constraints: List[Constraint],
+    index: Optional[_EvidenceIndex] = None,
 ) -> List[Measurement]:
     """
     Collect the numbers that legitimately belong to this requirement.
@@ -402,17 +490,28 @@ def _gather_measurements(
     wanted = {c.quantity for c in constraints if c.quantity}
     families = {c.unit_family for c in constraints if c.unit_family}
     best_score = ranked[0][1]
+    best_ids = {
+        s.upper() for s in re.findall(r"\b(?:REQ|REF|APP)-[\w.-]+", ranked[0][0].text, re.I)
+    }
 
     out: List[Measurement] = []
-    for index, (chunk, score) in enumerate(ranked[:6]):
-        found = extract_measurements(chunk.text, location=chunk.location)
-        if index == 0:
+    for rank_index, (chunk, score) in enumerate(ranked):
+        found = index.measurements[id(chunk)] if index else extract_measurements(
+            chunk.measurement_text if chunk.measurement_text is not None else chunk.text,
+            location=chunk.location,
+        )
+        if rank_index == 0:
             keep = found
         else:
             # Trop loin du meilleur score : ce n'est plus la même preuve.
             if score < max(1.4, best_score * 0.55):
                 continue
-            keep = [m for m in found if m.quantity and m.quantity in wanted]
+            chunk_ids = {
+                s.upper() for s in re.findall(r"\b(?:REQ|REF|APP)-[\w.-]+", chunk.text, re.I)
+            }
+            keep = found if best_ids & chunk_ids else [
+                m for m in found if m.quantity and m.quantity in wanted
+            ]
         out.extend(keep)
 
     if wanted:
@@ -420,7 +519,8 @@ def _gather_measurements(
         # même famille (courant d'appel vs consommation) est écartée.
         out = [
             m for m in out
-            if not m.quantity or m.quantity in wanted or m.unit_family not in families
+            if m.unit_family in families
+            and (not m.quantity or any(quantities_compatible(m.quantity, quantity) for quantity in wanted))
         ]
     return out
 
@@ -429,33 +529,45 @@ def _retrieve(
     req: ConformityItem,
     constraints: List[Constraint],
     chunks: List[EvidenceChunk],
+    index: Optional[_EvidenceIndex] = None,
 ) -> List[Tuple[EvidenceChunk, float]]:
     if not chunks:
         return []
+    index = index or _EvidenceIndex(chunks)
 
     query_text = " ".join(p for p in (req.req_id, req.description, req.comment) if p)
     q_tokens = _tokens(query_text)
     families = {c.unit_family for c in constraints}
     conditions = [c.condition.lower() for c in constraints if c.condition]
+    condition_tokens = [set(re.findall(r"[a-z0-9°]+", c)) for c in conditions]
+    query_domains = {name for name, pat in _RISK_DOMAINS if re.search(pat, query_text, re.I)}
+    qty = {c.quantity for c in constraints if c.quantity}
+    req_pattern = re.compile(r"(?<!\w)" + re.escape(req.req_id) + r"(?!\w)", re.I) if req.req_id else None
+    chunks = index.linked_chunks.get(req.req_id.upper(), chunks)
 
     scored: List[Tuple[EvidenceChunk, float]] = []
     for chunk in chunks:
         score = 0.0
         body = chunk.text
-        low = body.lower()
+        low = index.lower[id(chunk)]
+        exact_id = bool(req_pattern and req_pattern.search(body))
+        cited_ids = re.findall(r"\b(?:REQ|REF|APP)-[\w.-]+", body, re.I)
+        if len({s.upper() for s in cited_ids}) > 1:
+            continue
+        if req.req_id and cited_ids and not exact_id:
+            continue
 
-        if req.req_id and re.search(r"(?<!\w)" + re.escape(req.req_id) + r"(?!\w)", body, re.I):
+        if exact_id:
             score += 8.0
 
-        c_tokens = _tokens(body)
+        c_tokens = index.tokens[id(chunk)]
         overlap = q_tokens & c_tokens
         if q_tokens:
             score += 4.0 * (len(overlap) / max(3, min(len(q_tokens), 12)))
 
-        chunk_meas = extract_measurements(body, location=chunk.location)
-        chunk_families = {m.unit_family for m in chunk_meas}
-        qty = {c.quantity for c in constraints if c.quantity}
-        chunk_qty = {m.quantity for m in chunk_meas if m.quantity}
+        chunk_meas = index.measurements[id(chunk)]
+        chunk_families = index.families[id(chunk)]
+        chunk_qty = index.quantities[id(chunk)]
         if qty and qty & chunk_qty:
             score += 4.0
         elif (qty and chunk_qty and not (qty & chunk_qty)
@@ -466,32 +578,32 @@ def _retrieve(
         elif families and any(f in low for f in families):
             score += 0.8
 
-        for cond in conditions:
+        for cond, cond_toks in zip(conditions, condition_tokens):
             if cond and cond.lower() in low:
                 score += 2.0
                 break
             # Shared distinctive condition tokens (32°, 25°c, reduced…)
-            cond_toks = set(re.findall(r"[a-z0-9°]+", cond.lower()))
-            if cond_toks & set(re.findall(r"[a-z0-9°]+", low)):
+            if cond_toks & index.condition_tokens[id(chunk)]:
                 score += 1.2
                 break
 
         # Domain keywords
-        for _name, pat in _RISK_DOMAINS:
-            if re.search(pat, query_text, re.I) and re.search(pat, body, re.I):
-                score += 1.0
-                break
+        if query_domains & index.domains[id(chunk)]:
+            score += 1.0
 
         # A unit is a type, not an identity: PWM at 40 Hz is not proof of
         # a 40 Hz display refresh rate. Require a named quantity or lexical
         # evidence beyond the unit family before admitting a passage.
-        has_anchor = bool(qty & chunk_qty or overlap or (
-            req.req_id and re.search(r"(?<!\w)" + re.escape(req.req_id) + r"(?!\w)", body, re.I)
-        ))
+        has_anchor = bool(qty & chunk_qty or overlap or exact_id)
         if score >= 1.4 and has_anchor:
             scored.append((chunk, score))
 
-    scored.sort(key=lambda x: x[1], reverse=True)
+    scored.sort(key=lambda x: (-x[1], x[0].file_name, x[0].location, x[0].text))
+    # Every explicitly linked result matters; a later failure must not be
+    # discarded just because earlier pages consume the retrieval budget.
+    exact_hits = [pair for pair in scored if req_pattern and req_pattern.search(pair[0].text)]
+    if exact_hits:
+        return exact_hits
 
     # Optional embedding rerank of the top lexical hits — never required.
     top = scored[:12]
@@ -652,6 +764,10 @@ def _build_summary(
         "judged": judged,
         "conformityRate": rate,
         "evidenceCoverage": coverage,
+        "applicable": total - counts.get("NA", 0),
+        "applicableEvidenceCoverage": round(
+            100.0 * judged / (total - counts.get("NA", 0)), 1,
+        ) if total > counts.get("NA", 0) else 0.0,
         "matrixTooOptimistic": coherence.get("MATRIX_TOO_OPTIMISTIC", 0),
         "matrixTooPessimistic": coherence.get("MATRIX_TOO_PESSIMISTIC", 0),
         "aligned": coherence.get("ALIGNED", 0),

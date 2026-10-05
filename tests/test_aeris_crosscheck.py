@@ -119,14 +119,12 @@ class TestNumericCompare:
         # Worst-case max 192.7 is the compared value for an upper bound.
         assert any(abs(v.gap - 92.7) < 0.2 or abs(v.gap - 19.9) < 0.2 for v in vs)
 
-    def test_lcf_gap_at_32deg(self):
+    def test_lcf_lower_bound_at_32deg_is_not_an_exact_failure(self):
         cs = extract_constraints("LCF Attenuation >95% at V=32°")
         ms = extract_measurements("lum attenuates >85% @V=32°  lum attenuates >95% @V=44°")
         vs = compare_constraint(cs[0], ms)
-        assert summarize_verdicts(vs) == "NON_CONFORME"
-        fail = [v for v in vs if v.status == "NON_CONFORME"]
-        assert fail
-        assert abs((fail[0].gap or 0) + 10) < 0.2  # 85 - 95
+        assert summarize_verdicts(vs) == "PREUVE_INSUFFISANTE"
+        assert all(v.status == "INCOMPARABLE" and v.gap is None for v in vs)
 
     def test_contrast_partial(self):
         cs = extract_constraints("TFT contrast ratio ≥400:1")
@@ -287,7 +285,7 @@ def _build_matrix(path: Path) -> Path:
          "NOK", "Typ 119.9 mA / Max 192.7 mA — Deviation"),
         ("REQ-0307942", "OPT",
          "LCF Attenuation >95% at V=32°",
-         "NOK", "85% @32°, 95% only @44°"),
+         "NOK", ">85% @V=32°, >95% only @V=44°"),
         ("REQ-0308444", "OPT",
          "TFT contrast ratio ≥400:1",
          "OK", "500@25°C / 410@70°C / 380@85°C"),
@@ -360,8 +358,8 @@ class TestAerisPipeline:
         assert current.coherence == "ALIGNED"  # matrix already NOK
 
         lcf = by_id["REQ-0307942"]
-        assert lcf.final_status == "NON_CONFORME"
-        assert lcf.gap
+        assert lcf.final_status == "PREUVE_INSUFFISANTE"
+        assert not lcf.gap
         assert "85" in lcf.supplier_result
 
         contrast = by_id["REQ-0308444"]

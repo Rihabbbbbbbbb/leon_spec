@@ -121,7 +121,7 @@ def generate_aeris_excel(report: dict) -> bytes:
 
     keys = [
         "n", "gravite", "req_id", "domaine", "demande", "matrice", "tdr",
-        "ou", "pourquoi", "ecart", "action", "autres_motifs", "confiance",
+        "ou", "pourquoi", "écart", "action", "autres_motifs", "confiance",
     ]
     for ri, row in enumerate(incoherences, head_row + 1):
         fill = PatternFill("solid", fgColor=_GRAVITE_FILL.get(row.get("gravite", ""), "FFFFFF"))
@@ -138,7 +138,10 @@ def generate_aeris_excel(report: dict) -> bytes:
         ws.row_dimensions[ri].height = 46
 
     if not incoherences:
-        ws.cell(head_row + 1, 1, "Aucune incohérence détectée entre la matrice et le TDR fourni.")
+        ws.cell(head_row + 1, 1, (
+            "Aucune incohérence détectée. Cela ne certifie pas la conformité ; "
+            "vérifier la couverture, les preuves insuffisantes et les remarques."
+        ))
         ws.merge_cells(start_row=head_row + 1, start_column=1, end_row=head_row + 1, end_column=13)
 
     widths = [5, 15, 16, 20, 26, 40, 40, 14, 62, 12, 50, 34, 13]
@@ -235,6 +238,7 @@ def generate_aeris_excel(report: dict) -> bytes:
         "Exigence", "Verdict AERIS", "Matrice", "Ce que dit la matrice",
         "Ce que dit le TDR", "Cible", "Écart", "Où dans le TDR",
         "Incohérence", "Explication", "Libellé de l'exigence",
+        "Sources des mesures", "Comparaisons par condition", "Justification",
     ]
     for ci, h in enumerate(dh, 1):
         cell = wd.cell(1, ci, h)
@@ -260,6 +264,17 @@ def generate_aeris_excel(report: dict) -> bytes:
             inco["motif"] if inco else "",
             inco["pourquoi"] if inco else "",
             item.get("description", ""),
+            "\n".join(
+                f"{s.get('file_name', '')}: {s.get('location', '')}\n{s.get('excerpt', '')}"
+                for s in item.get("evidence_sources", [])
+            ),
+            "\n".join(
+                f"{v.get('condition', '')}: {v.get('target', '')} / "
+                f"{v.get('measured', '') or 'aucune mesure'} -> {v.get('status', '')}"
+                f" ({v.get('evidence_file', '')}: {v.get('evidence_location', '')})"
+                for v in item.get("condition_verdicts", [])
+            ),
+            item.get("rationale", ""),
         ]
         fill = PatternFill("solid", fgColor=_STATUS_FILL.get(status, "FFFFFF"))
         for ci, val in enumerate(vals, 1):
@@ -271,17 +286,74 @@ def generate_aeris_excel(report: dict) -> bytes:
         if inco:
             wd.cell(ri, 9).fill = PatternFill("solid", fgColor="F8C9C5")
 
-    for i, w in enumerate([16, 24, 12, 38, 38, 20, 12, 14, 34, 56, 44], 1):
+    for i, w in enumerate([16, 24, 12, 38, 38, 20, 12, 14, 34, 56, 44, 50, 50, 60], 1):
         wd.column_dimensions[get_column_letter(i)].width = w
     wd.freeze_panes = "A2"
     if items:
-        wd.auto_filter.ref = f"A1:K{len(items) + 1}"
+        wd.auto_filter.ref = f"A1:N{len(items) + 1}"
 
     wb.active = 0
+    if report.get("engineVersion") == "tdr-review-1":
+        _add_review_annex(wb, report)
+        wb.active = wb.sheetnames.index("Revue humaine")
     _neutralise_formulas(wb)
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+
+def _add_review_annex(wb, report: dict) -> None:
+    import json
+
+    def write_sheet(title, headers, rows):
+        ws = wb.create_sheet(title)
+        ws.append(headers)
+        for row in rows:
+            values = [
+                json.dumps(v, ensure_ascii=False) if isinstance(v, (dict, list)) else v
+                for v in row
+            ]
+            ws.append([
+                v[:32650] + " [TRUNCATED: full content in JSON export]"
+                if isinstance(v, str) and len(v) > 32767 else v
+                for v in values
+            ])
+        ws.freeze_panes = "A2"
+        ws.auto_filter.ref = ws.dimensions
+        for cell in ws[1]:
+            cell.font = Font(bold=True, color="FFFFFF")
+            cell.fill = PatternFill("solid", fgColor="23445D")
+        for column in ws.columns:
+            ws.column_dimensions[column[0].column_letter].width = 30
+            for cell in column:
+                cell.alignment = Alignment(wrap_text=True, vertical="top")
+
+    items = report["items"]
+    write_sheet("Revue humaine",
+                ["Row key", "Requirement", "Source matrix", "AI proposal (immutable)",
+                 "Technical verdict", "Scope", "Human result", "Action", "Reviewer (unverified)",
+                 "Time UTC", "Revision", "Comment", "Review reasons", "Original requirement"],
+                [
+                    [i["row_key"], i["req_id"], i["matrix_source"], i["proposal_status"],
+                     i["final_status"], i["scope_status"], (i.get("human_decision") or {}).get("result_status"),
+                     (i.get("human_decision") or {}).get("action"),
+                     (i.get("human_decision") or {}).get("reviewer"),
+                     (i.get("human_decision") or {}).get("recordedAt"),
+                     i["review_revision"], (i.get("human_decision") or {}).get("comment"),
+                     i["escalation_reasons"], i["description"]] for i in items
+                ])
+    write_sheet("Historique",
+                ["Row key", "Requirement", "Revision", "UTC", "Reviewer (unverified)",
+                 "Action", "Original AI proposal", "Human result", "Comment", "Technical acceptance"],
+                [[i["row_key"], i["req_id"], h["revision"], h["recordedAt"], h["reviewer"],
+                  h["action"], h["original_proposal"], h["result_status"], h["comment"], False]
+                 for i in items for h in i.get("review_history", [])])
+    write_sheet("Documents et perimetre", ["Type", "Value"],
+                [["Case ID", report.get("caseId")], ["Engine", report["engineVersion"]],
+                 ["Scope", report["scope"]], ["Schema", report["schemaMapping"]],
+                 ["No automatic acceptance", True]] +
+                [["Document", doc] for doc in report["documents"]] +
+                [["Limitation", note] for note in report["limitations"]])
 
 
 # Excel interprète une cellule commençant par = + - @ comme une formule.
@@ -303,3 +375,8 @@ def _neutralise_formulas(wb) -> None:
                 style = copy(cell._style)
                 style.quotePrefix = True
                 cell._style = style
+                # openpyxl marks strings beginning with "=" as formulas when
+                # they are assigned. quotePrefix affects display only; leaving
+                # data_type="f" emits an invalid/untrusted formula that Excel
+                # removes while repairing the workbook.
+                cell.data_type = "s"
