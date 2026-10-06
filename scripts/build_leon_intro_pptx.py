@@ -122,7 +122,7 @@ MUTED_LINE = RGBColor(0xA9, 0xBC, 0xD4)
 def footer(slide, page, total=TOTAL):
     add_rect(slide, 0, Inches(7.22), W, Inches(0.28), NAVY)
     add_textbox(slide, Inches(0.4), Inches(7.22), Inches(10), Inches(0.28),
-                "Khadija Benhamida  ·  Mechatronics Engineering  ·  Confidential",
+                "AERIS  ·  Mechatronics Engineering  ·  Confidential",
                 size=11, color=MUTED_LINE, anchor=MSO_ANCHOR.MIDDLE)
     add_textbox(slide, Inches(11.4), Inches(7.22), Inches(1.5), Inches(0.28),
                 f"{page}  /  {total}", size=11, color=WHITE, align=PP_ALIGN.RIGHT,
@@ -504,6 +504,6 @@ def build(out: Path) -> Path:
 
 
 if __name__ == "__main__":
-    target = Path(__file__).resolve().parents[1] / "docs" / "LEON_intro_for_non_specialists.pptx"
+    target = Path(__file__).resolve().parents[1] / "docs" / "AERIS_introductory_meeting.pptx"
     path = build(target)
     print(f"Wrote {path} ({path.stat().st_size} bytes)")
