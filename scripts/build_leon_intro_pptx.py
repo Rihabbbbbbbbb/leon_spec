@@ -165,17 +165,17 @@ def build(out: Path) -> Path:
                 color=MUTED_LINE)
     add_textbox(s, Inches(0.7), Inches(1.18), Inches(11.5), Inches(0.30),
                 "INTRODUCTORY MEETING  ·  OCTOBER 2026", size=13, bold=True, color=BLUE)
-    add_textbox(s, Inches(0.7), Inches(1.52), Inches(12), Inches(0.62),
-                "Khadija Benhamida", size=38, bold=True, color=WHITE)
-    add_textbox(s, Inches(0.7), Inches(2.18), Inches(12), Inches(0.55),
-                "LEON — Quality Analysis", size=26, bold=True,
+    add_textbox(s, Inches(0.7), Inches(1.55), Inches(12), Inches(0.70),
+                "AERIS", size=48, bold=True, color=WHITE)
+    add_textbox(s, Inches(0.7), Inches(2.28), Inches(12), Inches(0.42),
+                "Automated Engineering Review & Integrity System", size=18, bold=True,
                 color=RGBColor(0xE8, 0xEE, 0xFB))
-    add_textbox(s, Inches(0.7), Inches(2.80), Inches(11.8), Inches(0.70),
+    add_textbox(s, Inches(0.7), Inches(2.78), Inches(11.8), Inches(0.70),
                 "Project presentation: review of specifications, conformity matrices\n"
                 "and technical design dossiers (TDR) — without requiring an AI background.",
                 size=16, color=RGBColor(0xC5, 0xD4, 0xE8))
-    add_rect(s, Inches(0.7), Inches(3.62), Inches(3.4), Inches(0.07), BLUE)
-    add_textbox(s, Inches(0.7), Inches(3.82), Inches(11.8), Inches(0.70),
+    add_rect(s, Inches(0.7), Inches(3.58), Inches(3.4), Inches(0.07), BLUE)
+    add_textbox(s, Inches(0.7), Inches(3.78), Inches(11.8), Inches(0.70),
                 "In collaboration with Imane El Brouji and Patrick Garcia\n"
                 "Mechatronics Engineering",
                 size=15, color=MUTED_LINE)
@@ -205,7 +205,7 @@ def build(out: Path) -> Path:
                "Project explanation, work completed, then organisational points.")
     agenda = [
         ("01", "The project",
-         "Purpose of LEON, the three documents (specification, matrix, TDR) and the application."),
+         "Purpose of AERIS, the three documents (specification, matrix, TDR) and the application."),
         ("02", "Work completed",
          "Specification validation, conformity matrix, Matrix ↔ TDR, TDR benchmark."),
         ("03", "Collaboration",
@@ -234,12 +234,12 @@ def build(out: Path) -> Path:
     # ── 3. Project + three documents ────────────────────────────
     s = blank(prs)
     header_bar(s, "The project", "What we are working on",
-               "LEON supports Mechatronics Engineering in the review of three documents that must remain consistent.")
+               "AERIS supports Mechatronics Engineering in the review of three documents that must remain consistent.")
     add_rect(s, Inches(0.45), Inches(1.45), Inches(12.4), Inches(1.35), BLUE_SOFT, BLUE, rounded=True)
     add_textbox(s, Inches(0.70), Inches(1.55), Inches(11.9), Inches(1.15),
                 "Objective: provide a structured first analysis of supplier files, reduce review time and highlight "
                 "inconsistencies — while the engineer remains responsible for the technical decision.\n"
-                "LEON does not approve a supplier and does not replace Quality or Purchasing.",
+                "AERIS does not approve a supplier and does not replace Quality or Purchasing.",
                 size=14, color=NAVY)
     cards = [
         ("1. Specification (CTS)", BLUE,
@@ -269,8 +269,8 @@ def build(out: Path) -> Path:
 
     # ── 4. Why + what LEON does ─────────────────────────────────
     s = blank(prs)
-    header_bar(s, "The project", "Why LEON exists, and what it does",
-               "The review is still largely manual. LEON performs a first reading of the files in a browser.")
+    header_bar(s, "The project", "Why AERIS exists, and what it does",
+               "The review is still largely manual. AERIS performs a first reading of the files in a browser.")
     left = [
         ("Review time", "A specification, a matrix of several hundred rows and a TDR of dozens of slides are reviewed mainly by hand."),
         ("Incomplete OK", "A status marked OK with the comment “pending validation” is not confirmed conformity."),
@@ -287,12 +287,12 @@ def build(out: Path) -> Path:
                     body, size=12, color=INK)
         y += Inches(1.38)
     add_card_text(s, Inches(6.80), Inches(1.48), Inches(6.05), Inches(5.42),
-                  "What LEON does",
+                  "What AERIS does",
                   "The specification, the matrix and the TDR are uploaded in the browser.\n\n"
                   "The application identifies each requirement, its status, and the matching page or slide in the TDR.\n\n"
                   "It highlights inconsistencies and produces a colour-coded Excel report for the review meeting.\n\n"
                   "No installation is required for the reviewer.\n\n"
-                  "The technical decision remains human. LEON does not issue a certificate of conformity.",
+                  "The technical decision remains human. AERIS does not issue a certificate of conformity.",
                   BLUE, 17, 13)
     footer(s, 4)
 
@@ -338,7 +338,7 @@ def build(out: Path) -> Path:
                 "Specification validation", size=18, bold=True, color=WHITE, anchor=MSO_ANCHOR.MIDDLE)
     add_textbox(s, Inches(0.70), Inches(2.20), Inches(5.55), Inches(4.4),
                 "The CTS file is uploaded (Word, PDF or text).\n\n"
-                "LEON verifies:\n"
+                "AERIS verifies:\n"
                 "• mandatory sections (Purpose, Scope, Requirements…);\n"
                 "• remaining placeholders (<<name>>, TBD, XXX);\n"
                 "• requirement identifiers and binding language (“shall”).\n\n"
@@ -351,7 +351,7 @@ def build(out: Path) -> Path:
                 "Conformity matrix analysis", size=18, bold=True, color=WHITE, anchor=MSO_ANCHOR.MIDDLE)
     add_textbox(s, Inches(7.00), Inches(2.20), Inches(5.55), Inches(4.4),
                 "The supplier matrix is uploaded (Excel / ODS).\n\n"
-                "LEON counts OK / NOK / NA statuses and lists every requirement.\n\n"
+                "AERIS counts OK / NOK / NA statuses and lists every requirement.\n\n"
                 "Each OK comment is reviewed. A point of attention is raised when:\n"
                 "• the comment contradicts the status;\n"
                 "• conformity is partial or still pending.\n\n"
@@ -362,7 +362,7 @@ def build(out: Path) -> Path:
     # ── 7. Work done: TDR ───────────────────────────────────────
     s = blank(prs)
     header_bar(s, "Work completed", "Matrix versus TDR, and supplier comparison",
-               "The TDR is the evidence. LEON compares the declaration with that evidence.")
+               "The TDR is the evidence. AERIS compares the declaration with that evidence.")
     add_rect(s, Inches(0.45), Inches(1.48), Inches(12.4), Inches(1.28), AMBER_BG, WARN, rounded=True)
     add_textbox(s, Inches(0.70), Inches(1.56), Inches(12.0), Inches(0.28),
                 "Example of inconsistency — display contrast", size=14, bold=True, color=WARN)
@@ -387,7 +387,7 @@ def build(out: Path) -> Path:
     # ── 8. Collaboration ────────────────────────────────────────
     s = blank(prs)
     header_bar(s, "Collaboration", "Working arrangement",
-               "Imane El Brouji and Patrick Garcia provide the mechatronics expertise. I implement LEON.")
+               "Imane El Brouji and Patrick Garcia provide the mechatronics expertise. I implement AERIS.")
     add_rect(s, Inches(0.45), Inches(1.52), Inches(6.05), Inches(3.40), CARD, LINE, rounded=True)
     add_rect(s, Inches(0.45), Inches(1.52), Inches(6.05), Inches(0.12), BLUE)
     add_textbox(s, Inches(0.70), Inches(1.80), Inches(5.55), Inches(0.40),
@@ -411,7 +411,7 @@ def build(out: Path) -> Path:
     add_textbox(s, Inches(0.80), Inches(5.28), Inches(11.7), Inches(0.36),
                 "Division of roles", size=16, bold=True, color=NAVY)
     add_textbox(s, Inches(0.80), Inches(5.70), Inches(11.7), Inches(1.00),
-                "They provide the ideas and the technical meaning on the mechatronics side. I develop and iterate on LEON. "
+                "They provide the ideas and the technical meaning on the mechatronics side. I develop and iterate on AERIS. "
                 "The application is designed from engineering practice, not as a standalone IT development.",
                 size=15, color=INK)
     footer(s, 8)
@@ -426,7 +426,7 @@ def build(out: Path) -> Path:
         (WARN, "02  Next", "Close this phase",
          "Remaining development, tests on representative files, alignment with Imane El Brouji and Patrick Garcia."),
         (OK, "03  Then", "Deployment",
-         "Deployment will start so that Mechatronics Engineering can open LEON in a browser, without installation."),
+         "Deployment will start so that Mechatronics Engineering can open AERIS in a browser, without installation."),
     ]
     x = Inches(0.45)
     for color, kicker, title, body in steps:
@@ -441,7 +441,7 @@ def build(out: Path) -> Path:
         x += Inches(4.20)
     add_rect(s, Inches(0.45), Inches(5.75), Inches(12.35), Inches(1.20), GREEN_BG, OK, rounded=True)
     add_textbox(s, Inches(0.70), Inches(5.92), Inches(11.9), Inches(0.90),
-                "Target: any colleague who reviews a specification, a matrix or a TDR can use LEON.",
+                "Target: any colleague who reviews a specification, a matrix or a TDR can use AERIS.",
                 size=16, bold=True, color=NAVY)
     footer(s, 9)
 
@@ -452,7 +452,7 @@ def build(out: Path) -> Path:
     add_card_text(s, Inches(0.45), Inches(1.52), Inches(6.05), Inches(5.38),
                   "Objectives",
                   "Clarify what AI can and cannot do on specifications, matrices and TDR files.\n\n"
-                  "Position LEON as a first analysis, not as a substitute for the engineer.\n\n"
+                  "Position AERIS as a first analysis, not as a substitute for the engineer.\n\n"
                   "Establish a common practice: where AI reduces review time, and where a technical decision is required.\n\n"
                   "Use examples drawn from mechatronics documents.",
                   BLUE, 18, 14)
