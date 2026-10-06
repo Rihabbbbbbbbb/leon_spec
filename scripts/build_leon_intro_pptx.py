@@ -115,7 +115,7 @@ def add_card_text(slide, l, t, w, h, title, body, accent=BLUE, title_size=16, bo
     return
 
 
-TOTAL = 14
+TOTAL = 11
 MUTED_LINE = RGBColor(0xA9, 0xBC, 0xD4)
 
 
@@ -160,22 +160,22 @@ def build(out: Path) -> Path:
     s = blank(prs)
     add_rect(s, 0, 0, W, H, NAVY)
     add_rect(s, 0, 0, Inches(0.18), H, BLUE)
-    add_textbox(s, Inches(0.7), Inches(0.85), Inches(11.5), Inches(0.32),
+    add_textbox(s, Inches(0.7), Inches(0.80), Inches(11.5), Inches(0.28),
                 "STELLANTIS  ·  MECHATRONICS ENGINEERING", size=13, bold=True,
                 color=MUTED_LINE)
-    add_textbox(s, Inches(0.7), Inches(1.30), Inches(11.5), Inches(0.32),
-                "STATUS MEETING  ·  OCTOBER 2026", size=13, bold=True, color=BLUE)
-    add_textbox(s, Inches(0.7), Inches(1.62), Inches(12), Inches(0.70),
-                "Khadija Benhamida", size=40, bold=True, color=WHITE)
-    add_textbox(s, Inches(0.7), Inches(2.40), Inches(12), Inches(0.70),
-                "LEON — Quality Analysis", size=28, bold=True,
+    add_textbox(s, Inches(0.7), Inches(1.18), Inches(11.5), Inches(0.30),
+                "INTRODUCTORY MEETING  ·  OCTOBER 2026", size=13, bold=True, color=BLUE)
+    add_textbox(s, Inches(0.7), Inches(1.52), Inches(12), Inches(0.62),
+                "Khadija Benhamida", size=38, bold=True, color=WHITE)
+    add_textbox(s, Inches(0.7), Inches(2.18), Inches(12), Inches(0.55),
+                "LEON — Quality Analysis", size=26, bold=True,
                 color=RGBColor(0xE8, 0xEE, 0xFB))
-    add_textbox(s, Inches(0.7), Inches(3.15), Inches(11.8), Inches(0.70),
-                "Application supporting the review of specifications, conformity matrices\n"
-                "and technical design dossiers (TDR).",
+    add_textbox(s, Inches(0.7), Inches(2.80), Inches(11.8), Inches(0.70),
+                "Project presentation: review of specifications, conformity matrices\n"
+                "and technical design dossiers (TDR) — without requiring an AI background.",
                 size=16, color=RGBColor(0xC5, 0xD4, 0xE8))
-    add_rect(s, Inches(0.7), Inches(4.05), Inches(3.4), Inches(0.07), BLUE)
-    add_textbox(s, Inches(0.7), Inches(4.28), Inches(11.8), Inches(0.70),
+    add_rect(s, Inches(0.7), Inches(3.62), Inches(3.4), Inches(0.07), BLUE)
+    add_textbox(s, Inches(0.7), Inches(3.82), Inches(11.8), Inches(0.70),
                 "In collaboration with Imane El Brouji and Patrick Garcia\n"
                 "Mechatronics Engineering",
                 size=15, color=MUTED_LINE)
@@ -186,37 +186,36 @@ def build(out: Path) -> Path:
     ]
     px = Inches(0.7)
     for color, label, hint in pills:
-        add_rect(s, px, Inches(5.35), Inches(3.4), Inches(1.15), RGBColor(0x15, 0x38, 0x62), None, rounded=True)
-        add_rect(s, px, Inches(5.35), Inches(0.10), Inches(1.15), color)
-        add_textbox(s, px + Inches(0.28), Inches(5.48), Inches(3.0), Inches(0.42),
+        add_rect(s, px, Inches(4.70), Inches(3.4), Inches(1.15), RGBColor(0x15, 0x38, 0x62), None, rounded=True)
+        add_rect(s, px, Inches(4.70), Inches(0.10), Inches(1.15), color)
+        add_textbox(s, px + Inches(0.28), Inches(4.82), Inches(3.0), Inches(0.42),
                     label, size=18, bold=True, color=WHITE, anchor=MSO_ANCHOR.MIDDLE)
-        add_textbox(s, px + Inches(0.28), Inches(5.92), Inches(3.0), Inches(0.40),
+        add_textbox(s, px + Inches(0.28), Inches(5.26), Inches(3.0), Inches(0.40),
                     hint, size=14, color=MUTED_LINE, anchor=MSO_ANCHOR.TOP)
         px += Inches(3.65)
-    add_textbox(s, Inches(0.7), Inches(6.70), Inches(11.8), Inches(0.35),
-                "Status: development in progress  ·  Team deployment after completion of this phase",
-                size=13, color=MUTED_LINE)
-    notes(s,
-          "Introduce the meeting, the project name, and the collaboration. "
-          "Then move to the agenda.")
+    add_textbox(s, Inches(0.7), Inches(6.10), Inches(11.8), Inches(0.70),
+                "Status: development in progress.\n"
+                "After completion of this phase, deployment will start so that the whole team has access.",
+                size=14, color=MUTED_LINE)
+    notes(s, "Introductory meeting. Present the project, then collaboration, status and organisation.")
 
     # ── 2. Agenda ───────────────────────────────────────────────
     s = blank(prs)
     header_bar(s, "Agenda", "Meeting agenda",
-               "Project presentation, current status, and organisational points.")
+               "Project explanation, work completed, then organisational points.")
     agenda = [
-        ("01", "Project presentation",
-         "Purpose of LEON, the three documents concerned, and the functions of the application."),
-        ("02", "Work completed to date",
-         "Specification validation, conformity matrix analysis, Matrix ↔ TDR, TDR benchmark."),
+        ("01", "The project",
+         "Purpose of LEON, the three documents (specification, matrix, TDR) and the application."),
+        ("02", "Work completed",
+         "Specification validation, conformity matrix, Matrix ↔ TDR, TDR benchmark."),
         ("03", "Collaboration",
-         "Working arrangement with Imane El Brouji and Patrick Garcia."),
+         "Imane El Brouji and Patrick Garcia — mechatronics input and explanations."),
         ("04", "Status and deployment",
-         "Development in progress. Team access will follow completion of this phase."),
+         "Work in progress. Team access after completion of this phase."),
         ("05", "AI training",
-         "Upcoming training and expected use within Mechatronics Engineering."),
+         "Upcoming training and use within the Mechatronics team."),
         ("06", "Working arrangements",
-         "Télétravail on Wednesday and Friday; first school period over the next two weeks."),
+         "Télétravail Wednesday and Friday; first school period over the next two weeks."),
     ]
     y = Inches(1.48)
     for num, title, body in agenda:
@@ -231,147 +230,89 @@ def build(out: Path) -> Path:
                     body, size=13, color=INK)
         y += Inches(0.94)
     footer(s, 2)
-    notes(s, "Present the agenda briefly, then start with the project.")
 
-    # ── 3. Project purpose ──────────────────────────────────────
+    # ── 3. Project + three documents ────────────────────────────
     s = blank(prs)
-    header_bar(s, "The project", "Purpose of LEON",
-               "A structured first analysis of supplier documentation for Mechatronics Engineering.")
-    add_card_text(s, Inches(0.45), Inches(1.52), Inches(6.05), Inches(2.45),
-                  "Objective",
-                  "Reduce the time and the risk of a purely manual review of specifications, "
-                  "conformity matrices and TDR files, while keeping the technical decision "
-                  "with the engineer.",
-                  BLUE, 16, 14)
-    add_card_text(s, Inches(6.75), Inches(1.52), Inches(6.05), Inches(2.45),
-                  "Scope",
-                  "Customer Technical Specifications (CTS), FNR conformity matrices "
-                  "(Excel / ODS) and supplier technical dossiers (PowerPoint, PDF, Word).",
-                  NAVY_2, 16, 14)
-    add_card_text(s, Inches(0.45), Inches(4.15), Inches(6.05), Inches(2.75),
-                  "Expected result",
-                  "A first reading of the files: requirement status, inconsistencies, "
-                  "and the location of the supporting evidence.\n\n"
-                  "Export of a colour-coded Excel report for the review meeting.",
-                  OK, 16, 14)
-    add_card_text(s, Inches(6.75), Inches(4.15), Inches(6.05), Inches(2.75),
-                  "Limit of the tool",
-                  "LEON prepares the review. It does not approve a supplier and does not "
-                  "replace Quality, Purchasing or the responsible engineer.",
-                  WARN, 16, 14)
-    footer(s, 3)
-    notes(s, "This is the project definition. Then explain the three documents.")
-
-    # ── 4. Three documents ──────────────────────────────────────
-    s = blank(prs)
-    header_bar(s, "Project context", "Three documents must remain consistent",
-               "For each component, Stellantis requirements, the supplier declaration and the technical evidence.")
+    header_bar(s, "The project", "What we are working on",
+               "LEON supports Mechatronics Engineering in the review of three documents that must remain consistent.")
+    add_rect(s, Inches(0.45), Inches(1.45), Inches(12.4), Inches(1.35), BLUE_SOFT, BLUE, rounded=True)
+    add_textbox(s, Inches(0.70), Inches(1.55), Inches(11.9), Inches(1.15),
+                "Objective: provide a structured first analysis of supplier files, reduce review time and highlight "
+                "inconsistencies — while the engineer remains responsible for the technical decision.\n"
+                "LEON does not approve a supplier and does not replace Quality or Purchasing.",
+                size=14, color=NAVY)
     cards = [
-        ("1.  Specification (CTS)", BLUE,
-         "Document issued by Stellantis.\n\n"
-         "It defines the requirements applicable to the component: performance, "
-         "interfaces, environment, safety, quality.\n\n"
-         "It is the contractual reference of what “compliant” means."),
-        ("2.  Conformity matrix", WARN,
-         "Document completed by the supplier.\n\n"
-         "One row per requirement. Status OK, NOK (not compliant) or NA "
-         "(not applicable), with a comment.\n\n"
-         "It is the official supplier declaration."),
-        ("3.  TDR", OK,
-         "Technical Design Review / technical dossier.\n\n"
-         "PowerPoint or PDF presenting architecture, values, tests and design choices.\n\n"
-         "It is the supporting evidence behind the declaration."),
+        ("1. Specification (CTS)", BLUE,
+         "Issued by Stellantis.\n\n"
+         "Defines the requirements of the component: performance, interfaces, environment, safety, quality.\n\n"
+         "Contractual reference of what “compliant” means."),
+        ("2. Conformity matrix", WARN,
+         "Completed by the supplier.\n\n"
+         "One row per requirement. Status OK, NOK or NA, plus a comment.\n\n"
+         "Official supplier declaration."),
+        ("3. TDR", OK,
+         "Technical Design Review / dossier.\n\n"
+         "PowerPoint or PDF: architecture, measured values, tests, design choices.\n\n"
+         "Supporting evidence behind the declaration."),
     ]
     x = Inches(0.45)
     for title, accent, body in cards:
-        add_rect(s, x, Inches(1.55), Inches(3.95), Inches(5.35), CARD, LINE, rounded=True)
-        add_rect(s, x, Inches(1.55), Inches(3.95), Inches(0.12), accent)
-        add_textbox(s, x + Inches(0.22), Inches(1.82), Inches(3.5), Inches(0.70),
-                    title, size=16, bold=True, color=NAVY)
-        add_textbox(s, x + Inches(0.22), Inches(2.60), Inches(3.5), Inches(4.00),
-                    body, size=14, color=INK)
+        add_rect(s, x, Inches(2.98), Inches(3.95), Inches(3.95), CARD, LINE, rounded=True)
+        add_rect(s, x, Inches(2.98), Inches(3.95), Inches(0.10), accent)
+        add_textbox(s, x + Inches(0.22), Inches(3.18), Inches(3.50), Inches(0.55),
+                    title, size=15, bold=True, color=NAVY)
+        add_textbox(s, x + Inches(0.22), Inches(3.75), Inches(3.50), Inches(2.95),
+                    body, size=13, color=INK)
         x += Inches(4.15)
-    footer(s, 4)
-    notes(s,
-          "Specification = Stellantis. Matrix = supplier declaration. "
-          "TDR = technical evidence. The three must tell the same story.")
+    footer(s, 3)
+    notes(s, "This is the core of the project. The three documents must tell the same story.")
 
-    # ── 5. Current process ──────────────────────────────────────
+    # ── 4. Why + what LEON does ─────────────────────────────────
     s = blank(prs)
-    header_bar(s, "Why the project exists", "The current review remains largely manual",
-               "An OK status in Excel, or a complete TDR presentation, can still hide an inconsistency.")
-    problems = [
-        ("Review time",
-         "A specification, a matrix of several hundred rows and a TDR of several dozen slides "
-         "are reviewed mainly by hand."),
-        ("Incomplete declarations",
-         "A requirement marked OK with a comment such as “pending validation” or “partially covered” "
-         "is not a confirmed conformity."),
-        ("Inconsistency between files",
-         "The matrix may declare OK while the TDR presents a value below the requirement "
-         "(for example contrast ≥ 400:1 in the specification, 380:1 in the TDR)."),
-        ("Comparison of suppliers",
-         "Each supplier delivers a different dossier. A structured technical comparison "
-         "on the same criteria is currently time-consuming."),
+    header_bar(s, "The project", "Why LEON exists, and what it does",
+               "The review is still largely manual. LEON performs a first reading of the files in a browser.")
+    left = [
+        ("Review time", "A specification, a matrix of several hundred rows and a TDR of dozens of slides are reviewed mainly by hand."),
+        ("Incomplete OK", "A status marked OK with the comment “pending validation” is not confirmed conformity."),
+        ("File inconsistency", "The matrix may declare OK while the TDR shows a lower value (example: ≥ 400:1 required, 380:1 presented)."),
+        ("Supplier comparison", "Comparing several technical offers on the same criteria is currently time-consuming."),
     ]
-    y = Inches(1.50)
-    for title, body in problems:
-        add_rect(s, Inches(0.5), y, Inches(12.3), Inches(1.22), CARD, LINE, rounded=True)
-        add_rect(s, Inches(0.5), y, Inches(0.12), Inches(1.22), NOK)
-        add_textbox(s, Inches(0.85), y + Inches(0.16), Inches(11.7), Inches(0.36),
-                    title, size=18, bold=True, color=NAVY)
-        add_textbox(s, Inches(0.85), y + Inches(0.52), Inches(11.7), Inches(0.58),
-                    body, size=14, color=INK)
-        y += Inches(1.35)
-    footer(s, 5)
-    notes(s, "The project does not replace the engineer; it highlights the points that require attention.")
+    y = Inches(1.48)
+    for title, body in left:
+        add_rect(s, Inches(0.45), y, Inches(6.10), Inches(1.28), CARD, LINE, rounded=True)
+        add_rect(s, Inches(0.45), y, Inches(0.10), Inches(1.28), NOK)
+        add_textbox(s, Inches(0.75), y + Inches(0.10), Inches(5.60), Inches(0.32),
+                    title, size=14, bold=True, color=NAVY)
+        add_textbox(s, Inches(0.75), y + Inches(0.44), Inches(5.60), Inches(0.74),
+                    body, size=12, color=INK)
+        y += Inches(1.38)
+    add_card_text(s, Inches(6.80), Inches(1.48), Inches(6.05), Inches(5.42),
+                  "What LEON does",
+                  "The specification, the matrix and the TDR are uploaded in the browser.\n\n"
+                  "The application identifies each requirement, its status, and the matching page or slide in the TDR.\n\n"
+                  "It highlights inconsistencies and produces a colour-coded Excel report for the review meeting.\n\n"
+                  "No installation is required for the reviewer.\n\n"
+                  "The technical decision remains human. LEON does not issue a certificate of conformity.",
+                  BLUE, 17, 13)
+    footer(s, 4)
 
-    # ── 6. What LEON does ───────────────────────────────────────
+    # ── 5. Interface ────────────────────────────────────────────
     s = blank(prs)
-    header_bar(s, "The application", "What LEON does",
-               "A browser-based application. Documents are uploaded; the first analysis is displayed; the engineer decides.")
-    add_card_text(s, Inches(0.45), Inches(1.55), Inches(6.05), Inches(5.35),
-                  "Functions",
-                  "Reads the specification, the conformity matrix and the TDR.\n\n"
-                  "Identifies each requirement and its status (OK / NOK / NA).\n\n"
-                  "Locates the corresponding evidence in the TDR (page or slide).\n\n"
-                  "Highlights inconsistencies: contradictory comments, missing evidence, "
-                  "values that do not meet the requirement.\n\n"
-                  "Produces an Excel report for the review meeting.\n\n"
-                  "The technical validation remains a human decision.",
-                  BLUE, 18, 14)
-    add_card_text(s, Inches(6.75), Inches(1.55), Inches(6.05), Inches(2.50),
-                  "Out of scope",
-                  "Automatic approval of a supplier.\n"
-                  "Replacement of Quality, Purchasing or the responsible engineer.\n"
-                  "A certificate of conformity.",
-                  NOK, 18, 14)
-    add_card_text(s, Inches(6.75), Inches(4.25), Inches(6.05), Inches(2.65),
-                  "Users",
-                  "Mechatronics engineers in charge of a component.\n"
-                  "Quality / FNR for the analysis of a conformity matrix.\n"
-                  "Participants preparing a TDR review.",
-                  OK, 18, 14)
-    footer(s, 6)
-    notes(s, "LEON is a first analysis. The engineer remains accountable.")
-
-    # ── 7. Functions ────────────────────────────────────────────
-    s = blank(prs)
-    header_bar(s, "The application", "Six functions in a single interface",
-               "No installation is required for the reviewer. Only the relevant function is used.")
+    header_bar(s, "The application", "The interface — six functions",
+               "A single browser page. Only the relevant function is used.")
     tabs = [
         ("Specification validation",
          "Checks completeness and writing quality of the CTS before it is issued."),
         ("Conformity matrix",
-         "Analyses supplier OK / NOK / NA statuses and flags inconsistent OK comments."),
+         "Analyses OK / NOK / NA statuses and flags contradictory OK comments."),
         ("Matrix ↔ TDR",
-         "Compares the declaration in the matrix with the evidence in the TDR."),
+         "Compares the supplier declaration with the evidence in the TDR."),
         ("TDR benchmark",
          "Compares several suppliers on the same technical criteria, excluding price."),
         ("Version follow-up",
-         "Identifies status and comment changes between successive matrix versions."),
+         "Identifies changes between successive versions of the same matrix."),
         ("Evidence location",
-         "Associates each requirement with the corresponding page or slide in the dossier."),
+         "Associates each requirement with the corresponding page or slide."),
     ]
     positions = [
         (0.45, 1.52), (4.55, 1.52), (8.65, 1.52),
@@ -385,14 +326,12 @@ def build(out: Path) -> Path:
                     title, size=15, bold=True, color=NAVY)
         add_textbox(s, Inches(x + 0.22), Inches(y + 1.10), Inches(3.46), Inches(1.10),
                     body, size=13, color=INK)
-    footer(s, 7)
-    notes(s, "Present the six functions, then detail specification, matrix and TDR.")
+    footer(s, 5)
 
-    # ── 8. Spec + Matrix ────────────────────────────────────────
+    # ── 6. Work done: spec + matrix ─────────────────────────────
     s = blank(prs)
-    header_bar(s, "Project functions", "Specification and conformity matrix",
-               "Two analyses available before opening the TDR.")
-
+    header_bar(s, "Work completed", "Specification and conformity matrix",
+               "Two functions already available before opening the TDR.")
     add_rect(s, Inches(0.45), Inches(1.52), Inches(6.05), Inches(5.38), CARD, LINE, rounded=True)
     add_rect(s, Inches(0.45), Inches(1.52), Inches(6.05), Inches(0.52), BLUE)
     add_textbox(s, Inches(0.65), Inches(1.58), Inches(5.7), Inches(0.42),
@@ -400,170 +339,121 @@ def build(out: Path) -> Path:
     add_textbox(s, Inches(0.70), Inches(2.20), Inches(5.55), Inches(4.4),
                 "The CTS file is uploaded (Word, PDF or text).\n\n"
                 "LEON verifies:\n"
-                "• presence of mandatory sections (Purpose, Scope, Requirements…);\n"
-                "• remaining template placeholders (<<name>>, TBD, XXX);\n"
+                "• mandatory sections (Purpose, Scope, Requirements…);\n"
+                "• remaining placeholders (<<name>>, TBD, XXX);\n"
                 "• requirement identifiers and binding language (“shall”).\n\n"
                 "Output: a verdict (compliant / acceptable / not ready) and a Word report.\n\n"
-                "The empty conformity matrix can be generated from the specification, "
-                "so that the supplier does not recreate the requirement list.",
+                "The empty conformity matrix can be generated from the specification.",
                 size=13, color=INK)
-
     add_rect(s, Inches(6.75), Inches(1.52), Inches(6.05), Inches(5.38), CARD, LINE, rounded=True)
     add_rect(s, Inches(6.75), Inches(1.52), Inches(6.05), Inches(0.52), WARN)
     add_textbox(s, Inches(6.95), Inches(1.58), Inches(5.7), Inches(0.42),
                 "Conformity matrix analysis", size=18, bold=True, color=WHITE, anchor=MSO_ANCHOR.MIDDLE)
     add_textbox(s, Inches(7.00), Inches(2.20), Inches(5.55), Inches(4.4),
-                "The supplier matrix is uploaded (Excel / ODS), including files with renamed columns.\n\n"
-                "LEON counts OK / NOK / NA statuses and presents the full requirement list.\n\n"
+                "The supplier matrix is uploaded (Excel / ODS).\n\n"
+                "LEON counts OK / NOK / NA statuses and lists every requirement.\n\n"
                 "Each OK comment is reviewed. A point of attention is raised when:\n"
                 "• the comment contradicts the status;\n"
                 "• conformity is partial or still pending.\n\n"
-                "Output: a colour-coded Excel report (green / red / grey) for the meeting.",
+                "Output: a colour-coded Excel report for the review meeting.",
                 size=13, color=INK)
-    footer(s, 8)
-    notes(s, "These two functions already produce a usable report before TDR cross-check.")
+    footer(s, 6)
 
-    # ── 9. TDR ──────────────────────────────────────────────────
+    # ── 7. Work done: TDR ───────────────────────────────────────
     s = blank(prs)
-    header_bar(s, "Project functions", "Matrix versus TDR, and supplier comparison",
+    header_bar(s, "Work completed", "Matrix versus TDR, and supplier comparison",
                "The TDR is the evidence. LEON compares the declaration with that evidence.")
-
-    add_rect(s, Inches(0.45), Inches(1.48), Inches(12.4), Inches(1.35), AMBER_BG, WARN, rounded=True)
-    add_textbox(s, Inches(0.70), Inches(1.58), Inches(12.0), Inches(0.32),
-                "Example of inconsistency  —  display contrast", size=14, bold=True, color=WARN)
-    add_textbox(s, Inches(0.70), Inches(1.92), Inches(12.0), Inches(0.72),
+    add_rect(s, Inches(0.45), Inches(1.48), Inches(12.4), Inches(1.28), AMBER_BG, WARN, rounded=True)
+    add_textbox(s, Inches(0.70), Inches(1.56), Inches(12.0), Inches(0.28),
+                "Example of inconsistency — display contrast", size=14, bold=True, color=WARN)
+    add_textbox(s, Inches(0.70), Inches(1.88), Inches(12.0), Inches(0.70),
                 "Requirement: contrast ≥ 400:1     ·     Matrix: OK     ·     TDR, slide 14: 380:1\n"
-                "LEON presents this type of inconsistency first. Consistent requirements are not listed by default.",
+                "Inconsistencies are presented first. Consistent requirements are not listed by default.",
                 size=14, color=INK)
-
-    add_card_text(s, Inches(0.45), Inches(3.02), Inches(6.05), Inches(3.85),
+    add_card_text(s, Inches(0.45), Inches(2.95), Inches(6.05), Inches(3.92),
                   "Matrix ↔ TDR",
                   "The matrix and the TDR (PowerPoint, PDF or Word) are uploaded together.\n\n"
-                  "For each requirement, four elements are displayed: "
-                  "the Stellantis requirement, the matrix declaration, the TDR statement, and the source page or slide.\n\n"
-                  "The engineer confirms, corrects or requests additional evidence. "
-                  "No result is accepted automatically.",
+                  "For each requirement: the Stellantis requirement, the matrix declaration, the TDR statement, and the source page or slide.\n\n"
+                  "The engineer confirms, corrects or requests additional evidence. No result is accepted automatically.",
                   NAVY_2, 16, 13)
-    add_card_text(s, Inches(6.75), Inches(3.02), Inches(6.05), Inches(3.85),
+    add_card_text(s, Inches(6.75), Inches(2.95), Inches(6.05), Inches(3.92),
                   "TDR benchmark",
-                  "Several supplier dossiers are compared on the same technical domains "
-                  "(mechanics, display, electronics, safety, software, validation, industrialisation).\n\n"
+                  "Several supplier dossiers are compared on the same technical domains (mechanics, display, electronics, safety, software, validation, industrialisation).\n\n"
                   "Commercial content is excluded.\n\n"
-                  "The output is a structured comparison of strengths, gaps and open points. "
                   "Supplier selection remains a human decision.",
                   OK, 16, 13)
-    footer(s, 9)
-    notes(s, "Use the contrast example. Mention version follow-up only if asked.")
+    footer(s, 7)
 
-    # ── 10. Work completed ──────────────────────────────────────
+    # ── 8. Collaboration ────────────────────────────────────────
     s = blank(prs)
-    header_bar(s, "Work completed to date", "Current capabilities of LEON",
-               "The functions below are implemented. Technical acceptance remains with the engineer.")
-    takeaways = [
-        (OK, "Browser-based access",
-         "Specification, matrix and TDR are uploaded in the application. No installation is required for the reviewer."),
-        (BLUE, "Detection of inconsistencies",
-         "Contradictory OK comments, missing evidence, non-compliant values, and changes between matrix versions."),
-        (WARN, "Export for the review",
-         "Colour-coded Excel reports for Quality, Purchasing or the supplier."),
-        (NAVY_2, "No automatic approval",
-         "Absence of a detected inconsistency is not a certificate of conformity."),
-    ]
-    y = Inches(1.50)
-    for color, title, body in takeaways:
-        add_rect(s, Inches(0.5), y, Inches(12.3), Inches(1.05), CARD, LINE, rounded=True)
-        add_rect(s, Inches(0.5), y, Inches(0.12), Inches(1.05), color)
-        add_textbox(s, Inches(0.85), y + Inches(0.12), Inches(11.7), Inches(0.36),
-                    title, size=16, bold=True, color=NAVY)
-        add_textbox(s, Inches(0.85), y + Inches(0.48), Inches(11.7), Inches(0.44),
-                    body, size=14, color=INK)
-        y += Inches(1.15)
-
-    add_textbox(s, Inches(0.5), Inches(6.15), Inches(12.3), Inches(0.85),
-                "LEON provides a structured first reading of the specification, the matrix and the TDR, "
-                "so that review meetings start from identified inconsistencies.",
-                size=15, bold=True, color=NAVY)
-    footer(s, 10)
-    notes(s, "Close the project part. Next: collaboration, status, training, organisation.")
-
-    # ── 11. Collaboration ───────────────────────────────────────
-    s = blank(prs)
-    header_bar(s, "Collaboration", "Working arrangement within Mechatronics Engineering",
-               "Imane El Brouji and Patrick Garcia provide the domain input. Development of LEON is carried out on that basis.")
-    add_rect(s, Inches(0.45), Inches(1.52), Inches(6.05), Inches(3.55), CARD, LINE, rounded=True)
+    header_bar(s, "Collaboration", "Working arrangement",
+               "Imane El Brouji and Patrick Garcia provide the mechatronics expertise. I implement LEON.")
+    add_rect(s, Inches(0.45), Inches(1.52), Inches(6.05), Inches(3.40), CARD, LINE, rounded=True)
     add_rect(s, Inches(0.45), Inches(1.52), Inches(6.05), Inches(0.12), BLUE)
     add_textbox(s, Inches(0.70), Inches(1.80), Inches(5.55), Inches(0.40),
                 "Imane El Brouji", size=22, bold=True, color=NAVY)
     add_textbox(s, Inches(0.70), Inches(2.28), Inches(5.55), Inches(0.32),
                 "Mechatronics Engineering", size=14, bold=True, color=BLUE)
-    add_textbox(s, Inches(0.70), Inches(2.75), Inches(5.55), Inches(2.00),
-                "Defines the operational needs of the team, the documents actually received, "
-                "and the analyses that are useful during a review.",
+    add_textbox(s, Inches(0.70), Inches(2.75), Inches(5.55), Inches(1.85),
+                "Defines the operational needs of the team, the documents received, and the analyses that are useful during a review.",
                 size=15, color=INK)
-
-    add_rect(s, Inches(6.75), Inches(1.52), Inches(6.05), Inches(3.55), CARD, LINE, rounded=True)
+    add_rect(s, Inches(6.75), Inches(1.52), Inches(6.05), Inches(3.40), CARD, LINE, rounded=True)
     add_rect(s, Inches(6.75), Inches(1.52), Inches(6.05), Inches(0.12), OK)
     add_textbox(s, Inches(7.00), Inches(1.80), Inches(5.55), Inches(0.40),
                 "Patrick Garcia", size=22, bold=True, color=NAVY)
     add_textbox(s, Inches(7.00), Inches(2.28), Inches(5.55), Inches(0.32),
                 "Mechatronics Engineering", size=14, bold=True, color=OK)
-    add_textbox(s, Inches(7.00), Inches(2.75), Inches(5.55), Inches(2.00),
-                "Provides the mechatronics context: use of the specification, the matrix and the TDR, "
-                "and the expected content of a technical review.",
+    add_textbox(s, Inches(7.00), Inches(2.75), Inches(5.55), Inches(1.85),
+                "Explains the mechatronics context: how the specification, the matrix and the TDR are used, and what a technical review must cover.",
                 size=15, color=INK)
-
-    add_rect(s, Inches(0.45), Inches(5.25), Inches(12.35), Inches(1.70), CARD, LINE, rounded=True)
-    add_rect(s, Inches(0.45), Inches(5.25), Inches(0.12), Inches(1.70), NAVY_2)
-    add_textbox(s, Inches(0.80), Inches(5.40), Inches(11.7), Inches(0.36),
+    add_rect(s, Inches(0.45), Inches(5.12), Inches(12.35), Inches(1.82), CARD, LINE, rounded=True)
+    add_rect(s, Inches(0.45), Inches(5.12), Inches(0.12), Inches(1.82), NAVY_2)
+    add_textbox(s, Inches(0.80), Inches(5.28), Inches(11.7), Inches(0.36),
                 "Division of roles", size=16, bold=True, color=NAVY)
-    add_textbox(s, Inches(0.80), Inches(5.82), Inches(11.7), Inches(0.90),
-                "They provide the ideas and the technical meaning. I implement and iterate on LEON. "
-                "The application is designed from mechatronics practice, not as a standalone IT development.",
+    add_textbox(s, Inches(0.80), Inches(5.70), Inches(11.7), Inches(1.00),
+                "They provide the ideas and the technical meaning on the mechatronics side. I develop and iterate on LEON. "
+                "The application is designed from engineering practice, not as a standalone IT development.",
                 size=15, color=INK)
-    footer(s, 11)
-    notes(s, "Acknowledge both colleagues by name.")
+    footer(s, 8)
 
-    # ── 12. Status and deployment ───────────────────────────────
+    # ── 9. Status / deployment ──────────────────────────────────
     s = blank(prs)
-    header_bar(s, "Status and next step", "Development in progress — then deployment",
-               "Access for the whole team will be opened after completion of this phase.")
+    header_bar(s, "Status", "Development in progress — then team deployment",
+               "The whole team will have access once this phase is completed.")
     steps = [
-        (BLUE, "01  Current phase", "In progress",
+        (BLUE, "01  Now", "In progress",
          "Completion of the functions presented: specification, matrix, Matrix ↔ TDR and TDR benchmark."),
         (WARN, "02  Next", "Close this phase",
-         "Remaining development, tests on representative mechatronics files, alignment with Imane El Brouji and Patrick Garcia."),
-        (OK, "03  Then", "Team deployment",
-         "Once this phase is completed, deployment will start so that Mechatronics Engineering can use LEON in a browser, without installation."),
+         "Remaining development, tests on representative files, alignment with Imane El Brouji and Patrick Garcia."),
+        (OK, "03  Then", "Deployment",
+         "Deployment will start so that Mechatronics Engineering can open LEON in a browser, without installation."),
     ]
     x = Inches(0.45)
     for color, kicker, title, body in steps:
-        add_rect(s, x, Inches(1.55), Inches(4.05), Inches(4.05), CARD, LINE, rounded=True)
+        add_rect(s, x, Inches(1.55), Inches(4.05), Inches(4.00), CARD, LINE, rounded=True)
         add_rect(s, x, Inches(1.55), Inches(4.05), Inches(0.12), color)
-        add_textbox(s, x + Inches(0.25), Inches(1.85), Inches(3.55), Inches(0.40),
+        add_textbox(s, x + Inches(0.25), Inches(1.85), Inches(3.55), Inches(0.36),
                     kicker, size=13, bold=True, color=color)
-        add_textbox(s, x + Inches(0.25), Inches(2.28), Inches(3.55), Inches(0.90),
-                    title, size=20, bold=True, color=NAVY)
-        add_textbox(s, x + Inches(0.25), Inches(3.25), Inches(3.55), Inches(2.05),
+        add_textbox(s, x + Inches(0.25), Inches(2.28), Inches(3.55), Inches(0.80),
+                    title, size=22, bold=True, color=NAVY)
+        add_textbox(s, x + Inches(0.25), Inches(3.20), Inches(3.55), Inches(2.05),
                     body, size=14, color=INK)
         x += Inches(4.20)
-
-    add_rect(s, Inches(0.45), Inches(5.80), Inches(12.35), Inches(1.18), GREEN_BG, OK, rounded=True)
-    add_textbox(s, Inches(0.70), Inches(5.95), Inches(11.9), Inches(0.90),
+    add_rect(s, Inches(0.45), Inches(5.75), Inches(12.35), Inches(1.20), GREEN_BG, OK, rounded=True)
+    add_textbox(s, Inches(0.70), Inches(5.92), Inches(11.9), Inches(0.90),
                 "Target: any colleague who reviews a specification, a matrix or a TDR can use LEON.",
                 size=16, bold=True, color=NAVY)
-    footer(s, 12)
-    notes(s, "Do not commit to a deployment date. Sequence: finish this phase, then deploy.")
+    footer(s, 9)
 
-    # ── 13. AI training ─────────────────────────────────────────
+    # ── 10. AI training ─────────────────────────────────────────
     s = blank(prs)
-    header_bar(s, "Upcoming training", "AI training for Mechatronics Engineering",
+    header_bar(s, "Upcoming training", "AI training for the Mechatronics team",
                "Operational training on the use of AI in daily document review.")
     add_card_text(s, Inches(0.45), Inches(1.52), Inches(6.05), Inches(5.38),
-                  "Objectives of the training",
+                  "Objectives",
                   "Clarify what AI can and cannot do on specifications, matrices and TDR files.\n\n"
-                  "Position a tool such as LEON as a first analysis, not as a substitute for the engineer.\n\n"
-                  "Establish a common practice: where AI reduces review time, "
-                  "and where a technical decision is required.\n\n"
+                  "Position LEON as a first analysis, not as a substitute for the engineer.\n\n"
+                  "Establish a common practice: where AI reduces review time, and where a technical decision is required.\n\n"
                   "Use examples drawn from mechatronics documents.",
                   BLUE, 18, 14)
     add_card_text(s, Inches(6.75), Inches(1.52), Inches(6.05), Inches(5.38),
@@ -574,10 +464,9 @@ def build(out: Path) -> Path:
                   "Rule of use: the application proposes; the engineer validates.\n\n"
                   "A short feedback to the team can be prepared after the training.",
                   OK, 18, 14)
-    footer(s, 13)
-    notes(s, "Do not invent a training provider or date if not confirmed.")
+    footer(s, 10)
 
-    # ── 14. Organisation ────────────────────────────────────────
+    # ── 11. Organisation ────────────────────────────────────────
     s = blank(prs)
     header_bar(s, "Working arrangements", "Points submitted for confirmation",
                "Télétravail and first school period.")
@@ -589,9 +478,8 @@ def build(out: Path) -> Path:
                 "Proposed weekly pattern: two days of télétravail.\n\n"
                 "• Wednesday\n"
                 "• Friday\n\n"
-                "This pattern is submitted for confirmation, so that on-site presence is clear for the team.",
+                "Submitted for confirmation, so that on-site presence is clear for the team.",
                 size=16, color=INK)
-
     add_rect(s, Inches(6.75), Inches(1.52), Inches(6.05), Inches(3.70), CARD, LINE, rounded=True)
     add_rect(s, Inches(6.75), Inches(1.52), Inches(6.05), Inches(0.52), WARN)
     add_textbox(s, Inches(6.95), Inches(1.58), Inches(5.7), Inches(0.42),
@@ -601,17 +489,14 @@ def build(out: Path) -> Path:
                 "Presence on site is not planned during that period.\n\n"
                 "The usual company / TT pattern resumes afterwards.",
                 size=16, color=INK)
-
     add_rect(s, Inches(0.45), Inches(5.42), Inches(12.35), Inches(1.52), AMBER_BG, WARN, rounded=True)
     add_textbox(s, Inches(0.70), Inches(5.58), Inches(11.9), Inches(0.36),
                 "Submitted for your confirmation", size=16, bold=True, color=WARN)
     add_textbox(s, Inches(0.70), Inches(6.00), Inches(11.9), Inches(0.72),
                 "Both points can be adjusted if a different organisation is required.",
                 size=15, color=INK)
-    footer(s, 14)
-    notes(s,
-          "Ask for confirmation of TT Wednesday and Friday, and of the school period. "
-          "Thank the manager.")
+    footer(s, 11)
+    notes(s, "Ask for confirmation of TT Wednesday and Friday, and of the school period.")
 
     out.parent.mkdir(parents=True, exist_ok=True)
     prs.save(str(out))
@@ -622,4 +507,3 @@ if __name__ == "__main__":
     target = Path(__file__).resolve().parents[1] / "docs" / "LEON_intro_for_non_specialists.pptx"
     path = build(target)
     print(f"Wrote {path} ({path.stat().st_size} bytes)")
-
