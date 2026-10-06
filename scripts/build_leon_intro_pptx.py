@@ -115,11 +115,15 @@ def add_card_text(slide, l, t, w, h, title, body, accent=BLUE, title_size=16, bo
     return
 
 
-def footer(slide, page, total=8):
+TOTAL = 13
+MUTED_LINE = RGBColor(0xA9, 0xBC, 0xD4)
+
+
+def footer(slide, page, total=TOTAL):
     add_rect(slide, 0, Inches(7.22), W, Inches(0.28), NAVY)
     add_textbox(slide, Inches(0.4), Inches(7.22), Inches(10), Inches(0.28),
-                "LEON  ·  Quality Analysis  ·  Internal briefing for non-specialists",
-                size=11, color=RGBColor(0xA9, 0xBC, 0xD4), anchor=MSO_ANCHOR.MIDDLE)
+                "Khadija Benhamida  ·  Mechatronics Engineering  ·  First meeting",
+                size=11, color=MUTED_LINE, anchor=MSO_ANCHOR.MIDDLE)
     add_textbox(slide, Inches(11.4), Inches(7.22), Inches(1.5), Inches(0.28),
                 f"{page}  /  {total}", size=11, color=WHITE, align=PP_ALIGN.RIGHT,
                 anchor=MSO_ANCHOR.MIDDLE)
@@ -152,26 +156,29 @@ def build(out: Path) -> Path:
     prs.slide_width = Inches(13.333)
     prs.slide_height = Inches(7.5)
 
-    # ── 1. Title ────────────────────────────────────────────────
+    # ── 1. Title — first meeting with manager ───────────────────
     s = blank(prs)
     add_rect(s, 0, 0, W, H, NAVY)
     add_rect(s, 0, 0, Inches(0.18), H, BLUE)
-    add_textbox(s, Inches(0.7), Inches(1.55), Inches(11.5), Inches(0.35),
+    add_textbox(s, Inches(0.7), Inches(0.85), Inches(11.5), Inches(0.32),
                 "STELLANTIS  ·  MECHATRONICS ENGINEERING", size=13, bold=True,
-                color=RGBColor(0xA9, 0xBC, 0xD4))
-    add_textbox(s, Inches(0.7), Inches(2.00), Inches(12), Inches(1.0),
-                "LEON", size=60, bold=True, color=WHITE)
-    add_textbox(s, Inches(0.7), Inches(3.05), Inches(11.5), Inches(0.9),
-                "A short briefing: how we review supplier documents", size=26,
+                color=MUTED_LINE)
+    add_textbox(s, Inches(0.7), Inches(1.30), Inches(11.5), Inches(0.32),
+                "FIRST MEETING", size=13, bold=True, color=BLUE)
+    add_textbox(s, Inches(0.7), Inches(1.62), Inches(12), Inches(0.70),
+                "Khadija Benhamida", size=40, bold=True, color=WHITE)
+    add_textbox(s, Inches(0.7), Inches(2.40), Inches(12), Inches(0.70),
+                "LEON — Quality Analysis", size=28, bold=True,
                 color=RGBColor(0xE8, 0xEE, 0xFB))
-    add_textbox(s, Inches(0.7), Inches(4.05), Inches(11.5), Inches(0.9),
-                "No AI background needed. This is about three papers that must tell the same story:\n"
-                "what we ask, what the supplier claims, and what their technical file actually shows.",
+    add_textbox(s, Inches(0.7), Inches(3.15), Inches(11.8), Inches(0.70),
+                "Review of specifications, conformity matrices and technical dossiers (TDR)\n"
+                "for the Mechatronics team.",
                 size=16, color=RGBColor(0xC5, 0xD4, 0xE8))
-    add_rect(s, Inches(0.7), Inches(5.35), Inches(3.4), Inches(0.08), BLUE)
-    add_textbox(s, Inches(0.7), Inches(5.55), Inches(11.5), Inches(0.35),
-                "Internal  ·  8 slides  ·  For managers, quality, purchasing and engineering partners",
-                size=14, color=RGBColor(0xA9, 0xBC, 0xD4))
+    add_rect(s, Inches(0.7), Inches(4.05), Inches(3.4), Inches(0.07), BLUE)
+    add_textbox(s, Inches(0.7), Inches(4.28), Inches(11.8), Inches(0.70),
+                "In collaboration with Imane El Brouji and Patrick Garcia\n"
+                "October 2026",
+                size=15, color=MUTED_LINE)
     pills = [
         (BLUE, "SPEC", "What we ask"),
         (WARN, "MATRIX", "What they tick"),
@@ -179,18 +186,56 @@ def build(out: Path) -> Path:
     ]
     px = Inches(0.7)
     for color, label, hint in pills:
-        add_rect(s, px, Inches(6.10), Inches(3.4), Inches(0.85), RGBColor(0x15, 0x38, 0x62), None, rounded=True)
-        add_rect(s, px, Inches(6.10), Inches(0.10), Inches(0.85), color)
-        add_textbox(s, px + Inches(0.28), Inches(6.16), Inches(3.0), Inches(0.38),
-                    label, size=16, bold=True, color=WHITE, anchor=MSO_ANCHOR.MIDDLE)
-        add_textbox(s, px + Inches(0.28), Inches(6.50), Inches(3.0), Inches(0.35),
-                    hint, size=13, color=RGBColor(0xA9, 0xBC, 0xD4), anchor=MSO_ANCHOR.TOP)
+        add_rect(s, px, Inches(5.35), Inches(3.4), Inches(1.15), RGBColor(0x15, 0x38, 0x62), None, rounded=True)
+        add_rect(s, px, Inches(5.35), Inches(0.10), Inches(1.15), color)
+        add_textbox(s, px + Inches(0.28), Inches(5.48), Inches(3.0), Inches(0.42),
+                    label, size=18, bold=True, color=WHITE, anchor=MSO_ANCHOR.MIDDLE)
+        add_textbox(s, px + Inches(0.28), Inches(5.92), Inches(3.0), Inches(0.40),
+                    hint, size=14, color=MUTED_LINE, anchor=MSO_ANCHOR.TOP)
         px += Inches(3.65)
+    add_textbox(s, Inches(0.7), Inches(6.70), Inches(11.8), Inches(0.35),
+                "Project in progress  ·  Deployment for the whole team once this step is finished",
+                size=13, color=MUTED_LINE)
     notes(s,
-          "Open by saying LEON is a reading assistant for supplier files, not a science project.\n"
-          "The rest of the deck never uses the words model, algorithm or prompt.")
+          "Bonjour. This is my first meeting with you.\n"
+          "I will present the work I am doing on LEON, the people I work with on the "
+          "mechatronics side, the next step (deployment), the AI training, and two "
+          "points of availability I would like to confirm with you.")
 
-    # ── 2. Three documents ──────────────────────────────────────
+    # ── 2. Agenda ───────────────────────────────────────────────
+    s = blank(prs)
+    header_bar(s, "Agenda", "Points I would like to cover with you.",
+               "A short status of the work, then the practical points to confirm.")
+    agenda = [
+        ("01", "The work on LEON",
+         "The three documents we review, the tool I am building, and what it already does."),
+        ("02", "What I have delivered so far",
+         "Spec validation, conformity matrix, Matrix ↔ TDR, TDR benchmark, version follow-up."),
+        ("03", "Collaboration",
+         "Imane El Brouji and Patrick Garcia — mechatronics expertise, ideas and explanations."),
+        ("04", "Status and next step",
+         "Work in progress. Once this task is finished, we start the deployment for the team."),
+        ("05", "AI training for Mechatronics",
+         "The training we will have, and how the team can use it in daily work."),
+        ("06", "Availability to confirm",
+         "Télétravail Wednesday and Friday, and the first school period over the next two weeks."),
+    ]
+    y = Inches(1.48)
+    for num, title, body in agenda:
+        add_rect(s, Inches(0.5), y, Inches(12.3), Inches(0.88), CARD, LINE, rounded=True)
+        add_rect(s, Inches(0.5), y, Inches(0.88), Inches(0.88), BLUE)
+        add_textbox(s, Inches(0.5), y, Inches(0.88), Inches(0.88),
+                    num, size=16, bold=True, color=WHITE, align=PP_ALIGN.CENTER,
+                    anchor=MSO_ANCHOR.MIDDLE)
+        add_textbox(s, Inches(1.55), y + Inches(0.08), Inches(10.9), Inches(0.34),
+                    title, size=16, bold=True, color=NAVY)
+        add_textbox(s, Inches(1.55), y + Inches(0.42), Inches(10.9), Inches(0.38),
+                    body, size=13, color=INK)
+        y += Inches(0.94)
+    footer(s, 2)
+    notes(s, "Walk the agenda in 20 seconds. Then go to the three documents.")
+
+    # ── 3. Three documents ──────────────────────────────────────
     s = blank(prs)
     header_bar(s, "The vocabulary", "Three documents. One part. They must agree.",
                "Think of buying a car screen, a camera or a controller from a supplier.")
@@ -220,7 +265,7 @@ def build(out: Path) -> Path:
         add_textbox(s, x + Inches(0.22), Inches(2.40), Inches(3.5), Inches(4.2),
                     body, size=14, color=INK)
         x += Inches(4.15)
-    footer(s, 2)
+    footer(s, 3)
     notes(s,
           "Spend time here. Most confusion later comes from mixing these three names.\n"
           "SPEC = us. MATRIX = their checklist. TDR = their technical brochure.")
@@ -248,7 +293,7 @@ def build(out: Path) -> Path:
         add_textbox(s, Inches(0.85), y + Inches(0.52), Inches(11.7), Inches(0.58),
                     body, size=15, color=INK)
         y += Inches(1.35)
-    footer(s, 3)
+    footer(s, 4)
     notes(s, "The punchline: we are not replacing the engineer. We are catching the misses.")
 
     # ── 4. What LEON is ─────────────────────────────────────────
@@ -276,7 +321,7 @@ def build(out: Path) -> Path:
                   "Quality / FNR looking at a conformity matrix.\n"
                   "Anyone who must walk into a TDR meeting prepared.",
                   OK, 18, 15)
-    footer(s, 4)
+    footer(s, 5)
     notes(s,
           "If someone asks “is it AI?”, answer: it is a reading assistant. "
           "Some checks are simple rules (count the sections, compare two numbers). "
@@ -306,7 +351,7 @@ def build(out: Path) -> Path:
                     title, size=16, bold=True, color=NAVY)
         add_textbox(s, Inches(x + 0.22), Inches(y + 1.15), Inches(3.46), Inches(1.05),
                     body, size=14, color=INK)
-    footer(s, 5)
+    footer(s, 6)
     notes(s,
           "Walk the tabs left to right as the project timeline:\n"
           "write spec → send matrix → receive filled matrix + TDR → compare suppliers → track versions.")
@@ -343,7 +388,7 @@ def build(out: Path) -> Path:
                 "• conformity is only partial or still pending\n\n"
                 "You download a colour-coded Excel (green / red / grey) for the meeting.",
                 size=14, color=INK)
-    footer(s, 6)
+    footer(s, 7)
     notes(s, "Demo path: drop a matrix, show the pie, then open one red “point of attention”.")
 
     # ── 7. TDR ──────────────────────────────────────────────────
@@ -376,15 +421,15 @@ def build(out: Path) -> Path:
                   "safety, software, testing, industrialisation…\n\n"
                   "You see strengths, gaps and open questions, then you still pick the partner.",
                   OK, 16, 13)
-    footer(s, 7)
+    footer(s, 8)
     notes(s,
           "Stress the example. Non-specialists remember one number (400 vs 380) better than a process.\n"
           "Mention Version Delta only if asked: it shows NOK→OK between two Excel versions.")
 
     # ── 8. Close ────────────────────────────────────────────────
     s = blank(prs)
-    header_bar(s, "What to remember", "LEON prepares the review. People remain in charge.",
-               "A first reading in minutes, so the meeting is about the real issues.")
+    header_bar(s, "What I have delivered so far", "LEON prepares the review. People remain in charge.",
+               "The functions already in the tool — and the rule I keep: the engineer still signs.")
 
     takeaways = [
         (OK, "Drop files in a browser",
@@ -410,10 +455,150 @@ def build(out: Path) -> Path:
                 "In short: we are building a careful reader for the spec, the matrix and the TDR — "
                 "so Stellantis walks into supplier reviews with the contradictions already on the table.",
                 size=15, bold=True, color=NAVY)
-    footer(s, 8)
+    footer(s, 9)
     notes(s,
-          "Close: happy to open the live page and drop a sample matrix if there are 5 minutes left.\n"
-          "Do not oversell accuracy. The product is a first reading plus a human decision.")
+          "This is the close of the product part. Next slides: people, status, training, availability.")
+
+    # ── 10. Collaboration ───────────────────────────────────────
+    s = blank(prs)
+    header_bar(s, "Collaboration", "I do not work on this alone.",
+               "Imane El Brouji and Patrick Garcia bring the mechatronics side. I turn it into LEON.")
+    add_rect(s, Inches(0.45), Inches(1.52), Inches(6.05), Inches(3.55), CARD, LINE, rounded=True)
+    add_rect(s, Inches(0.45), Inches(1.52), Inches(6.05), Inches(0.12), BLUE)
+    add_textbox(s, Inches(0.70), Inches(1.80), Inches(5.55), Inches(0.40),
+                "Imane El Brouji", size=22, bold=True, color=NAVY)
+    add_textbox(s, Inches(0.70), Inches(2.28), Inches(5.55), Inches(0.32),
+                "Mechatronics Engineering", size=14, bold=True, color=BLUE)
+    add_textbox(s, Inches(0.70), Inches(2.75), Inches(5.55), Inches(2.00),
+                "Shares the needs of the team, the real documents we receive, "
+                "and the ideas of what would actually help an engineer in a review.",
+                size=15, color=INK)
+
+    add_rect(s, Inches(6.75), Inches(1.52), Inches(6.05), Inches(3.55), CARD, LINE, rounded=True)
+    add_rect(s, Inches(6.75), Inches(1.52), Inches(6.05), Inches(0.12), OK)
+    add_textbox(s, Inches(7.00), Inches(1.80), Inches(5.55), Inches(0.40),
+                "Patrick Garcia", size=22, bold=True, color=NAVY)
+    add_textbox(s, Inches(7.00), Inches(2.28), Inches(5.55), Inches(0.32),
+                "Mechatronics Engineering", size=14, bold=True, color=OK)
+    add_textbox(s, Inches(7.00), Inches(2.75), Inches(5.55), Inches(2.00),
+                "Explains the mechatronics context: how a spec, a matrix and a TDR "
+                "are used in the team, and what a good review must look like.",
+                size=15, color=INK)
+
+    add_rect(s, Inches(0.45), Inches(5.25), Inches(12.35), Inches(1.70), CARD, LINE, rounded=True)
+    add_rect(s, Inches(0.45), Inches(5.25), Inches(0.12), Inches(1.70), NAVY_2)
+    add_textbox(s, Inches(0.80), Inches(5.40), Inches(11.7), Inches(0.36),
+                "How we work together", size=16, bold=True, color=NAVY)
+    add_textbox(s, Inches(0.80), Inches(5.82), Inches(11.7), Inches(0.90),
+                "They give the ideas and the technical meaning. I build and iterate on LEON. "
+                "Nothing in the tool is designed without that mechatronics input — "
+                "so the result stays useful for the team, not only for an IT exercise.",
+                size=15, color=INK)
+    footer(s, 10)
+    notes(s,
+          "Thank Imane and Patrick by name. Make clear you are the builder, they are the "
+          "mechatronics experts. The manager should see you are not isolated.")
+
+    # ── 11. Status and deployment ───────────────────────────────
+    s = blank(prs)
+    header_bar(s, "Status and next step", "The work is in progress. Deployment comes after.",
+               "The whole team will have access once this step is finished.")
+    steps = [
+        (BLUE, "01  Now", "In progress",
+         "I am finishing the LEON functions you just saw: spec, matrix, TDR cross-check and benchmark."),
+        (WARN, "02  Next", "Finish this task",
+         "Close the remaining work, test with real mechatronics files, and align with Imane and Patrick."),
+        (OK, "03  Then", "Deployment for the team",
+         "Once this task is finished, we start the deployment so the whole Mechatronics team can open LEON in a browser, with no installation."),
+    ]
+    x = Inches(0.45)
+    for color, kicker, title, body in steps:
+        add_rect(s, x, Inches(1.55), Inches(4.05), Inches(4.05), CARD, LINE, rounded=True)
+        add_rect(s, x, Inches(1.55), Inches(4.05), Inches(0.12), color)
+        add_textbox(s, x + Inches(0.25), Inches(1.85), Inches(3.55), Inches(0.36),
+                    kicker, size=13, bold=True, color=color)
+        add_textbox(s, x + Inches(0.25), Inches(2.28), Inches(3.55), Inches(0.80),
+                    title, size=22, bold=True, color=NAVY)
+        add_textbox(s, x + Inches(0.25), Inches(3.20), Inches(3.55), Inches(2.10),
+                    body, size=15, color=INK)
+        x += Inches(4.20)
+
+    add_rect(s, Inches(0.45), Inches(5.80), Inches(12.35), Inches(1.18), GREEN_BG, OK, rounded=True)
+    add_textbox(s, Inches(0.70), Inches(5.95), Inches(11.9), Inches(0.90),
+                "Objective: every colleague who reviews a spec, a matrix or a TDR can use LEON — "
+                "not only the people building it today.",
+                size=16, bold=True, color=NAVY)
+    footer(s, 11)
+    notes(s,
+          "Be clear: it is not live for everyone yet. Do not promise a date you do not have. "
+          "The commitment is: finish this task, then deploy.")
+
+    # ── 12. AI training ─────────────────────────────────────────
+    s = blank(prs)
+    header_bar(s, "Upcoming training", "AI training — and how Mechatronics can use it.",
+               "A practical training for the team, not a computer-science course.")
+    add_card_text(s, Inches(0.45), Inches(1.52), Inches(6.05), Inches(5.38),
+                  "What this training is for",
+                  "Understand what AI can (and cannot) do on our daily files.\n\n"
+                  "See how a tool like LEON helps on specs, matrices and TDRs, "
+                  "without replacing the engineer.\n\n"
+                  "Give the team a common language: where AI saves time, "
+                  "and where a person must still decide.\n\n"
+                  "Bring examples back from our real mechatronics documents.",
+                  BLUE, 18, 15)
+    add_card_text(s, Inches(6.75), Inches(1.52), Inches(6.05), Inches(5.38),
+                  "How the team can use it afterwards",
+                  "Faster first reading of a supplier file before a TDR meeting.\n\n"
+                  "Fewer missed “OK” that are not really OK.\n\n"
+                  "Side-by-side comparison of several suppliers on the technique.\n\n"
+                  "A habit: AI proposes, the mechatronics engineer validates.\n\n"
+                  "I can share a short recap with the team after the training.",
+                  OK, 18, 15)
+    footer(s, 12)
+    notes(s,
+          "If the manager asks for the date or the provider, say you will confirm — "
+          "do not invent a catalogue name. The message is: the team will be trained "
+          "to use AI on our work, with the engineer remaining responsible.")
+
+    # ── 13. Availability ────────────────────────────────────────
+    s = blank(prs)
+    header_bar(s, "To confirm with you", "Two points of organisation I would like to validate.",
+               "Télétravail and the first school period.")
+    add_rect(s, Inches(0.45), Inches(1.52), Inches(6.05), Inches(3.70), CARD, LINE, rounded=True)
+    add_rect(s, Inches(0.45), Inches(1.52), Inches(6.05), Inches(0.52), BLUE)
+    add_textbox(s, Inches(0.65), Inches(1.58), Inches(5.7), Inches(0.42),
+                "Télétravail (TT)", size=18, bold=True, color=WHITE, anchor=MSO_ANCHOR.MIDDLE)
+    add_textbox(s, Inches(0.70), Inches(2.25), Inches(5.55), Inches(2.70),
+                "I take two days of télétravail per week:\n\n"
+                "• Wednesday\n"
+                "• Friday\n\n"
+                "I would like to confirm this rhythm with you, "
+                "so the team knows when I am on site and when I am in TT.",
+                size=16, color=INK)
+
+    add_rect(s, Inches(6.75), Inches(1.52), Inches(6.05), Inches(3.70), CARD, LINE, rounded=True)
+    add_rect(s, Inches(6.75), Inches(1.52), Inches(6.05), Inches(0.52), WARN)
+    add_textbox(s, Inches(6.95), Inches(1.58), Inches(5.7), Inches(0.42),
+                "Période école", size=18, bold=True, color=WHITE, anchor=MSO_ANCHOR.MIDDLE)
+    add_textbox(s, Inches(7.00), Inches(2.25), Inches(5.55), Inches(2.70),
+                "Over the next two weeks I will be in my first school period "
+                "(période école).\n\n"
+                "I will not be on site during that time.\n\n"
+                "After that, I am back on the usual company / TT rhythm.",
+                size=16, color=INK)
+
+    add_rect(s, Inches(0.45), Inches(5.42), Inches(12.35), Inches(1.52), AMBER_BG, WARN, rounded=True)
+    add_textbox(s, Inches(0.70), Inches(5.58), Inches(11.9), Inches(0.36),
+                "Thank you — I am happy to adjust if needed", size=16, bold=True, color=WARN)
+    add_textbox(s, Inches(0.70), Inches(6.00), Inches(11.9), Inches(0.72),
+                "These two points are for your validation. If the TT days or the school period "
+                "need a different organisation, I can adapt.",
+                size=15, color=INK)
+    footer(s, 13)
+    notes(s,
+          "Ask clearly for confirmation. Do not rush. "
+          "TT = mercredi et vendredi. Next two weeks = first school period. "
+          "Then thank the manager for the time.")
 
     out.parent.mkdir(parents=True, exist_ok=True)
     prs.save(str(out))
