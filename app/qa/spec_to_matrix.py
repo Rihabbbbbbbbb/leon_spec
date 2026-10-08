@@ -21,6 +21,7 @@ Template layout (sheet "new version"):
 from __future__ import annotations
 
 import io
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -28,7 +29,56 @@ from typing import Dict, List, Optional, Tuple
 
 from app.config import REFS_DIR
 
-TEMPLATE_PATH = REFS_DIR / "Conformity_Matrix_Template.xlsx"
+TEMPLATE_NAME = "Conformity_Matrix_Template.xlsx"
+TEMPLATE_PATH = REFS_DIR / TEMPLATE_NAME
+# Shipped beside this module so Azure still finds it when data/refs is not
+# copied into /home/site/wwwroot (the deployed package includes app/).
+BUNDLED_TEMPLATE_PATH = Path(__file__).resolve().parent / "templates" / TEMPLATE_NAME
+
+
+def resolve_template_path(explicit: Optional[Path] = None) -> Path:
+    """Locate the conformity matrix workbook.
+
+    The deployed Function App looks at ``/home/site/wwwroot/data/refs`` because
+    that is ``REFS_DIR``, but that folder is not always in the package. The
+    copy under ``app/qa/templates`` is.
+    """
+    if explicit:
+        path = Path(explicit)
+        if path.is_file():
+            return path
+        raise FileNotFoundError(
+            f"Conformity matrix template not found: {path}. "
+            "Expected data/refs/Conformity_Matrix_Template.xlsx."
+        )
+
+    candidates: List[Path] = []
+    try:
+        from app import config as cfg
+        candidates.append(Path(cfg.REFS_DIR) / TEMPLATE_NAME)
+    except Exception:
+        pass
+    candidates.append(Path(TEMPLATE_PATH))
+    candidates.append(BUNDLED_TEMPLATE_PATH)
+    script_root = os.getenv("AzureWebJobsScriptRoot")
+    if script_root:
+        candidates.append(Path(script_root) / "data" / "refs" / TEMPLATE_NAME)
+        candidates.append(Path(script_root) / "app" / "qa" / "templates" / TEMPLATE_NAME)
+
+    seen = set()
+    for path in candidates:
+        key = str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        if path.is_file():
+            return path
+    looked = ", ".join(str(p) for p in candidates) or str(TEMPLATE_PATH)
+    raise FileNotFoundError(
+        f"Conformity matrix template not found: {TEMPLATE_PATH}. "
+        "Expected data/refs/Conformity_Matrix_Template.xlsx. "
+        f"Also looked in: {looked}"
+    )
 
 DATA_START_ROW = 10
 COL_DESCRIPTION = 1   # A
@@ -897,12 +947,7 @@ def generate_conformity_matrix(
     from openpyxl import load_workbook
     from openpyxl.styles import Alignment
 
-    path = template_path or TEMPLATE_PATH
-    if not Path(path).exists():
-        raise FileNotFoundError(
-            f"Conformity matrix template not found: {path}. "
-            "Expected data/refs/Conformity_Matrix_Template.xlsx."
-        )
+    path = resolve_template_path(template_path)
 
     wb = load_workbook(str(path))
     ws = wb["new version"]

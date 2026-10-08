@@ -1894,6 +1894,9 @@ def aeris_crosscheck_route(req: func.HttpRequest) -> func.HttpResponse:
 # AERIS full-workspace routes not covered by the Copilot Studio handlers.
 # Exact routes above retain their existing authentication and behavior.
 # ═══════════════════════════════════════════════════════════════════
+# /tmp is local to one Function instance. Benchmark jobs are mirrored to blob
+# storage (AzureWebJobsStorage) so a poll or a page click on another instance
+# can still open the result. This directory is only the local cache.
 _AERIS_DATA_DIR = Path(os.getenv("AERIS_EPHEMERAL_DIR", "/tmp/aeris")) / "data"
 _AERIS_DATA_DIR.mkdir(parents=True, exist_ok=True)
 os.environ.setdefault("TDR_REVIEW_DB", str(_AERIS_DATA_DIR / "tdr_review" / "reviews.sqlite3"))
