@@ -1,0 +1,19 @@
+{
+  "name": "LEON Spec Validator",
+  "install": "bash .cursor/install.sh",
+  "terminals": [
+    {
+      "name": "conformity-ui",
+      "command": "source .venv/bin/activate && exec python -m uvicorn app.conformity_server:app --host 0.0.0.0 --port 8012"
+    },
+    {
+      "name": "qa-assistant",
+      "command": "source .venv/bin/activate && exec python -m uvicorn app.qa_server:app --host 0.0.0.0 --port 8010"
+    },
+    {
+      "name": "validation-api",
+      "command": "source .venv/bin/activate && exec python -m uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    }
+  ],
+  "ports": [8000, 8010, 8012]
+}
