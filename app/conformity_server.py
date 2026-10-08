@@ -30,6 +30,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.qa.route import router as qa_router
+from app.qa.conformity_public_compare_route import router as conformity_public_compare_router
 from app.qa.tdr_bench_route import router as tdr_bench_router
 from app.qa.tdr_review_route import router as tdr_review_router
 
@@ -39,6 +40,7 @@ app = FastAPI(title="LEON — Conformity Matrix Analyzer", version="1.0.0")
 
 # API routes (all under /api)
 app.include_router(qa_router)
+app.include_router(conformity_public_compare_router)
 app.include_router(tdr_review_router)
 app.include_router(tdr_bench_router)
 
@@ -55,6 +57,21 @@ def tdr_review_ui_script():
         Path(__file__).parent / "conformity_ui" / "tdr_review.js",
         media_type="application/javascript",
     )
+
+
+@app.get("/api/tdr-bench-ui.js")
+def tdr_bench_ui_script_api_path():
+    return tdr_bench_ui_script()
+
+
+@app.get("/api/tdr-review-ui.js")
+def tdr_review_ui_script_api_path():
+    return tdr_review_ui_script()
+
+
+@app.get("/api/openapi.json")
+def openapi_api_path():
+    return app.openapi()
 
 
 @app.get("/")

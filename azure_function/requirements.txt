@@ -2,6 +2,8 @@
 # Pinned versions for Flex Consumption remote build compatibility
 
 azure-functions>=1.20.0
+fastapi>=0.115.0
+python-multipart>=0.0.18
 python-docx>=0.8.11
 PyPDF2>=3.0.0
 python-pptx>=1.0.2
@@ -18,6 +20,7 @@ matplotlib>=3.8.0
 python-pptx>=1.0.0
 pdfplumber>=0.11.0
 pypdfium2>=4.30.0
+PyMuPDF>=1.24.0
 Pillow>=10.0.0
 pytesseract>=0.3.13
 # Azure Blob Storage (for Excel report file delivery)

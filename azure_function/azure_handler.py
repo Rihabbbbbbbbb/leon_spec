@@ -1898,6 +1898,7 @@ def handle_conformity_batch(files: list) -> func.HttpResponse:
                 "totalRows": analysis_dict.get("totalRows", 0),
                 "summary": analysis_dict.get("summary", {}),
                 "okDeepFindingsCount": len(analysis_dict.get("okDeepFindings", [])),
+                "reviewCoverage": analysis_dict.get("reviewCoverage", {}),
             })
         except Exception as exc:
             logging.warning(f"Batch analysis failed for {safe_name}: {exc}")

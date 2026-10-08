@@ -3,21 +3,21 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Spec Q&A Assistant</title>
+  <title>AERIS | Specification Assistant</title>
   <style>
     :root {
-      --bg: #0f1115;
-      --panel: #161a22;
-      --panel-2: #1c2230;
-      --border: #2a3142;
-      --text: #e6e9ef;
-      --muted: #8a93a6;
-      --accent: #3b82f6;
-      --accent-hover: #2563eb;
-      --user-bubble: #1f2937;
-      --assistant-bubble: #11151c;
-      --warn: #f59e0b;
-      --ok: #10b981;
+      --bg: #f3f6f5;
+      --panel: #ffffff;
+      --panel-2: #f4f8f7;
+      --border: #dce6e3;
+      --text: #17332e;
+      --muted: #566d67;
+      --accent: #087f72;
+      --accent-hover: #06675d;
+      --user-bubble: #e3f0e8;
+      --assistant-bubble: #ffffff;
+      --warn: #9a5b00;
+      --ok: #157347;
       --mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
     }
     * { box-sizing: border-box; }
@@ -246,6 +246,37 @@
       margin-right: 5px;
     }
     .status-dot.ok { background: var(--ok); }
+    :focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+    .app { max-width: 1040px; box-shadow: 0 0 48px rgba(22,49,39,.04); }
+    header { min-height: 88px; padding: 20px 26px; background: #102e29; color: #e6f1ec; }
+    header .title { font-size: 21px; font-weight: 700; }
+    header .title small { color: #c2d6ce; font-size: 11px; line-height: 1.7; max-width: 550px; }
+    header .badge { color: #c2d6ce; border-color: #406654; font-family: inherit; }
+    .files-bar { padding: 14px 24px; line-height: 1.8; font-family: inherit; }
+    .files-bar .file { padding: 4px 10px; border-radius: 6px; overflow-wrap: anywhere; }
+    .files-bar .upload-btn { padding: 6px 12px; border-radius: 6px; }
+    .empty-state { max-width: 500px; padding: 30px 20px; }
+    .empty-state h2 { font-size: 27px; letter-spacing: -.8px; line-height: 1.3; }
+    .empty-state p { font-size: 13px; line-height: 1.8; }
+    .examples { margin-top: 24px; gap: 10px; }
+    .examples button { padding: 14px 18px; border-radius: 10px; font-family: inherit; transition: background .15s; }
+    .examples button:hover { background: #e3f0e8; }
+    .composer { padding: 18px 24px; }
+    .composer textarea { min-width: 0; padding: 14px; border-radius: 12px; }
+    .composer button { min-height: 46px; border-radius: 10px; }
+    .composer textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+    .upload-toast { box-shadow: 0 4px 20px rgba(22,49,39,.12); }
+    @media (max-width: 600px) {
+      header { padding: 18px; gap: 12px; }
+      header .badge { display: none; }
+      .files-bar { padding: 12px 16px; }
+      .composer { padding: 12px; }
+      .empty-state h2 { font-size: 23px; }
+      .msg.assistant .meta, .val-panel { max-width: 100%; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation: none !important; transition: none !important; }
+    }
   </style>
 </head>
 <body>
@@ -729,10 +760,10 @@
 
         var emptyState = messages.length === 0
           ? h("div", { className: "empty-state" },
-              h("h2", null, "Ask about your specification files"),
+              h("h2", null, "A good question. A clearer specification."),
               h("p", null,
-                "This assistant answers only from the accessible specification files listed above. ",
-                "It never invents details and will say when support is not found."),
+                "Ask about the specification files listed above, or upload your own. ",
+                "Explore source-backed answers and check the cited passages before making engineering decisions."),
               h("div", { className: "examples" },
                 examples.map(function (ex, i) {
                   return h("button", {
@@ -760,11 +791,11 @@
         return h("div", { className: "app" },
           h("header", null,
             h("div", { className: "title" },
-              "Spec Q&A Assistant",
-              h("small", null, "Grounded answers from accessible specification files only")
+              "AERIS / Specification Assistant",
+              h("small", null, "Automated Engineering Review & Integrity System · Answers grounded in your accessible files")
             ),
             h("div", { className: "badge" },
-              h("span", { className: "status-dot ok" }), "no BeStandard"
+              "Source-backed Q&A"
             )
           ),
           filesBar,
@@ -781,6 +812,7 @@
               value: input,
               onChange: onInput,
               onKeyDown: onKeyDown,
+              "aria-label": "Question about your specification",
               placeholder: "Ask a question about the specification\u2026",
               rows: 1
             }),

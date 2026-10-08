@@ -129,9 +129,9 @@ class TestBatchExcelGeneration:
         wb = load_workbook(io.BytesIO(data))
         ws = wb["Overview"]
 
-        headers = [ws.cell(row=3, column=c).value for c in range(1, 11)]
+        headers = [ws.cell(row=3, column=c).value for c in range(1, 12)]
         assert headers == ["#", "File", "Sheet", "Total", "OK", "NOK", "NA",
-                           "Empty", "Flagged", "OK %"]
+                           "Empty", "Flagged", "OK %", "Deviations"]
 
         # rows 4-5 = the two matrices, row 6 = TOTAL
         assert ws.cell(row=4, column=5).value == 15   # OK
@@ -142,7 +142,7 @@ class TestBatchExcelGeneration:
         assert ws.cell(row=6, column=6).value == 11   # 5 + 6
 
         # The report area must be clean — no helper data beside/below the table.
-        assert ws.max_column <= 10
+        assert ws.max_column <= 11
         assert "_chart_data" in wb.sheetnames
         assert wb["_chart_data"].sheet_state == "hidden"
         for c in ws._charts:

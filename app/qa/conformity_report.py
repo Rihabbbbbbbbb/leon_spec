@@ -46,6 +46,7 @@ def _status_color(category: str) -> tuple:
     return {
         "OK": (40, 167, 69),
         "NOK": (220, 53, 69),
+        "DEVIATION": (230, 168, 23),
         "NA": (108, 117, 125),
         "EMPTY": (233, 236, 239),
     }.get(category, (108, 117, 125))
@@ -108,6 +109,7 @@ def generate_conformity_pdf(analysis_dict: dict) -> bytes:
     total = summary.get("total", 0)
     ok = summary.get("ok", 0)
     nok = summary.get("nok", 0)
+    deviation = summary.get("deviation", stats.get("DEVIATION", 0))
     na = summary.get("na", 0)
     empty = summary.get("empty", 0)
 
@@ -130,6 +132,7 @@ def generate_conformity_pdf(analysis_dict: dict) -> bytes:
     status_rows = [
         ("OK", ok, (40, 167, 69)),
         ("NOK", nok, (220, 53, 69)),
+        ("DEVIATION", deviation, (230, 168, 23)),
         ("NA", na, (108, 117, 125)),
         ("EMPTY", empty, (233, 236, 239)),
     ]
@@ -195,6 +198,21 @@ def generate_conformity_pdf(analysis_dict: dict) -> bytes:
                  new_x="LMARGIN", new_y="NEXT")
         pdf.ln(3)
 
+    coverage = analysis_dict.get("reviewCoverage", {})
+    if coverage:
+        pdf.set_font("Helvetica", "", 8)
+        pdf.set_text_color(80, 80, 80)
+        coverage_text = (
+            f"Review coverage: AI {coverage['aiReviewedItems']}/{coverage['eligibleItems']} "
+            f"substantive OK comments; pattern-only {coverage['patternReviewedItems']}; "
+            f"OK without comments {coverage['withoutComment']}."
+        )
+        pdf.multi_cell(0, 4, _clean(coverage_text), new_x="LMARGIN", new_y="NEXT")
+        for limitation in coverage.get("limitations", []):
+            pdf.multi_cell(0, 4, _clean(f"Limitation: {limitation}"),
+                           new_x="LMARGIN", new_y="NEXT")
+        pdf.ln(2)
+
     # ── Deep analysis summary ──────────────────────────────
     ok_findings = analysis_dict.get("okDeepFindings", [])
     err_count = sum(1 for f in ok_findings if f.get("severity") == "error")
@@ -220,7 +238,7 @@ def generate_conformity_pdf(analysis_dict: dict) -> bytes:
         pdf.cell(0, 6, _clean(f"Detailed Flagged Items ({len(ok_findings)})"),
                  new_x="LMARGIN", new_y="NEXT")
         pdf.ln(1)
-        for finding in ok_findings[:40]:
+        for finding in ok_findings:
             severity = finding.get("severity", "warning")
             sev_color = (220, 53, 69) if severity == "error" else (255, 140, 0) if severity == "warning" else (108, 117, 125)
             sev_label = "ERROR" if severity == "error" else "WARNING" if severity == "warning" else "INFO"
@@ -265,7 +283,10 @@ def generate_conformity_pdf(analysis_dict: dict) -> bytes:
         pdf.ln(1)
         pdf.set_font("Helvetica", "I", 9)
         pdf.set_text_color(40, 167, 69)
-        pdf.cell(0, 6, _clean("All OK items are consistent with their comments."),
+        pdf.multi_cell(0, 4, _clean(
+            "No review signal was detected by the checks performed. "
+            "This does not establish technical compliance or consistency of every response."
+        ),
                  new_x="LMARGIN", new_y="NEXT")
 
     pdf.ln(3)
@@ -274,9 +295,11 @@ def generate_conformity_pdf(analysis_dict: dict) -> bytes:
     items = analysis_dict.get("items", [])
 
     for category, label, icon in [
-        ("OK", "CONFORMING REQUIREMENTS (OK)", "OK"),
-        ("NOK", "NON-CONFORMING REQUIREMENTS (NOK)", "NOK"),
+        ("OK", "SUPPLIER-DECLARED OK REQUIREMENTS", "OK"),
+        ("NOK", "SUPPLIER-DECLARED NOK REQUIREMENTS", "NOK"),
+        ("DEVIATION", "DECLARED DEVIATIONS", "DEV"),
         ("NA", "NOT APPLICABLE REQUIREMENTS (NA)", "NA"),
+        ("EMPTY", "UNANSWERED REQUIREMENTS", "?"),
     ]:
         cat_items = [item for item in items if item.get("conformityCategory") == category]
         if not cat_items:
@@ -629,6 +652,7 @@ def generate_conformity_excel(analysis_dict: dict) -> bytes:
         ws_ok.freeze_panes = "A2"
         ws_ok.auto_filter.ref = f"A1:F{len(ok_findings) + 1}"
 
+    _write_review_coverage(wb, [analysis_dict])
     # ── Save to bytes ───────────────────────────────────────
     buf = io.BytesIO()
     wb.save(buf)
@@ -639,6 +663,34 @@ def generate_conformity_excel(analysis_dict: dict) -> bytes:
 # ═══════════════════════════════════════════════════════════════════
 # BATCH EXCEL REPORT (multiple conformity matrices in one workbook)
 # ═══════════════════════════════════════════════════════════════════
+
+def _write_review_coverage(wb, analyses: List[Dict]) -> None:
+    covered = [a for a in analyses if a.get("reviewCoverage")]
+    if not covered:
+        return
+    ws = wb.create_sheet("Review Coverage")
+    ws.append(["File", "Declared OK", "Substantive comments", "AI reviewed",
+               "Pattern only", "No comment", "Simple confirmations", "Limitations"])
+    for analysis in covered:
+        coverage = analysis["reviewCoverage"]
+        ws.append([
+            analysis.get("fileName", ""),
+            coverage.get("okItems", 0), coverage.get("eligibleItems", 0),
+            coverage.get("aiReviewedItems", 0), coverage.get("patternReviewedItems", 0),
+            coverage.get("withoutComment", 0), coverage.get("simpleConfirmations", 0),
+            "\n".join(coverage.get("limitations", [])),
+        ])
+    from openpyxl.styles import Alignment, Font
+    for cell in ws[1]:
+        cell.font = Font(bold=True)
+    for row in ws.iter_rows(min_row=2):
+        row[-1].alignment = Alignment(wrap_text=True, vertical="top")
+    for column in ("A", "B", "C", "D", "E", "F", "G"):
+        ws.column_dimensions[column].width = 24 if column in ("A", "C", "G") else 16
+    ws.column_dimensions["H"].width = 100
+    ws.freeze_panes = "A2"
+    ws.auto_filter.ref = ws.dimensions
+
 
 def _safe_sheet_name(name: str, max_len: int = 31) -> str:
     """Sanitize a string into a valid, unique-enough Excel sheet name."""
@@ -780,16 +832,16 @@ def generate_batch_conformity_excel(analyses: List[Dict]) -> bytes:
     ws_ov.title = "Overview"
     ws_ov["A1"] = f"LEON — Combined Analysis of {len(analyses)} Conformity Matrix(es)"
     ws_ov["A1"].font = title_font
-    ws_ov.merge_cells("A1:J1")
+    ws_ov.merge_cells("A1:K1")
     ws_ov.row_dimensions[1].height = 22
 
     ws_ov["A2"] = ("One row per uploaded matrix — counts are colour-coded. "
                    "A pie chart per matrix is plotted below the table.")
     ws_ov["A2"].font = Font(italic=True, size=9, color="595959")
-    ws_ov.merge_cells("A2:J2")
+    ws_ov.merge_cells("A2:K2")
 
     ov_headers = ["#", "File", "Sheet", "Total", "OK", "NOK", "NA", "Empty",
-                  "Flagged", "OK %"]
+                  "Flagged", "OK %", "Deviations"]
     for ci, header in enumerate(ov_headers, 1):
         cell = ws_ov.cell(row=3, column=ci, value=header)
         cell.fill = header_fill
@@ -801,7 +853,7 @@ def generate_batch_conformity_excel(analyses: List[Dict]) -> bytes:
 
     used_sheet_names = {"Overview"}
     row = 4
-    totals = {"total": 0, "OK": 0, "NOK": 0, "NA": 0, "EMPTY": 0, "flagged": 0}
+    totals = {"total": 0, "OK": 0, "NOK": 0, "DEVIATION": 0, "NA": 0, "EMPTY": 0, "flagged": 0}
     for idx, analysis in enumerate(analyses, 1):
         stats = analysis.get("stats", {})
         total = analysis.get("totalRows", 0)
@@ -835,6 +887,10 @@ def generate_batch_conformity_excel(analyses: List[Dict]) -> bytes:
         ws_ov.cell(row=row, column=10).number_format = "0.0%"
 
         totals["total"] += total
+        ws_ov.cell(row=row, column=11, value=stats.get("DEVIATION", 0))
+        ws_ov.cell(row=row, column=11).fill = _category_fill("DEVIATION")
+        ws_ov.cell(row=row, column=11).font = _category_font("DEVIATION")
+        totals["DEVIATION"] += stats.get("DEVIATION", 0)
         totals["flagged"] += flagged
         for cat in ("OK", "NOK", "NA", "EMPTY"):
             totals[cat] += stats.get(cat, 0)
@@ -851,7 +907,7 @@ def generate_batch_conformity_excel(analyses: List[Dict]) -> bytes:
     tc.alignment = Alignment(horizontal="center", vertical="center")
     for ci, val in ((3, ""), (4, totals["total"]), (5, totals["OK"]),
                     (6, totals["NOK"]), (7, totals["NA"]),
-                    (8, totals["EMPTY"]), (9, totals["flagged"])):
+                    (8, totals["EMPTY"]), (9, totals["flagged"]), (11, totals["DEVIATION"])):
         c = ws_ov.cell(row=row, column=ci, value=val)
         c.font = total_font
         c.fill = total_fill
@@ -867,11 +923,11 @@ def generate_batch_conformity_excel(analyses: List[Dict]) -> bytes:
 
     last_row = row - 1  # last data row — the TOTAL row stays out of the filter
 
-    col_widths_ov = [4, 46, 26, 9, 8, 8, 8, 9, 9, 8]
+    col_widths_ov = [4, 46, 26, 9, 8, 8, 8, 9, 9, 8, 14]
     for ci, width in enumerate(col_widths_ov, 1):
         ws_ov.column_dimensions[get_column_letter(ci)].width = width
     ws_ov.freeze_panes = "A4"
-    ws_ov.auto_filter.ref = f"A3:J{last_row}"
+    ws_ov.auto_filter.ref = f"A3:K{last_row}"
 
     # ── Camembert (pie chart) PER FILE — one independent chart per matrix, not
     # one chart aggregating every file. The chart source data lives on its own
@@ -965,6 +1021,7 @@ def generate_batch_conformity_excel(analyses: List[Dict]) -> bytes:
             _write_deepok_sheet(ws_ok, ok_findings,
                                 header_fill, header_font, thin_border, wrap_align)
 
+    _write_review_coverage(wb, analyses)
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)
@@ -992,8 +1049,9 @@ def generate_powerbi_dataset(analysis_dict: dict) -> dict:
     inconsistencies = analysis_dict.get("inconsistencies", [])
 
     # Table 1: Status Summary (for pie/donut chart)
+    timestamp = __import__("datetime").datetime.now().isoformat()
     status_summary = []
-    for category in ["OK", "NOK", "NA", "EMPTY"]:
+    for category in ["OK", "NOK", "DEVIATION", "NA", "EMPTY"]:
         count = stats.get(category, 0)
         if count > 0:
             pct = round(count / total * 100, 2) if total else 0
@@ -1002,9 +1060,11 @@ def generate_powerbi_dataset(analysis_dict: dict) -> dict:
                 "Count": count,
                 "Percentage": pct,
                 "Color": {
-                    "OK": "#28a745", "NOK": "#dc3545", "NA": "#6c757d",
+                    "OK": "#28a745", "NOK": "#dc3545", "DEVIATION": "#e6a817", "NA": "#6c757d",
                     "EMPTY": "#e9ecef",
                 }.get(category, "#adb5bd"),
+                "FileName": analysis_dict.get("fileName", ""),
+                "Timestamp": timestamp,
             })
 
     # Table 2: Items (for detailed table visual)
@@ -1036,6 +1096,8 @@ def generate_powerbi_dataset(analysis_dict: dict) -> dict:
             "Conformity": inc.get("conformity", ""),
             "Comment": inc.get("comment", ""),
             "AIAnalysis": inc.get("aiComment", ""),
+            "Type": inc.get("findingType", ", ".join(inc.get("signals", []))),
+            "Explanation": inc.get("aiComment", ""),
             "FileName": analysis_dict.get("fileName", ""),
         })
 
@@ -1065,6 +1127,8 @@ def generate_powerbi_dataset(analysis_dict: dict) -> dict:
                     {"name": "Comment", "dataType": "string"},
                     {"name": "VersionApplicable", "dataType": "string"},
                     {"name": "ColumnSet", "dataType": "Int64"},
+                    {"name": "NeedsReview", "dataType": "Boolean"},
+                    {"name": "ClassificationConfidence", "dataType": "string"},
                     {"name": "FileName", "dataType": "string"},
                     {"name": "SheetName", "dataType": "string"},
                 ],
@@ -1078,6 +1142,9 @@ def generate_powerbi_dataset(analysis_dict: dict) -> dict:
                     {"name": "Conformity", "dataType": "string"},
                     {"name": "Comment", "dataType": "string"},
                     {"name": "Explanation", "dataType": "string"},
+                    {"name": "Signals", "dataType": "string"},
+                    {"name": "Score", "dataType": "Int64"},
+                    {"name": "AIAnalysis", "dataType": "string"},
                     {"name": "FileName", "dataType": "string"},
                 ],
             },
@@ -1153,7 +1220,8 @@ def generate_powerbi_dataset(analysis_dict: dict) -> dict:
         "summary": analysis_dict.get("summary", {}),
         "fileName": analysis_dict.get("fileName", ""),
         "sheetName": analysis_dict.get("sheetName", ""),
-        "timestamp": __import__("datetime").datetime.now().isoformat(),
+        "timestamp": timestamp,
+        "reviewCoverage": analysis_dict.get("reviewCoverage", {}),
     }
 
 

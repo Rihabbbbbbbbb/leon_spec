@@ -1888,3 +1888,121 @@ def aeris_crosscheck_route(req: func.HttpRequest) -> func.HttpResponse:
 
     from azure_handler import handle_aeris_crosscheck
     return _safe_handler(handle_aeris_crosscheck, files)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# AERIS full-workspace routes not covered by the Copilot Studio handlers.
+# Exact routes above retain their existing authentication and behavior.
+# ═══════════════════════════════════════════════════════════════════
+_AERIS_DATA_DIR = Path(os.getenv("AERIS_EPHEMERAL_DIR", "/tmp/aeris")) / "data"
+_AERIS_DATA_DIR.mkdir(parents=True, exist_ok=True)
+os.environ.setdefault("TDR_REVIEW_DB", str(_AERIS_DATA_DIR / "tdr_review" / "reviews.sqlite3"))
+os.environ.setdefault("TDR_BENCH_DIR", str(_AERIS_DATA_DIR / "tdr_bench"))
+
+from azure.functions import AsgiMiddleware
+from app.conformity_server import app as aeris_fastapi_app
+
+_aeris_asgi = AsgiMiddleware(aeris_fastapi_app)
+
+
+@app.route(
+    route="tdr-review/{*aeris_path}",
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+    auth_level=func.AuthLevel.ANONYMOUS,
+)
+async def aeris_tdr_review_routes(
+    req: func.HttpRequest, context: func.Context,
+) -> func.HttpResponse:
+    return await _aeris_asgi.handle_async(req, context)
+
+
+@app.route(
+    route="tdr-bench/{*aeris_path}",
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+    auth_level=func.AuthLevel.ANONYMOUS,
+)
+async def aeris_tdr_benchmark_routes(
+    req: func.HttpRequest, context: func.Context,
+) -> func.HttpResponse:
+    return await _aeris_asgi.handle_async(req, context)
+
+
+@app.route(
+    route="conformity-pdf-evidence",
+    methods=["POST"],
+    auth_level=func.AuthLevel.ANONYMOUS,
+)
+async def aeris_pdf_evidence_route(
+    req: func.HttpRequest, context: func.Context,
+) -> func.HttpResponse:
+    return await _aeris_asgi.handle_async(req, context)
+
+
+@app.route(
+    route="conformity-pptx-evidence",
+    methods=["POST"],
+    auth_level=func.AuthLevel.ANONYMOUS,
+)
+async def aeris_pptx_evidence_route(
+    req: func.HttpRequest, context: func.Context,
+) -> func.HttpResponse:
+    return await _aeris_asgi.handle_async(req, context)
+
+
+@app.route(
+    route="conformity-pdf-evidence/{*aeris_path}",
+    methods=["POST"],
+    auth_level=func.AuthLevel.ANONYMOUS,
+)
+async def aeris_evidence_report_route(
+    req: func.HttpRequest, context: func.Context,
+) -> func.HttpResponse:
+    return await _aeris_asgi.handle_async(req, context)
+
+
+@app.route(
+    route="aeris-conformity-compare",
+    methods=["POST"],
+    auth_level=func.AuthLevel.ANONYMOUS,
+)
+async def aeris_public_conformity_compare_route(
+    req: func.HttpRequest, context: func.Context,
+) -> func.HttpResponse:
+    return await _aeris_asgi.handle_async(req, context)
+
+
+@app.route(
+    route="openapi.json",
+    methods=["GET"],
+    auth_level=func.AuthLevel.ANONYMOUS,
+)
+async def aeris_openapi_route(
+    req: func.HttpRequest, context: func.Context,
+) -> func.HttpResponse:
+    return await _aeris_asgi.handle_async(req, context)
+
+
+@app.route(
+    route="tdr-review-ui.js",
+    methods=["GET"],
+    auth_level=func.AuthLevel.ANONYMOUS,
+)
+def aeris_tdr_review_script(req: func.HttpRequest) -> func.HttpResponse:
+    return func.HttpResponse(
+        body=(Path(__file__).resolve().parent / "app" / "conformity_ui" / "tdr_review.js").read_text(encoding="utf-8"),
+        mimetype="application/javascript",
+        headers={"Cache-Control": "no-cache"},
+    )
+
+
+@app.route(
+    route="tdr-bench-ui.js",
+    methods=["GET"],
+    auth_level=func.AuthLevel.ANONYMOUS,
+)
+def aeris_tdr_benchmark_script(req: func.HttpRequest) -> func.HttpResponse:
+    return func.HttpResponse(
+        body=(Path(__file__).resolve().parent / "app" / "conformity_ui" / "tdr_bench.js").read_text(encoding="utf-8"),
+        mimetype="application/javascript",
+        headers={"Cache-Control": "no-cache"},
+    )
