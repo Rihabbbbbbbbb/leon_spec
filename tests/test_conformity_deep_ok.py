@@ -117,7 +117,7 @@ class TestRequirementMismatch:
         assert f is not None
         assert "hors_sujet" in f["signals"]
         assert f["severity"] in ("error", "warning")
-        assert "does not address this requirement" in f["aiComment"]
+        assert "may not address this requirement" in f["aiComment"]
 
 
 class TestNewSuspicionPatterns:

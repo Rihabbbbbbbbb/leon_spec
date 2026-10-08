@@ -1111,6 +1111,7 @@ async def conformity_batch(files: List[UploadFile] = File(...)) -> dict:
                 "totalRows": analysis_dict.get("totalRows", 0),
                 "summary": summary,
                 "okDeepFindingsCount": len(analysis_dict.get("okDeepFindings", [])),
+                "reviewCoverage": analysis_dict.get("reviewCoverage", {}),
             })
         except Exception as exc:
             failed.append({"fileName": file.filename, "error": f"Analysis failed: {str(exc)}"})

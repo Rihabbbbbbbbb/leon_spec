@@ -1,4 +1,4 @@
-/* LEON – Multi-supplier TDR technical benchmark (technical offers only). */
+/* AERIS – Multi-supplier TDR technical benchmark (technical offers only). */
 (function () {
   'use strict';
   const API = '/api/tdr-bench';
@@ -68,6 +68,7 @@
     #tab-bench ul.tb-ul li{margin:2px 0}
     #tab-bench .tb-warn{background:rgba(154,91,0,.08);border:1px solid rgba(154,91,0,.3);border-radius:6px;padding:8px 10px;font-size:12.5px;margin:8px 0}
     #tab-bench .tb-files td input{min-width:160px}
+    #tab-bench #tb-jobs,#tab-bench #tb-files{max-width:100%;overflow-x:auto}
     #tab-bench .tb-flex{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
     #tb-modal{position:fixed;inset:0;background:rgba(10,20,35,.55);z-index:9999;display:none;align-items:center;justify-content:center}
     #tb-modal.show{display:flex}
@@ -78,6 +79,13 @@
     #tb-modal .tb-mimg img{max-width:100%;box-shadow:0 2px 8px rgba(0,0,0,.2)}
     #tb-modal .tb-mtext{overflow:auto;padding:10px 14px;font-size:12.5px;white-space:pre-wrap;font-family:var(--mono)}
     #tb-modal mark{background:#ffe58a}
+    @media(max-width:760px){
+      #tab-bench .tb-grid{grid-template-columns:minmax(0,1fr)}
+      #tab-bench .tb-grid>div{min-width:0}
+      #tab-bench .tb-files{overflow-x:auto}
+      #tab-bench .tb-flex>*{max-width:100%}
+      #tb-modal .tb-mbody{grid-template-columns:minmax(0,1fr)}
+    }
     `;
     document.head.appendChild(css);
   }
@@ -86,7 +94,7 @@
   function layout() {
     root().innerHTML = `
     <div class="panel">
-      <h2>🏁 TDR technical benchmark – multi-supplier synthesis</h2>
+      <h2>Compare supplier technical offers</h2>
       <p class="muted" style="margin-bottom:12px">Upload the technical offers (TDR / technical presentations) of several suppliers.
       The tool extracts every technical fact with a verbatim quote and page, compares suppliers domain by domain, scores them
       (weighted, editable by experts) and produces an executive synthesis. Technical content only – no conformity-matrix check,

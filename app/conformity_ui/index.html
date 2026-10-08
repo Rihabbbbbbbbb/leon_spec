@@ -3,7 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>LEON — Conformity &amp; Spec Validation</title>
+  <title>AERIS | Engineering Review Workspace</title>
+  <meta name="description" content="AERIS - Automated Engineering Review &amp; Integrity System. Review conformity matrices, validate specifications, and compare versions in one workspace." />
   <style>
     /* ── Enterprise theme ────────────────────────────────────────────
        Light, neutral corporate palette (replaces the earlier dark
@@ -13,21 +14,21 @@
        only the colour VALUES changed, so no script logic needed to move.
     */
     :root {
-      --bg: #eef1f6;
+      --bg: #f3f6f5;
       --panel: #ffffff;
-      --panel-2: #f2f5f9;
-      --border: #dde3ec;
-      --text: #1c2b3a;
-      --muted: #5b6b7c;
-      --accent: #1d4ed8;
-      --accent-hover: #1739ab;
+      --panel-2: #f4f8f7;
+      --border: #dce6e3;
+      --text: #17332e;
+      --muted: #566d67;
+      --accent: #087f72;
+      --accent-hover: #06675d;
       --ok: #157347;
       --nok: #b3261e;
-      --dev: #9a5b00;
-      --partial: #c65911;
       --na: #5b6b7c;
       --empty: #c7cfd9;
       --warn: #9a5b00;
+      --dev: #9a5b00;
+      --partial: #c65911;
       --error: #b3261e;
       --mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
 
@@ -162,7 +163,7 @@
       font-size: 32px;
       color: var(--accent);
     }
-    #file-input { display: none; }
+    .upload-zone input[type="file"] { display: none; }
 
     .file-info {
       display: flex;
@@ -272,8 +273,6 @@
     .stat-ok .value { color: var(--ok); }
     .stat-nok .value { color: var(--nok); }
     .stat-na .value { color: var(--na); }
-    .stat-dev .value { color: var(--dev); }
-    .stat-partial .value { color: var(--partial); }
     .stat-total .value { color: var(--accent); }
     .stat-inc .value { color: var(--error); }
     .stat-warn .value { color: var(--warn); }
@@ -330,43 +329,6 @@
     .badge-NOK { background: rgba(179,38,30,0.12); color: var(--nok); }
     .badge-NA { background: rgba(91,107,124,0.12); color: var(--na); }
     .badge-EMPTY { background: rgba(91,107,124,0.08); color: var(--muted); }
-    .badge-DEVIATION { background: rgba(154,91,0,0.14); color: var(--dev); }
-    .badge-CONFORME { background: rgba(21,115,71,0.12); color: var(--ok); }
-    .badge-NON_CONFORME { background: rgba(179,38,30,0.12); color: var(--nok); }
-    .badge-PARTIELLEMENT_CONFORME { background: rgba(198,89,17,0.14); color: var(--partial); }
-    .badge-PREUVE_INSUFFISANTE { background: rgba(29,78,216,0.10); color: var(--accent); }
-    .badge-MANQUANT { background: rgba(91,107,124,0.10); color: var(--muted); }
-    .badge-ALIGNED { background: rgba(21,115,71,0.12); color: var(--ok); }
-    .badge-MATRIX_TOO_OPTIMISTIC { background: rgba(179,38,30,0.12); color: var(--nok); }
-    .badge-MATRIX_TOO_PESSIMISTIC { background: rgba(154,91,0,0.14); color: var(--dev); }
-    .badge-UNVERIFIABLE { background: rgba(29,78,216,0.10); color: var(--accent); }
-    .badge-MATRIX_SILENT { background: rgba(198,89,17,0.14); color: var(--partial); }
-    .badge-VERY_HIGH, .badge-HIGH { background: rgba(21,115,71,0.12); color: var(--ok); }
-    .badge-MEDIUM { background: rgba(154,91,0,0.14); color: var(--dev); }
-    .badge-LOW, .badge-NONE { background: rgba(91,107,124,0.10); color: var(--muted); }
-    .badge-OPPOSITE, .badge-DECLARATION_OPPOSITE { background: rgba(179,38,30,0.12); color: var(--nok); }
-    .badge-VALUE_MISMATCH { background: rgba(198,89,17,0.14); color: var(--partial); }
-    .badge-WRONG_TARGET, .badge-TDR_RESTATES_WRONG_TARGET { background: rgba(154,91,0,0.14); color: var(--dev); }
-    .badge-TDR_CONFLICT, .badge-TDR_INTERNAL_CONFLICT { background: rgba(198,89,17,0.14); color: var(--partial); }
-    .said-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 8px; }
-    @media (max-width: 800px) { .said-grid { grid-template-columns: 1fr; } }
-    .said-box {
-      background: var(--panel-2); border: 1px solid var(--border);
-      border-radius: 8px; padding: 8px 10px; font-size: 13px;
-    }
-    .said-box .lbl {
-      font-size: 10px; text-transform: uppercase; letter-spacing: 0.4px;
-      color: var(--muted); font-weight: 700; margin-bottom: 4px;
-    }
-    .said-box.disagree { border-color: #f0b4b0; background: #fff6f5; }
-    .said-box.agree { border-color: #b7e4c7; background: #f3fbf6; }
-    .dual-upload { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-    @media (max-width: 800px) { .dual-upload { grid-template-columns: 1fr; } }
-    .risk-chip {
-      display: inline-block; padding: 6px 12px; margin: 0 8px 8px 0;
-      border-radius: 8px; background: var(--panel-2); border: 1px solid var(--border);
-      font-size: 12px;
-    }
 
     /* Inconsistency cards */
     .inc-card {
@@ -515,38 +477,245 @@
     .muted { color: var(--muted); }
     .mt-16 { margin-top: 16px; }
     .mb-16 { margin-bottom: 16px; }
+
+    :focus-visible { outline: 3px solid #0d9488; outline-offset: 4px; }
+    .skip-link { position: fixed; top: -80px; left: 16px; z-index: 100; padding: 12px 18px; background: white; color: var(--accent); border-radius: 8px; }
+    .skip-link:focus { top: 12px; }
+    .sidebar { position: fixed; inset: 0 auto 0 0; width: 242px; padding: 30px 20px; background: #102e29; color: #e6f1ec; display: flex; flex-direction: column; z-index: 20; }
+    .sidebar { overflow-y: auto; }
+    .brand { display: flex; gap: 12px; align-items: center; }
+    .brand-mark { width: 42px; height: 42px; flex-shrink: 0; }
+    .brand-name { font-size: 25px; font-weight: 750; letter-spacing: 2px; line-height: 1.15; }
+    .brand-caption { color: #acc8be; font-size: 11px; margin-top: 4px; letter-spacing: .6px; }
+    .nav-label { color: #acc8be; font-size: 10px; font-weight: 700; letter-spacing: 1.8px; margin: 42px 12px 14px; text-transform: uppercase; }
+    .tabs { display: flex; flex-direction: column; gap: 8px; margin: 0; border: 0; }
+    .tab { display: flex; align-items: center; gap: 12px; width: 100%; padding: 13px 12px; border: 1px solid transparent; border-radius: 10px; color: #c2d6ce; text-align: left; font-size: 13px; }
+    .tab:hover { color: white; background: #1a3d35; }
+    .tab.active { background: #244b40; color: #e6ffd7; border-color: #406654; }
+    .nav-icon { display: grid; place-items: center; width: 26px; height: 26px; border: 1px solid currentColor; border-radius: 7px; font-size: 14px; flex-shrink: 0; }
+    .nav-status { margin-left: auto; border: 1px solid #8b7849; border-radius: 999px; padding: 2px 7px; color: #e8d9ad; font-size: 9px; line-height: 1.4; white-space: nowrap; }
+    .sidebar-bottom { margin-top: auto; padding-top: 36px; }
+    .help-card { border: 1px solid #36574c; border-radius: 12px; padding: 16px; background: #193a31; font-size: 12px; line-height: 1.7; }
+    .help-card summary { font-weight: 650; cursor: pointer; color: #ecf6ef; }
+    .help-card p { margin-top: 10px; color: #c2d6ce; }
+    .sidebar-foot { font-size: 10px; letter-spacing: .5px; color: #acc8be; margin: 18px 4px 0; }
+    .workspace-header { margin-left: 242px; padding: 19px 38px; background: rgba(255,255,255,.94); border-bottom: 1px solid var(--border); min-height: 78px; }
+    .workspace-header .header-label { color: var(--text); font-size: 13px; font-weight: 650; }
+    .header-subtitle { font-size: 11px; color: var(--muted); margin-top: 3px; }
+    .health-badge { background: #f4f8f7; color: var(--muted); border-color: var(--border); font-family: inherit; font-size: 11px; padding: 7px 12px; }
+    .health-ok { color: #176448; border-color: #cbe4d4; background: #f0faf3; }
+    .health-err { color: #a52b24; border-color: #efccc8; background: #fff5f3; }
+    .app { max-width: 1240px; margin: 0 auto 0 242px; padding: 32px 38px 28px; }
+    .welcome { position: relative; overflow: hidden; display: flex; align-items: center; justify-content: space-between; gap: 24px; border-radius: 20px; border: 1px solid #cfe0d5; padding: 32px; background: linear-gradient(115deg, #e3f0e8 0%, #eff6e6 65%, #e9efce 100%); margin-bottom: 24px; }
+    .welcome-copy { position: relative; z-index: 1; max-width: 620px; }
+    .eyebrow { font-size: 10px; font-weight: 750; letter-spacing: 1.8px; text-transform: uppercase; color: #426b59; margin-bottom: 10px; }
+    h1 { font-size: clamp(26px, 3vw, 38px); font-weight: 720; letter-spacing: -1.3px; line-height: 1.18; margin-bottom: 12px; }
+    .welcome-description { color: #456459; font-size: 14px; line-height: 1.8; max-width: 530px; }
+    .welcome-art { width: 156px; height: 156px; flex-shrink: 0; }
+    .workflow-guide { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 14px; margin-bottom: 28px; }
+    .guide-step { display: flex; align-items: flex-start; gap: 12px; padding: 16px 18px; background: white; border: 1px solid var(--border); border-radius: 12px; }
+    .step-number { display: grid; place-items: center; height: 28px; width: 28px; flex-shrink: 0; border-radius: 50%; background: #edf5ef; color: #347253; font-size: 11px; font-weight: 750; }
+    .guide-step strong { display: block; font-size: 12px; margin-bottom: 3px; }
+    .guide-step p { color: var(--muted); font-size: 11px; line-height: 1.6; }
+    .panel { padding: 28px; border-radius: 16px; box-shadow: 0 3px 16px rgba(22,49,39,.025); }
+    .panel h2 { font-size: 17px; letter-spacing: -.35px; margin-bottom: 8px; }
+    .section-description { color: var(--muted); font-size: 12px; margin-bottom: 22px; line-height: 1.7; }
+    .upload-zone { position: relative; padding: 30px 20px; border: 1.5px dashed #b7d0c4; border-radius: 12px; background: #f8fbf9; }
+    .upload-zone:hover, .upload-zone.dragover { border-color: var(--accent); background: #edf7f1; }
+    .upload-icon { display: grid; place-items: center; margin: 0 auto 12px; height: 48px; width: 48px; border: 1px solid #d4e5dc; border-radius: 13px; background: white; font-size: 24px; color: var(--accent); }
+    .upload-zone p { font-size: 12px; }
+    .upload-zone p strong { color: var(--text); font-size: 14px; font-weight: 650; }
+    .format-tags { display: flex; justify-content: center; flex-wrap: wrap; gap: 6px; margin-top: 16px; }
+    .format-tags span { padding: 3px 9px; font-size: 10px; font-weight: 650; letter-spacing: .4px; border-radius: 5px; background: #edf2ef; color: #557066; }
+    .btn { min-height: 44px; padding: 11px 20px; font-size: 12px; border-radius: 9px; }
+    .btn-primary:not(:disabled) { box-shadow: 0 3px 8px rgba(8,127,114,.14); }
+    .btn-primary:hover:not(:disabled) { transform: translateY(-1px); }
+    .btn-secondary:disabled { opacity: .5; cursor: not-allowed; }
+    .btn:disabled:hover { transform: none; }
+    .btn-row { margin-top: 20px; gap: 10px; }
+    .review-note { font-size: 11px; color: var(--muted); margin-top: 16px; }
+    .action-hint { font-size: 12px; color: var(--muted); margin-top: 12px; line-height: 1.7; }
+    .btn[data-action-icon]::before { content: attr(data-action-icon); display: inline-grid; place-items: center; font-size: 16px; width: 20px; }
+    .status-guide { display: flex; flex-wrap: wrap; gap: 10px 18px; margin: 14px 0 20px; font-size: 11px; color: var(--muted); }
+    .status-guide span { display: inline-flex; gap: 6px; align-items: center; }
+    .technical-details { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border); font-size: 12px; color: var(--muted); }
+    .technical-details summary { cursor: pointer; font-weight: 600; padding: 4px 0; }
+    .technical-details[open] summary { margin-bottom: 10px; }
+    .empty-results { text-align: center; padding: 32px 16px; color: var(--muted); }
+    .empty-results strong { display: block; color: var(--text); margin-bottom: 6px; font-weight: 650; }
+    .availability-note { padding: 14px 18px; border: 1px solid #e7d8b7; border-radius: 12px; background: #fff9ed; color: #78551b; margin-bottom: 18px; font-size: 12px; line-height: 1.7; }
+    .stat-dev .value { color: var(--dev); }
+    .stat-partial .value { color: var(--partial); }
+    .stat-card .stat-value { font-size: 30px; font-weight: 700; }
+    .stat-card .stat-label { color: var(--muted); font-size: 11px; }
+    #tab-aeris input:not([type="file"]):not([type="checkbox"]), #tab-aeris select {
+      max-width: 100%; padding: 8px 10px; border: 1px solid var(--border);
+      border-radius: 7px; color: var(--text); background: white; font: inherit;
+    }
+    #tab-aeris pre { overflow-wrap: anywhere; }
+    #tab-aeris .dual-upload > div { min-width: 0; }
+    .file-info { flex-wrap: wrap; }
+    .file-info .name { overflow-wrap: anywhere; flex: 1; min-width: 0; }
+    .file-info .remove { min-width: 32px; min-height: 32px; }
+    .stat-card { border-radius: 12px; padding: 20px 12px; }
+    .stat-card .value { font-family: inherit; font-size: 30px; letter-spacing: -1px; }
+    .filter-btn { min-height: 36px; }
+    .table-container { margin-top: 16px; }
+    th { font-size: 11px; padding: 13px 14px; }
+    td { padding: 12px 14px; }
+    .search-box { min-height: 38px; }
+    .results.show { animation: reveal .3s ease-out; }
+    .workspace-footer { display: flex; justify-content: space-between; gap: 12px; border-top: 1px solid var(--border); margin-top: 28px; padding: 18px 0 0; color: var(--muted); font-size: 10px; }
+    .toast { max-width: min(480px, calc(100vw - 32px)); overflow-wrap: anywhere; }
+    @keyframes reveal { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+    @media (min-width: 1500px) { .app { margin-right: auto; margin-left: max(242px, calc((100vw - 1240px + 242px) / 2)); max-width: 1240px; } }
+    @media (max-width: 1100px) {
+      .sidebar { width: 214px; padding: 26px 14px; }
+      .workspace-header { margin-left: 214px; padding: 18px 24px; }
+      .app { margin-left: 214px; padding: 24px; }
+      .welcome { padding: 26px; }
+      .welcome-art { width: 110px; height: 110px; }
+      .guide-step { padding: 14px 12px; gap: 8px; }
+    }
+    @media (max-width: 760px) {
+      .sidebar { position: static; width: 100%; padding: 18px 18px 14px; }
+      .brand-mark { width: 34px; height: 34px; }
+      .brand-name { font-size: 22px; }
+      .nav-label, .sidebar-bottom { display: none; }
+      .tabs { flex-direction: row; flex-wrap: wrap; margin-top: 18px; gap: 6px; }
+      .tab { width: calc((100% - 12px) / 3); flex-grow: 1; }
+      .tab { justify-content: center; padding: 10px 6px; font-size: 11px; gap: 6px; }
+      .nav-icon { display: none; }
+      .nav-status { display: none; }
+      .workspace-header { margin-left: 0; padding: 14px 18px; min-height: 64px; }
+      .header-subtitle { max-width: 230px; font-size: 10px; }
+      .app { margin: 0; padding: 20px 16px; }
+      .welcome { padding: 24px; border-radius: 16px; }
+      .welcome-art { display: none; }
+      .workflow-guide { gap: 8px; }
+      .guide-step { padding: 12px 8px; flex-direction: column; gap: 8px; }
+      .guide-step strong { font-size: 11px; }
+      .guide-step p { font-size: 10px; }
+      .panel { padding: 20px; }
+      .btn-row .btn { flex: 1; justify-content: center; }
+      .workspace-footer { flex-direction: column; }
+      .toast { right: 16px; bottom: 16px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation: none !important; transition: none !important; }
+      .spinner { border-color: var(--accent); border-style: dotted; }
+    }
+    .badge-DEVIATION { background: rgba(154,91,0,0.14); color: var(--dev); }
+    .badge-CONFORME { background: rgba(21,115,71,0.12); color: var(--ok); }
+    .badge-NON_CONFORME { background: rgba(179,38,30,0.12); color: var(--nok); }
+    .badge-PARTIELLEMENT_CONFORME { background: rgba(198,89,17,0.14); color: var(--partial); }
+    .badge-PREUVE_INSUFFISANTE { background: rgba(29,78,216,0.10); color: var(--accent); }
+    .badge-MANQUANT { background: rgba(91,107,124,0.10); color: var(--muted); }
+    .badge-ALIGNED { background: rgba(21,115,71,0.12); color: var(--ok); }
+    .badge-MATRIX_TOO_OPTIMISTIC { background: rgba(179,38,30,0.12); color: var(--nok); }
+    .badge-MATRIX_TOO_PESSIMISTIC { background: rgba(154,91,0,0.14); color: var(--dev); }
+    .badge-UNVERIFIABLE { background: rgba(29,78,216,0.10); color: var(--accent); }
+    .badge-MATRIX_SILENT { background: rgba(198,89,17,0.14); color: var(--partial); }
+    .badge-VERY_HIGH, .badge-HIGH { background: rgba(21,115,71,0.12); color: var(--ok); }
+    .badge-MEDIUM { background: rgba(154,91,0,0.14); color: var(--dev); }
+    .badge-LOW, .badge-NONE { background: rgba(91,107,124,0.10); color: var(--muted); }
+    .badge-OPPOSITE, .badge-DECLARATION_OPPOSITE { background: rgba(179,38,30,0.12); color: var(--nok); }
+    .badge-VALUE_MISMATCH { background: rgba(198,89,17,0.14); color: var(--partial); }
+    .badge-WRONG_TARGET, .badge-TDR_RESTATES_WRONG_TARGET { background: rgba(154,91,0,0.14); color: var(--dev); }
+    .badge-TDR_CONFLICT, .badge-TDR_INTERNAL_CONFLICT { background: rgba(198,89,17,0.14); color: var(--partial); }
+    .said-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 8px; }
+    @media (max-width: 800px) { .said-grid { grid-template-columns: 1fr; } }
+    .said-box {
+      background: var(--panel-2); border: 1px solid var(--border);
+      border-radius: 8px; padding: 8px 10px; font-size: 13px;
+    }
+    .said-box .lbl {
+      font-size: 10px; text-transform: uppercase; letter-spacing: 0.4px;
+      color: var(--muted); font-weight: 700; margin-bottom: 4px;
+    }
+    .said-box.disagree { border-color: #f0b4b0; background: #fff6f5; }
+    .said-box.agree { border-color: #b7e4c7; background: #f3fbf6; }
+    .dual-upload { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    @media (max-width: 800px) { .dual-upload { grid-template-columns: 1fr; } }
+    .risk-chip {
+      display: inline-block; padding: 6px 12px; margin: 0 8px 8px 0;
+      border-radius: 8px; background: var(--panel-2); border: 1px solid var(--border);
+      font-size: 12px;
+    }
+
   </style>
 </head>
 <body>
-  <header>
-    <h1>LEON — Quality Analysis
-      <small>FNR Conformity Matrix · Matrix ↔ TDR Cross-Check · Spec Validation · Stellantis Mechatronics Engineering</small>
-    </h1>
-    <span id="health-badge" class="health-badge health-err">Checking…</span>
+  <a class="skip-link" href="#workspace">Skip to workspace</a>
+  <aside class="sidebar" aria-label="AERIS workspace navigation">
+    <div class="brand">
+      <svg class="brand-mark" viewBox="0 0 48 48" fill="none" aria-hidden="true">
+        <rect width="48" height="48" rx="14" fill="#DDF2C4"/>
+        <path d="M12 35 23 12h3l11 23h-7l-6-14-6 14h-6Z" fill="#163D30"/>
+        <path d="m19 30 5-4 5 4" stroke="#087F72" stroke-width="2.5" stroke-linecap="round"/>
+      </svg>
+      <div><div class="brand-name">AERIS</div><div class="brand-caption">Engineering, with clarity.</div></div>
+    </div>
+    <div class="nav-label">Review workspace</div>
+    <nav class="tabs" aria-label="Review tools">
+      <button class="tab active" data-tab="analyze" aria-current="page" aria-controls="tab-analyze" onclick="switchTab('analyze')"><span class="nav-icon" aria-hidden="true">▦</span>Conformity Matrix</button>
+      <button class="tab" data-tab="validator" aria-controls="tab-validator" onclick="switchTab('validator')"><span class="nav-icon" aria-hidden="true">✓</span>Spec Validation</button>
+      <button class="tab" data-tab="aeris" data-local-only aria-label="Matrix–TDR Review, in development" aria-controls="tab-aeris" onclick="switchTab('aeris')"><span class="nav-icon" aria-hidden="true">↔</span>Matrix–TDR Review <span class="nav-status">In development</span></button>
+      <button class="tab" data-tab="bench" data-local-only aria-controls="tab-bench" onclick="switchTab('bench')"><span class="nav-icon" aria-hidden="true">≋</span>Supplier Benchmark</button>
+      <button class="tab" data-tab="trace" data-local-only aria-controls="tab-trace" onclick="switchTab('trace')"><span class="nav-icon" aria-hidden="true">⇄</span>Compare Versions</button>
+    </nav>
+    <div class="sidebar-bottom">
+      <details class="help-card">
+        <summary>New here? Start with a file.</summary>
+        <p><strong>Conformity Matrix</strong> reviews supplier responses in a spreadsheet.</p>
+        <p><strong>Spec Validation</strong> checks a specification and can generate a matrix.</p>
+        <p><strong>Matrix–TDR Review</strong> is currently in development.</p>
+        <p><strong>Supplier Benchmark</strong> compares technical offers across suppliers.</p>
+        <p data-local-only><strong>Compare Versions</strong> highlights changes between successive matrices.</p>
+      </details>
+      <div class="sidebar-foot">A little clarity. A lot more confidence.</div>
+    </div>
+  </aside>
+  <header class="workspace-header">
+    <div><div class="header-label">Engineering review workspace</div><div class="header-subtitle">Automated Engineering Review &amp; Integrity System</div></div>
+    <span id="health-badge" class="health-badge" role="status">Connecting…</span>
   </header>
-<div class="app">
-
-  <!-- Tabs -->
-  <div class="tabs">
-    <button class="tab active" data-tab="analyze" onclick="switchTab('analyze')">📊 Conformity Matrix</button>
-    <button class="tab" data-tab="aeris" onclick="switchTab('aeris')">🔎 Matrix ↔ TDR</button>
-    <button class="tab" data-tab="validator" onclick="switchTab('validator')">📄 Spec Validation</button>
-    <button class="tab" data-tab="trace" onclick="switchTab('trace')">� Version Delta</button>
-    <button class="tab" data-tab="evidence" onclick="switchTab('evidence')">🔎 Matrix + TDR Evidence</button>
-    <button class="tab" data-tab="bench" onclick="switchTab('bench')">🏁 TDR Benchmark</button>
+<main class="app" id="workspace" tabindex="-1">
+  <section class="welcome" aria-labelledby="workspace-title">
+    <div class="welcome-copy">
+      <p class="eyebrow">Your next review, made clearer</p>
+      <h1 id="workspace-title">Less complexity.<br>More clarity.</h1>
+      <p class="welcome-description" id="workspace-description">Turn supplier responses into a clear picture of conformity. Find what needs attention, explore the details, and take your report with you.</p>
+    </div>
+    <svg class="welcome-art" viewBox="0 0 160 160" fill="none" aria-hidden="true">
+      <circle cx="80" cy="80" r="74" stroke="#B8CDB3" stroke-dasharray="4 7"/>
+      <circle cx="80" cy="80" r="56" fill="#D4E7C7"/>
+      <g transform="rotate(-8 80 80)">
+        <rect x="44" y="32" width="73" height="96" rx="12" fill="white" stroke="#B7D0BB"/>
+        <path d="M59 52h28M59 64h40M59 76h31" stroke="#AAC6B7" stroke-width="4" stroke-linecap="round"/>
+        <circle cx="97" cy="106" r="23" fill="#087F72"/>
+        <path d="m86 106 7 7 14-15" stroke="#E9F8DA" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+      </g>
+      <path d="M128 28v12m-6-6h12M25 113v10m-5-5h10" stroke="#6E9F75" stroke-width="2" stroke-linecap="round"/>
+    </svg>
+  </section>
+  <div class="workflow-guide" aria-label="How it works">
+    <div class="guide-step"><span class="step-number">01</span><div><strong>Bring your documents</strong><p>Choose a tool and upload your files.</p></div></div>
+    <div class="guide-step"><span class="step-number">02</span><div><strong>See the bigger picture</strong><p>Review findings and explore the details.</p></div></div>
+    <div class="guide-step"><span class="step-number">03</span><div><strong>Take the next step</strong><p>Download a report to support your review.</p></div></div>
   </div>
 
   <!-- ═══════════════════════════════════════════════════════════════ -->
-  <!-- TAB: Multi-supplier TDR technical benchmark (rendered by tdr_bench.js) -->
+  <!-- TAB: Analyze -->
   <!-- ═══════════════════════════════════════════════════════════════ -->
   <div id="tab-bench" class="hidden"></div>
 
   <!-- ═══════════════════════════════════════════════════════════════ -->
   <!-- TAB: Matrix + TDR evidence -->
   <!-- ═══════════════════════════════════════════════════════════════ -->
-  <div id="tab-evidence" class="hidden">
+  <div id="tab-evidence" class="hidden" hidden>
     <div class="panel">
-      <h2>Link matrix requirements to TDR / presentation evidence</h2>
+      <h2>Find the evidence behind a requirement</h2>
       <p class="muted" style="margin-bottom:14px">Upload a matrix with a PDF TDR or PowerPoint presentation. Results are cited text candidates, not a conformity decision; missing text is not proof of non-compliance.</p>
       <div class="upload-zone" id="evidence-matrix-zone" onclick="document.getElementById('evidence-matrix-input').click()">
         <div class="upload-icon">📊</div>
@@ -589,109 +758,19 @@
 
   <!-- ═══════════════════════════════════════════════════════════════ -->
   <!-- TAB: Analyze -->
-  <!-- ═══════════════════════════════════════════════════════════════ -->
-  <div id="tab-analyze">
-    <div class="panel">
-      <h2>1. Upload one or more conformity matrices (ODS / XLSX)</h2>
-      <div class="upload-zone" id="upload-zone" onclick="document.getElementById('file-input').click()">
-        <div class="upload-icon">📁</div>
-        <p><strong>Click or drag one or more files here</strong></p>
-        <p>Accepted formats: .ods, .xlsx, .xlsm — multiple files at once supported</p>
-        <input type="file" id="file-input" accept=".ods,.xlsx,.xlsm" multiple />
-      </div>
-      <div id="file-info-container"></div>
-      <div class="btn-row">
-        <button class="btn btn-primary" id="analyze-btn" disabled onclick="doAnalyze()">
-          📊 Analyze conformity
-        </button>
-        <button class="btn btn-secondary" id="excel-btn" disabled onclick="doReport()">
-          📗 Excel Report
-        </button>
-      </div>
-    </div>
 
-    <div class="loading" id="loading-analyze">
-      <div class="spinner"></div>
-      <p style="margin-top:12px" id="loading-analyze-text">Analysis in progress…</p>
-    </div>
-
-    <!-- Batch results (2+ files): compact per-file summary + combined download -->
-    <div class="results" id="results-batch">
-      <div class="panel">
-        <h2>Results — <span id="batch-count"></span></h2>
-        <div id="batch-failed" class="muted" style="font-size:12px;margin-bottom:12px"></div>
-        <div class="table-container">
-          <table id="batch-table">
-            <thead>
-              <tr>
-                <th>File</th>
-                <th>Total</th>
-                <th>OK</th>
-                <th>NOK</th>
-                <th>NA</th>
-                <th>Points of Attention</th>
-              </tr>
-            </thead>
-            <tbody id="batch-tbody"></tbody>
-          </table>
-        </div>
-        <div class="download-links mt-16" id="batch-downloads"></div>
-      </div>
-    </div>
-
-    <div class="results" id="results-analyze">
-      <!-- Stats -->
-      <div class="panel">
-        <h2>1. Conformity Statistics</h2>
-        <div class="stats-grid" id="stats-grid"></div>
-        <div class="chart-container" id="chart-container"></div>
-        <div id="meta-info" class="muted" style="font-size:12px"></div>
-      </div>
-
-      <!-- OK Deep Analysis (AI review of OK comments — unified, comprehensive) -->
-      <div class="panel" id="okdeep-panel">
-        <h2>3. Deep Analysis of OK Responses <span id="okdeep-count" class="muted"></span></h2>
-        <div id="okdeep-list"></div>
-      </div>
-
-      <!-- Items table -->
-      <div class="panel">
-        <h2>4. Detailed Requirements</h2>
-        <div class="filter-bar">
-          <input type="text" class="search-box" id="search-box" placeholder="Search by REQ-ID, description, comment…" oninput="filterTable()" />
-          <button class="filter-btn active" data-filter="ALL" onclick="setFilter('ALL')">All</button>
-          <button class="filter-btn" data-filter="OK" onclick="setFilter('OK')">✅ OK</button>
-          <button class="filter-btn" data-filter="NOK" onclick="setFilter('NOK')">❌ NOK</button>
-          <button class="filter-btn" data-filter="DEVIATION" onclick="setFilter('DEVIATION')">⚠ Deviation</button>
-          <button class="filter-btn" data-filter="NA" onclick="setFilter('NA')">⬜ NA</button>
-          <button class="filter-btn" data-filter="EMPTY" onclick="setFilter('EMPTY')">⬜ EMPTY</button>
-        </div>
-        <div class="table-container">
-          <table id="items-table">
-            <thead>
-              <tr>
-                <th>REQ-ID</th>
-                <th>Reference</th>
-                <th>Applicable Version</th>
-                <th>Engagement</th>
-                <th>Comment</th>
-              </tr>
-            </thead>
-            <tbody id="items-tbody"></tbody>
-          </table>
-        </div>
-        <div class="muted mt-16" id="items-count"></div>
-      </div>
-    </div>
-  </div>
-
-  <!-- ═══════════════════════════════════════════════════════════════ -->
-  <!-- TAB: AERIS Matrix ↔ TDR -->
-  <!-- ═══════════════════════════════════════════════════════════════ -->
   <div id="tab-aeris" class="hidden">
+    <div class="availability-note" role="status" aria-live="polite">
+      <strong>Matrix–TDR Review is in development.</strong>
+      <p>This workflow is not available yet. In the meantime, use Conformity Matrix to review supplier responses, or Supplier Benchmark to compare technical offers.</p>
+    </div>
+    <div hidden aria-hidden="true">
     <div class="panel">
-      <h2>TDR Review — compare requirements, verify evidence, record human reviews</h2>
-      <p class="muted mb-16">
+      <h2>Review supplier declarations against their technical dossier</h2>
+      <p class="section-description">Add a matrix and its supplier technical dossier (TDR). Compare declarations with source evidence, inspect the findings, and record your review.</p>
+      <details class="technical-details mb-16">
+      <summary>How this review works and what still needs human judgment</summary>
+      <p class="muted">
         Upload the conformity matrix <strong>and</strong> the supplier technical dossier
         (PPT / PDF / DOCX / TXT). AERIS         extracts measurable targets (≤100&nbsp;mA, &gt;95&nbsp;% @32°,
         contrast ≥400:1…), finds the matching evidence slide/page, compares the numbers,
@@ -702,9 +781,10 @@
         extraction warnings are shown in the synthesis. A numeric bound is not an exact
         measurement, and a declared deviation is not automatically accepted.
       </p>
+      </details>
       <div class="dual-upload">
         <div>
-          <h2>1. Conformity matrix</h2>
+          <h2>Supplier matrix</h2>
           <div class="upload-zone" id="aeris-matrix-zone" onclick="document.getElementById('aeris-matrix-input').click()">
             <div class="upload-icon">📊</div>
             <p><strong>Click or drag the matrix</strong></p>
@@ -714,7 +794,7 @@
           <div id="aeris-matrix-info"></div>
         </div>
         <div>
-          <h2>2. Supplier TDR / evidence</h2>
+          <h2>Technical dossier &amp; evidence</h2>
           <div class="upload-zone" id="aeris-evidence-zone" onclick="document.getElementById('aeris-evidence-input').click()">
             <div class="upload-icon">📑</div>
             <p><strong>Click or drag the TDR</strong></p>
@@ -740,10 +820,10 @@
       </details>
       <div class="btn-row">
         <button class="btn btn-primary" id="aeris-btn" disabled onclick="doAeris()">
-          🔎 Cross-check matrix ↔ TDR
+          Cross-check matrix &amp; TDR
         </button>
         <button class="btn btn-secondary" id="aeris-excel-btn" disabled onclick="downloadAerisExcel()">
-          📗 Rapport des incohérences (Excel)
+          Download review report (Excel)
         </button>
         <button class="btn btn-secondary" id="tdr-json-btn" disabled onclick="downloadTdrJson()">Review JSON</button>
       </div>
@@ -781,14 +861,14 @@
         </details>
       </div>
       <div class="panel">
-        <h2>1. Analysis synthesis — proposals, not technical acceptance</h2>
+        <h2>Your review overview — proposals, not technical acceptance</h2>
         <div class="stats-grid" id="aeris-stats-grid"></div>
         <p class="muted" id="aeris-meta" style="font-size:12px;margin-top:8px"></p>
         <div id="aeris-notes" class="muted mt-16"></div>
         <div id="aeris-risks" class="mt-16"></div>
       </div>
       <div class="panel" id="aeris-contra-panel">
-        <h2>2. Incohérences matrice ↔ TDR</h2>
+        <h2>Differences between declarations and evidence</h2>
         <p class="muted mb-16">
           Une seule ligne par exigence : ce que Stellantis demande, ce que le
           fournisseur a déclaré dans la matrice, ce qu'il a écrit dans le TDR,
@@ -798,7 +878,7 @@
         <div id="aeris-contra-list"></div>
       </div>
       <div class="panel">
-        <h2>3. Détail des exigences</h2>
+        <h2>Explore the requirement details</h2>
         <p class="muted mb-16">
           Le détail complet, si vous voulez vérifier une exigence précise.
           Par défaut, seules les exigences incohérentes sont affichées.
@@ -831,6 +911,122 @@
         <div class="muted mt-16" id="aeris-count"></div>
       </div>
     </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════════════ -->
+  <!-- TAB: Spec Validator -->
+
+  <div id="tab-analyze">
+    <div class="panel">
+      <h2>Review your conformity matrices</h2>
+      <p class="section-description">Upload a supplier response matrix to review requirement statuses and comments. Add several files for a combined Excel report.</p>
+      <div class="upload-zone" id="upload-zone" role="button" tabindex="0" aria-label="Upload conformity matrices, ODS, XLSX or XLSM" onclick="document.getElementById('file-input').click()" onkeydown="activateUpload(event, 'file-input')">
+        <div class="upload-icon" aria-hidden="true">↥</div>
+        <p><strong>Drop your matrices here, or click to browse</strong></p>
+        <p>One file or a whole batch. Your review starts here.</p>
+        <div class="format-tags" aria-hidden="true"><span>ODS</span><span>XLSX</span><span>XLSM</span><span>Multiple files</span></div>
+        <input type="file" id="file-input" aria-label="Conformity matrices" accept=".ods,.xlsx,.xlsm" multiple onclick="event.stopPropagation()" />
+      </div>
+      <div id="file-info-container"></div>
+      <div class="btn-row">
+        <button class="btn btn-primary" id="analyze-btn" data-action-icon="↗" disabled onclick="doAnalyze()">
+          Analyze matrix
+        </button>
+        <button class="btn btn-secondary" id="excel-btn" data-action-icon="↓" disabled onclick="doReport()">
+          Download Excel report
+        </button>
+      </div>
+      <p class="action-hint" id="matrix-action-hint" role="status" aria-live="polite">Choose a matrix above to enable analysis and reporting.</p>
+      <p class="review-note">Results support engineering review; they do not replace professional judgment.</p>
+    </div>
+
+    <div class="loading" id="loading-analyze" role="status" aria-live="polite">
+      <div class="spinner"></div>
+      <p style="margin-top:12px" id="loading-analyze-text">Analysis in progress…</p>
+    </div>
+
+    <!-- Batch results (2+ files): compact per-file summary + combined download -->
+    <div class="results" id="results-batch">
+      <div class="panel">
+        <h2>Results — <span id="batch-count"></span></h2>
+        <div id="batch-failed" class="muted" style="font-size:12px;margin-bottom:12px"></div>
+        <div class="table-container">
+          <table id="batch-table">
+            <thead>
+              <tr>
+                <th>File</th>
+                <th>Total</th>
+                <th>OK</th>
+                <th>NOK</th>
+                <th>NA</th>
+                <th>Points of Attention</th>
+                <th>Deviations</th>
+                <th>No response</th>
+              </tr>
+            </thead>
+            <tbody id="batch-tbody"></tbody>
+          </table>
+        </div>
+        <div class="download-links mt-16" id="batch-downloads"></div>
+      </div>
+    </div>
+
+    <div class="results" id="results-analyze">
+      <!-- Stats -->
+      <div class="panel">
+        <h2>Your conformity overview</h2>
+        <p class="section-description">Supplier-declared statuses, with a closer review of supporting comments below.</p>
+        <div class="stats-grid" id="stats-grid"></div>
+        <div class="chart-container" id="chart-container"></div>
+        <details class="technical-details" id="extraction-details">
+          <summary>How this matrix was read</summary>
+          <div id="meta-info"></div>
+        </details>
+      </div>
+
+      <!-- OK Deep Analysis (AI review of OK comments — unified, comprehensive) -->
+      <div class="panel" id="okdeep-panel">
+        <h2>A closer look at OK responses <span id="okdeep-count" class="muted"></span></h2>
+        <div id="okdeep-list"></div>
+      </div>
+
+      <!-- Items table -->
+      <div class="panel">
+        <h2>Explore individual requirements</h2>
+        <div class="status-guide" aria-label="Supplier response status guide">
+          <span><b class="badge badge-OK">OK</b>Declared compliant</span>
+          <span><b class="badge badge-NOK">NOK</b>Declared non-compliant</span>
+          <span><b class="badge badge-DEVIATION">DEVIATION</b>Declared deviation</span>
+          <span><b class="badge badge-NA">NA</b>Not applicable</span>
+          <span><b class="badge badge-EMPTY">EMPTY</b>No response</span>
+        </div>
+        <div class="filter-bar">
+          <input type="text" class="search-box" id="search-box" aria-label="Search requirements" placeholder="Search by REQ-ID, description, comment…" oninput="filterTable()" />
+          <button class="filter-btn active" data-filter="ALL" aria-pressed="true" onclick="setFilter('ALL')">All responses</button>
+          <button class="filter-btn" data-filter="OK" aria-pressed="false" onclick="setFilter('OK')">OK</button>
+          <button class="filter-btn" data-filter="NOK" aria-pressed="false" onclick="setFilter('NOK')">NOK</button>
+          <button class="filter-btn" data-filter="DEVIATION" aria-pressed="false" onclick="setFilter('DEVIATION')">Deviations</button>
+          <button class="filter-btn" data-filter="NA" aria-pressed="false" onclick="setFilter('NA')">NA</button>
+          <button class="filter-btn" data-filter="EMPTY" aria-pressed="false" onclick="setFilter('EMPTY')">No response</button>
+        </div>
+        <div class="table-container">
+          <table id="items-table">
+            <thead>
+              <tr>
+                <th>REQ-ID</th>
+                <th>Reference</th>
+                <th>Applicable Version</th>
+                <th>Supplier status</th>
+                <th>Comment</th>
+              </tr>
+            </thead>
+            <tbody id="items-tbody"></tbody>
+          </table>
+        </div>
+        <div class="muted mt-16" id="items-count" role="status" aria-live="polite"></div>
+      </div>
+    </div>
   </div>
 
   <!-- ═══════════════════════════════════════════════════════════════ -->
@@ -838,26 +1034,29 @@
   <!-- ═══════════════════════════════════════════════════════════════ -->
   <div id="tab-validator" class="hidden">
     <div class="panel">
-      <h2>1. Upload a specification (DOCX / PDF / TXT)</h2>
-      <div class="upload-zone" id="spec-upload-zone" onclick="document.getElementById('spec-file-input').click()">
-        <div class="upload-icon">📄</div>
-        <p><strong>Click or drag a file here</strong></p>
-        <p>Accepted formats: .docx, .pdf, .txt</p>
-        <input type="file" id="spec-file-input" accept=".docx,.pdf,.txt" />
+      <h2>Give your specification a second look</h2>
+      <p class="section-description">Check a specification for quality and compliance, or turn its requirements into a conformity matrix.</p>
+      <div class="upload-zone" id="spec-upload-zone" role="button" tabindex="0" aria-label="Upload a specification, DOCX, PDF or TXT" onclick="document.getElementById('spec-file-input').click()" onkeydown="activateUpload(event, 'spec-file-input')">
+        <div class="upload-icon" aria-hidden="true">↥</div>
+        <p><strong>Drop your specification here, or click to browse</strong></p>
+        <p>Choose one document to get started.</p>
+        <div class="format-tags" aria-hidden="true"><span>DOCX</span><span>PDF</span><span>TXT</span></div>
+        <input type="file" id="spec-file-input" aria-label="Specification document" accept=".docx,.pdf,.txt" onclick="event.stopPropagation()" />
       </div>
       <div id="spec-file-info-container"></div>
       <div class="btn-row">
-        <button class="btn btn-primary" id="validate-btn" disabled onclick="doValidate()">
-          🔍 Validate the specification
+        <button class="btn btn-primary" id="validate-btn" data-action-icon="✓" disabled onclick="doValidate()">
+          Validate specification
         </button>
-        <button class="btn btn-secondary" id="matrix-btn" disabled onclick="doSpecToMatrix()">
-          📊 Generate the Conformity Matrix
+        <button class="btn btn-secondary" id="matrix-btn" data-action-icon="▦" disabled onclick="doSpecToMatrix()">
+          Generate conformity matrix
         </button>
       </div>
+      <p class="action-hint" id="spec-action-hint" role="status" aria-live="polite">Choose a specification, then validate it or generate a matrix.</p>
       <div id="matrix-coverage" class="hidden" style="margin-top:14px"></div>
     </div>
 
-    <div class="loading" id="loading-validate">
+    <div class="loading" id="loading-validate" role="status" aria-live="polite">
       <div class="spinner"></div>
       <p style="margin-top:12px">Validation in progress…</p>
     </div>
@@ -865,7 +1064,7 @@
     <div class="results" id="results-validate">
       <!-- Verdict + scores + downloads -->
       <div class="panel">
-        <h2>2. Validation Verdict</h2>
+        <h2>Your validation overview</h2>
         <div class="stats-grid" id="spec-stats-grid"></div>
         <p id="spec-summary" class="muted" style="margin-top:12px;font-size:13px"></p>
         <div class="download-links" id="spec-downloads"></div>
@@ -873,12 +1072,12 @@
 
       <!-- Findings -->
       <div class="panel">
-        <h2>3. Detailed Findings <span id="spec-findings-count" class="muted"></span></h2>
+        <h2>Findings to guide your review <span id="spec-findings-count" class="muted"></span></h2>
         <div class="filter-bar" id="spec-filter-bar">
-          <button class="filter-btn active" data-sfilter="ALL" onclick="setSpecFilter('ALL')">Issues</button>
-          <button class="filter-btn" data-sfilter="error" onclick="setSpecFilter('error')">❌ Errors</button>
-          <button class="filter-btn" data-sfilter="warning" onclick="setSpecFilter('warning')">⚠️ Warnings</button>
-          <button class="filter-btn" data-sfilter="pass" onclick="setSpecFilter('pass')">✅ Compliant</button>
+          <button class="filter-btn active" data-sfilter="ALL" aria-pressed="true" onclick="setSpecFilter('ALL')">All issues</button>
+          <button class="filter-btn" data-sfilter="error" aria-pressed="false" onclick="setSpecFilter('error')">Errors</button>
+          <button class="filter-btn" data-sfilter="warning" aria-pressed="false" onclick="setSpecFilter('warning')">Warnings</button>
+          <button class="filter-btn" data-sfilter="pass" aria-pressed="false" onclick="setSpecFilter('pass')">Passed checks</button>
         </div>
         <div id="spec-findings-list"></div>
       </div>
@@ -890,25 +1089,26 @@
   <!-- ═══════════════════════════════════════════════════════════════ -->
   <div id="tab-trace" class="hidden">
     <div class="panel">
-      <h2>Version delta — what changed between matrices?</h2>
+      <h2>See what changed between versions</h2>
       <p class="muted" style="font-size:12px;margin-bottom:12px">
         Upload two or more successive versions of the same supplier matrix to see
         what changed between them: status changes (NOK→OK, OK→NOK), new/removed
         requirements, and comment changes.
       </p>
-      <div class="upload-zone" id="delta-zone" onclick="document.getElementById('delta-input').click()">
-        <div class="upload-icon">📉</div>
-        <p><strong>Click or drag 2+ matrices here</strong> (same supplier, successive versions)</p>
+      <div class="upload-zone" id="delta-zone" role="button" tabindex="0" aria-label="Upload at least two matrix versions, ODS, XLSX or XLSM" onclick="document.getElementById('delta-input').click()" onkeydown="activateUpload(event, 'delta-input')">
+        <div class="upload-icon" aria-hidden="true">⇄</div>
+        <p><strong>Drop two or more versions here, or click to browse</strong></p>
         <p>Hold <strong>Ctrl</strong> (or <strong>Shift</strong>) while clicking to select several files at once — or click again to add more.</p>
-        <input type="file" id="delta-input" accept=".ods,.xlsx,.xlsm" multiple onclick="event.stopPropagation()" />
+        <div class="format-tags" aria-hidden="true"><span>ODS</span><span>XLSX</span><span>XLSM</span><span>2+ versions</span></div>
+        <input type="file" id="delta-input" aria-label="Matrix versions" accept=".ods,.xlsx,.xlsm" multiple onclick="event.stopPropagation()" />
       </div>
       <div id="delta-info" style="margin-top:8px"></div>
       <div class="btn-row">
-        <button class="btn btn-primary" id="delta-btn" disabled onclick="doDelta()">📉 Compare versions</button>
+        <button class="btn btn-primary" id="delta-btn" data-action-icon="⇄" disabled onclick="doDelta()">Compare versions</button>
       </div>
     </div>
 
-    <div class="loading" id="loading-delta">
+    <div class="loading" id="loading-delta" role="status" aria-live="polite">
       <div class="spinner"></div>
       <p style="margin-top:12px">Comparing versions…</p>
     </div>
@@ -936,9 +1136,10 @@
     </div>
   </div>
 
-</div>
+  <footer class="workspace-footer"><span>AERIS · Automated Engineering Review &amp; Integrity System</span><span>Built for thoughtful engineering decisions.</span></footer>
+</main>
 
-<div class="toast" id="toast"></div>
+<div class="toast" id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
 
 <script>
 // Same UI runs in two contexts:
@@ -947,20 +1148,19 @@
 // All calls go to the same-origin /api/conformity-excel endpoint (anonymous
 // on Azure); an optional ?code= in the page URL is forwarded to API calls.
 const FUNC_CODE = new URLSearchParams(window.location.search).get('code');
+// Local review tools remain visible even when a deployment lacks their APIs.
+const IS_AZURE_FUNCTION_UI = /^\/api\/conformity-ui\/?$/.test(window.location.pathname);
 function apiUrl(path) {
   return '/api' + path + (FUNC_CODE ? '?code=' + encodeURIComponent(FUNC_CODE) : '');
 }
 let currentFiles = []; // File[] — one or many conformity matrices
+let matrixBusy = false;
 let analysisData = null;
 let allItems = [];
 let currentFilter = 'ALL';
 let lastExcel = null; // {name, b64} cached from a single-file analyze call
 let lastBatchExcel = null; // b64 of the combined report from a batch analyze call
 let lastBatchExcels = {}; // {fileName: b64} per-file reports from the batch fallback
-let evidenceMatrixFile = null;
-let evidencePdfFile = null;
-let evidencePptxFile = null;
-let evidenceReportB64 = null;
 
 // Read a fetch Response as JSON *without* ever surfacing the cryptic
 // "Unexpected token '<', "<!DOCTYPE "... is not valid JSON".
@@ -992,12 +1192,6 @@ async function safeJson(res) {
 // exactly one is selected.
 function _singleFile() { return currentFiles.length === 1 ? currentFiles[0] : null; }
 
-function escapeHtml(value) {
-  const node = document.createElement('span');
-  node.textContent = String(value == null ? '' : value);
-  return node.innerHTML;
-}
-
 // ── Health check ──────────────────────────────────────────────
 async function checkHealth() {
   try {
@@ -1005,139 +1199,50 @@ async function checkHealth() {
     const res = await fetch(window.location.href, { method: 'GET', cache: 'no-store' });
     if (res.ok) {
       const badge = document.getElementById('health-badge');
-      badge.textContent = '● Service online';
+      badge.textContent = '● Workspace ready';
       badge.className = 'health-badge health-ok';
+    } else {
+      const badge = document.getElementById('health-badge');
+      badge.textContent = '● Connection issue';
+      badge.className = 'health-badge health-err';
     }
   } catch(e) {
-    document.getElementById('health-badge').textContent = '● Offline';
+    const badge = document.getElementById('health-badge');
+    badge.textContent = '● Offline';
+    badge.className = 'health-badge health-err';
   }
 }
 checkHealth();
 
 // ── Tab switching ─────────────────────────────────────────────
 function switchTab(tab) {
-  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-  document.querySelector(`[data-tab="${tab}"]`).classList.add('active');
-  document.getElementById('tab-analyze').classList.toggle('hidden', tab !== 'analyze');
-  document.getElementById('tab-aeris').classList.toggle('hidden', tab !== 'aeris');
-  document.getElementById('tab-validator').classList.toggle('hidden', tab !== 'validator');
-  document.getElementById('tab-trace').classList.toggle('hidden', tab !== 'trace');
-  document.getElementById('tab-evidence').classList.toggle('hidden', tab !== 'evidence');
-  document.getElementById('tab-bench').classList.toggle('hidden', tab !== 'bench');
+  document.querySelectorAll('.tab').forEach(t => {
+    const active = t.dataset.tab === tab;
+    t.classList.toggle('active', active);
+    if (active) t.setAttribute('aria-current', 'page');
+    else t.removeAttribute('aria-current');
+  });
+  document.querySelectorAll('main > [id^="tab-"]').forEach(panel => {
+    panel.classList.toggle('hidden', panel.id !== 'tab-' + tab);
+  });
+  const copy = {
+    analyze: ['Less complexity. More clarity.', 'Turn supplier responses into a clear picture of conformity. Find what needs attention, explore the details, and take your report with you.'],
+    validator: ['Stronger specs start here.', 'Give your specification a structured review. Explore quality and compliance findings, then turn requirements into your next conformity matrix.'],
+    trace: ['Every change tells a story.', 'Compare successive supplier matrices to see progress, spot regressions, and understand what changed from one version to the next.'],
+    aeris: ['Matrix–TDR Review is in development.', 'This workflow is being prepared and is not available yet. Use Conformity Matrix to review supplier responses, or Supplier Benchmark to compare technical offers.'],
+    evidence: ['Find the source. Review the detail.', 'Link matrix requirements to passages in a technical dossier or presentation. Retrieved passages are candidates for your review, not automatic conformity decisions.'],
+    bench: ['Compare offers. Keep perspective.', 'Explore supplier technical offers side by side, inspect cited evidence, and review expert-adjustable scores. Keep engineering judgment at the center.'],
+  };
+  document.getElementById('workspace-title').textContent = copy[tab][0];
+  document.getElementById('workspace-description').textContent = copy[tab][1];
   if (tab === 'bench' && window.TdrBench) window.TdrBench.reloadJobs();
 }
 
-// ── Matrix + TDR PDF evidence candidates ─────────────────────────
-function updateEvidenceSelection() {
-  const selectedEvidenceDocs = Number(Boolean(evidencePdfFile)) + Number(Boolean(evidencePptxFile));
-  document.getElementById('evidence-run-btn').disabled = !evidenceMatrixFile || selectedEvidenceDocs !== 1;
-}
-
-function renderEvidenceFile(inputId, infoId, onFileSelected) {
-  const input = document.getElementById(inputId);
-  input.addEventListener('change', () => {
-    const file = input.files && input.files[0] ? input.files[0] : null;
-    onFileSelected(file);
-    updateEvidenceSelection();
-    document.getElementById(infoId).innerHTML = file
-      ? `<div class="file-info"><span class="name">${escapeHtml(file.name)}</span><span class="size">${(file.size / 1024 / 1024).toFixed(2)} MB</span></div>`
-      : '';
-    document.getElementById('results-evidence').classList.remove('show');
-    evidenceReportB64 = null;
-    document.getElementById('evidence-report-btn').disabled = true;
-  });
-}
-
-renderEvidenceFile('evidence-matrix-input', 'evidence-matrix-info', file => {
-  evidenceMatrixFile = file;
-  evidenceReportB64 = null;
-  document.getElementById('evidence-report-btn').disabled = true;
-  document.getElementById('results-evidence').classList.remove('show');
-});
-renderEvidenceFile('evidence-pdf-input', 'evidence-pdf-info', file => {
-  evidencePdfFile = file;
-  if (file) { evidencePptxFile = null; document.getElementById('evidence-pptx-input').value = ''; document.getElementById('evidence-pptx-info').innerHTML = ''; }
-});
-renderEvidenceFile('evidence-pptx-input', 'evidence-pptx-info', file => {
-  evidencePptxFile = file;
-  if (file) { evidencePdfFile = null; document.getElementById('evidence-pdf-input').value = ''; document.getElementById('evidence-pdf-info').innerHTML = ''; }
-});
-
-async function doEvidenceAnalysis() {
-  if (!evidenceMatrixFile || (!evidencePdfFile && !evidencePptxFile)) return;
-  document.getElementById('loading-evidence').classList.add('show');
-  document.getElementById('results-evidence').classList.remove('show');
-  const form = new FormData();
-  form.append('matrix', evidenceMatrixFile);
-  const isPptx = Boolean(evidencePptxFile);
-  form.append(isPptx ? 'pptx' : 'tdr', isPptx ? evidencePptxFile : evidencePdfFile);
-  try {
-    const response = await fetch(apiUrl(isPptx ? '/conformity-pptx-evidence' : '/conformity-pdf-evidence'), {method: 'POST', body: form});
-    const data = await safeJson(response);
-    if (!response.ok) throw new Error(data.detail || `Analysis failed (${response.status})`);
-    if (response.status === 404 || response.status === 405) {
-      throw new Error(`The running LEON server does not support ${isPptx ? 'PowerPoint' : 'PDF'} evidence analysis. Restart the server using the current workspace version.`);
-    }
-    if (!response.ok) throw new Error(data.detail || `Analysis failed (${response.status})`);
-    if (!Array.isArray(data.requirements) || !data.summary) {
-      const missingFields = ['requirements', 'summary'].filter(key => data[key] == null);
-      throw new Error(`The evidence API response is missing ${missingFields.join(' and ')}. This server build is out of date; restart the LEON conformity server.`);
-    }
-    renderEvidenceResults(data);
-    evidenceReportB64 = data.reportExcel || null;
-    document.getElementById('evidence-report-btn').disabled = !evidenceReportB64;
-    document.getElementById('results-evidence').classList.add('show');
-    toast(`Evidence search complete — ${data.summary.requirementsWithEvidenceCandidates}/${data.summary.requirements} requirements have candidates`);
-  } catch (error) {
-    toast(error.message || 'Evidence analysis failed', 'error');
-  } finally {
-    document.getElementById('loading-evidence').classList.remove('show');
+function activateUpload(event, inputId) {
+  if (event.key === 'Enter' || event.key === ' ') {
+    event.preventDefault();
+    document.getElementById(inputId).click();
   }
-}
-
-function renderEvidenceResults(data) {
-  const summary = data.summary;
-  const declared = data.decisionSummary && data.decisionSummary.supplierDeclared || {};
-  document.getElementById('evidence-stats').innerHTML = [
-    ['Matrix requirements', summary.requirements],
-    ['With candidates', summary.requirementsWithEvidenceCandidates],
-    ['No text candidate', summary.requirementsWithoutEvidenceCandidates],
-    [data.tdrFile ? 'PDF pages with text' : 'Slides with text', data.tdrFile ? summary.pagesWithExtractedText : summary.slidesWithExtractedText],
-  ].map(([label, value]) => `<div class="stat-card"><div class="stat-value">${Number(value) || 0}</div><div class="stat-label">${escapeHtml(label)}</div></div>`).join('');
-  document.getElementById('evidence-declarations').textContent =
-    `Supplier-declared requirement statuses (not independently verified): OK ${Number(declared.OK) || 0}, NOK ${Number(declared.NOK) || 0}, NA ${Number(declared.NA) || 0}, EMPTY ${Number(declared.EMPTY) || 0}.`;
-
-  document.getElementById('evidence-limitations').innerHTML = (data.limitations || []).map(text => `<li>${escapeHtml(text)}</li>`).join('');
-  const items = data.requirements || [];
-  document.getElementById('evidence-requirements').innerHTML = items.map(item => {
-    const identifier = item.reqId || item.reference || `Matrix row ${item.matrixRowNumber}`;
-    const candidates = (item.evidence || []).map(candidate => `
-      <div class="inc-card warning">
-        <div class="header"><span class="req-id">${candidate.page_number ? `PDF page ${candidate.page_number}` : `Slide ${candidate.slide_number}`}${candidate.shape_name ? ` · ${escapeHtml(candidate.shape_name)}` : ''}</span><span class="type">${escapeHtml(candidate.matchType)} · retrieval score ${Number(candidate.matchScore).toFixed(2)}</span></div>
-        <div class="explanation" style="white-space:pre-wrap">${escapeHtml(candidate.text)}</div>
-      </div>`).join('') || '<p class="muted">No text candidate found. This does not mean non-compliance; review visual/scanned content and alternate terminology.</p>';
-    return `<details class="inc-card" style="border-left-color:var(--accent);margin-bottom:12px" open>
-      <summary style="cursor:pointer"><strong>${escapeHtml(identifier)}</strong> · matrix row ${item.matrixRowNumber} · supplier status <span class="badge badge-${escapeHtml(item.matrixStatus)}">${escapeHtml(item.matrixStatusRaw || item.matrixStatus || 'EMPTY')}</span></summary>
-      <p style="margin-top:8px">${escapeHtml(item.description || '')}</p>
-      ${item.supplierComment ? `<p class="muted" style="margin-top:6px">Supplier comment: ${escapeHtml(item.supplierComment)}</p>` : ''}
-      <div style="margin-top:10px">${candidates}</div>
-    </details>`;
-  }).join('');
-}
-
-function downloadEvidenceReport() {
-  if (!evidenceReportB64) return;
-  const bytes = atob(evidenceReportB64);
-  const data = new Uint8Array(bytes.length);
-  for (let i = 0; i < bytes.length; i++) data[i] = bytes.charCodeAt(i);
-  const blob = new Blob([data], {type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  const matrixName = evidenceMatrixFile ? evidenceMatrixFile.name.replace(/\.[^.]+$/, '') : 'matrix';
-  link.href = url;
-  link.download = `${matrixName}_evidence_review.xlsx`;
-  link.click();
-  URL.revokeObjectURL(url);
 }
 
 // ── Toast ─────────────────────────────────────────────────────
@@ -1165,31 +1270,43 @@ uploadZone.addEventListener('drop', e => {
 });
 
 function addFiles(fileList) {
+  if (matrixBusy) { toast('Wait for the current matrix analysis to finish before changing files.', 'error'); return; }
   const accepted = ['ods','xlsx','xlsm'];
   let rejected = 0;
+  let added = false;
   for (const file of fileList) {
     const ext = file.name.split('.').pop().toLowerCase();
     if (!accepted.includes(ext)) { rejected++; continue; }
     if (currentFiles.some(f => f.name === file.name && f.size === file.size)) continue; // dedup
     currentFiles.push(file);
+    added = true;
   }
+  if (added) invalidateMatrixResults();
   if (rejected) toast(`${rejected} file(s) ignored — accepted formats: .ods, .xlsx, .xlsm`, 'error');
   renderFileList();
 }
 
 function removeFile(index) {
+  if (matrixBusy) { toast('Wait for the current matrix analysis to finish before changing files.', 'error'); return; }
   currentFiles.splice(index, 1);
-  lastExcel = null;
-  lastBatchExcel = null;
-  lastBatchExcels = {};
+  invalidateMatrixResults();
   renderFileList();
 }
 
-function clearFile() {
-  currentFiles = [];
+function invalidateMatrixResults() {
   lastExcel = null;
   lastBatchExcel = null;
   lastBatchExcels = {};
+  analysisData = null;
+  allItems = [];
+  document.getElementById('results-analyze').classList.remove('show');
+  document.getElementById('results-batch').classList.remove('show');
+}
+
+function clearFile() {
+  if (matrixBusy) { toast('Wait for the current matrix analysis to finish before changing files.', 'error'); return; }
+  currentFiles = [];
+  invalidateMatrixResults();
   fileInput.value = '';
   renderFileList();
   document.getElementById('results-analyze').classList.remove('show');
@@ -1201,18 +1318,24 @@ function renderFileList() {
   container.innerHTML = currentFiles.map((file, i) => `
     <div class="file-info">
       <span>📄</span>
-      <span class="name">${file.name}</span>
+      <span class="name">${escapeHtml(file.name)}</span>
       <span class="size">${(file.size/1024).toFixed(0)} KB</span>
-      <button class="remove" onclick="removeFile(${i})">×</button>
+      <button class="remove" aria-label="Remove matrix ${i + 1}" ${matrixBusy ? 'disabled' : ''} onclick="removeFile(${i})">×</button>
     </div>`).join('');
 
   const n = currentFiles.length;
-  document.getElementById('analyze-btn').disabled = n === 0;
-  document.getElementById('excel-btn').disabled = n === 0;
+  document.getElementById('analyze-btn').disabled = n === 0 || matrixBusy;
+  document.getElementById('excel-btn').disabled = n === 0 || matrixBusy;
+  fileInput.disabled = matrixBusy;
+  uploadZone.setAttribute('aria-disabled', String(matrixBusy));
   document.getElementById('analyze-btn').textContent =
-    n > 1 ? `📊 Analyze ${n} matrices` : '📊 Analyze conformity';
+    n > 1 ? `Analyze ${n} matrices` : 'Analyze matrix';
   document.getElementById('excel-btn').textContent =
-    n > 1 ? '📦 Combined Excel Report' : '📗 Excel Report';
+    n > 1 ? 'Download combined Excel report' : 'Download Excel report';
+  document.getElementById('matrix-action-hint').textContent =
+    n === 0 ? 'Choose a matrix above to enable analysis and reporting.'
+      : n === 1 ? 'Ready when you are. Analyze this matrix or download its Excel report.'
+      : `${n} matrices ready. Analyze them together or download a combined Excel report.`;
 
   if (n === 0) {
     document.getElementById('results-analyze').classList.remove('show');
@@ -1220,17 +1343,24 @@ function renderFileList() {
   }
 }
 
+function setMatrixBusy(busy) {
+  matrixBusy = busy;
+  renderFileList();
+}
+
 // ── Analyze ───────────────────────────────────────────────────
 // 1 file  → /api/conformity-excel: full on-screen analysis + cached Excel.
 // 2+ files → /api/conformity-batch: compact per-file summary + ONE combined
 // Excel workbook (Overview + per-matrix sheets) covering every uploaded file.
 async function doAnalyze() {
+  if (matrixBusy) return;
   if (currentFiles.length === 0) return;
   if (currentFiles.length === 1) return doAnalyzeSingle(currentFiles[0]);
   return doAnalyzeBatch();
 }
 
 async function doAnalyzeSingle(file) {
+  setMatrixBusy(true);
   showLoading('loading-analyze', true, 'Analysis in progress…');
   document.getElementById('results-analyze').classList.remove('show');
   document.getElementById('results-batch').classList.remove('show');
@@ -1263,11 +1393,13 @@ async function doAnalyzeSingle(file) {
   } catch(e) {
     toast('Analysis failed: ' + e.message, 'error');
   } finally {
+    setMatrixBusy(false);
     showLoading('loading-analyze', false);
   }
 }
 
 async function doAnalyzeBatch() {
+  setMatrixBusy(true);
   showLoading('loading-analyze', true, `Analyzing ${currentFiles.length} matrices…`);
   document.getElementById('results-analyze').classList.remove('show');
   document.getElementById('results-batch').classList.remove('show');
@@ -1298,6 +1430,7 @@ async function doAnalyzeBatch() {
     const ok = await analyzeEachSeparately();
     if (!ok) toast('Batch analysis failed: ' + e.message, 'error');
   } finally {
+    setMatrixBusy(false);
     showLoading('loading-analyze', false);
   }
 }
@@ -1327,6 +1460,7 @@ async function analyzeEachSeparately() {
         totalRows: a.summary?.total ?? 0,
         summary: a.summary || {},
         okDeepFindingsCount: (a.okDeepFindings || []).length,
+        reviewCoverage: a.reviewCoverage || null,
       });
       if (data.reportExcel) excels[file.name] = data.reportExcel;
     } catch (err) {
@@ -1356,18 +1490,20 @@ function renderBatchResults(data) {
 
   const failedEl = document.getElementById('batch-failed');
   failedEl.innerHTML = (data.failed || []).length
-    ? '⚠️ Not analyzed: ' + data.failed.map(f => `${f.fileName} (${f.error})`).join(' · ')
+    ? '⚠️ Not analyzed: ' + data.failed.map(f => `${escapeHtml(f.fileName)} (${escapeHtml(f.error)})`).join(' · ')
     : '';
 
   document.getElementById('batch-tbody').innerHTML = (data.files || []).map(f => {
     const s = f.summary || {};
     return `<tr>
-      <td>${f.fileName}</td>
+      <td>${escapeHtml(f.fileName)}${f.reviewCoverage ? `<p class="muted">AI: ${Number(f.reviewCoverage.aiReviewedItems)}/${Number(f.reviewCoverage.eligibleItems)} substantive comments; pattern-only: ${Number(f.reviewCoverage.patternReviewedItems)}. See report for scope and limitations.</p>` : ''}</td>
       <td>${f.totalRows ?? s.total ?? 0}</td>
       <td><span class="badge badge-OK">${s.ok ?? 0}</span></td>
       <td><span class="badge badge-NOK">${s.nok ?? 0}</span></td>
       <td><span class="badge badge-NA">${s.na ?? 0}</span></td>
       <td>${f.okDeepFindingsCount ?? 0}</td>
+      <td><span class="badge badge-DEVIATION">${s.deviation ?? 0}</span></td>
+      <td><span class="badge badge-EMPTY">${s.empty ?? 0}</span></td>
     </tr>`;
   }).join('');
 
@@ -1408,6 +1544,7 @@ function downloadBatchExcel() {
 
 // ── Excel report ────────────────────────────────────────────
 async function doReport() {
+  if (matrixBusy) return;
   if (currentFiles.length === 0) return;
 
   if (currentFiles.length > 1) {
@@ -1427,6 +1564,8 @@ async function doReport() {
   }
 
   toast('Generating Excel report…');
+  setMatrixBusy(true);
+  showLoading('loading-analyze', true, 'Generating Excel report…');
   const formData = new FormData();
   formData.append('file', file);
 
@@ -1443,6 +1582,9 @@ async function doReport() {
     downloadExcel(data.reportExcel, file.name);
   } catch(e) {
     toast('Error: ' + e.message, 'error');
+  } finally {
+    setMatrixBusy(false);
+    showLoading('loading-analyze', false);
   }
 }
 
@@ -1472,11 +1614,12 @@ function downloadAllPerFile() {
 function renderStats(a) {
   const s = a.summary;
   const cards = [
-    {cls:'stat-total', val:s.total, label:'Total'},
-    {cls:'stat-ok', val:s.ok, label:'OK'},
-    {cls:'stat-nok', val:s.nok, label:'NOK'},
-    {cls:'stat-dev', val:(s.deviation||0), label:'Deviation'},
-    {cls:'stat-na', val:s.na, label:'NA'},
+    {cls:'stat-total', val:s.total, label:'Requirements'},
+    {cls:'stat-ok', val:s.ok, label:'Declared OK'},
+    {cls:'stat-nok', val:s.nok, label:'Declared NOK'},
+    {cls:'stat-na', val:s.na, label:'Not applicable'},
+    {cls:'stat-warn', val:(s.deviation||0), label:'Declared deviations'},
+    {cls:'stat-na', val:(s.empty||0), label:'No response'},
     {cls:'stat-warn', val:(s.okDeepFindings||0), label:'Points of Attention'},
   ];
   document.getElementById('stats-grid').innerHTML = cards.map(c =>
@@ -1493,10 +1636,10 @@ function renderChart(a) {
       if (decoded.startsWith('<svg')) {
         container.innerHTML = decoded;
       } else {
-        container.innerHTML = `<img src="data:image/png;base64,${a.chartBase64}" />`;
+        container.innerHTML = `<img src="data:image/png;base64,${a.chartBase64}" alt="Supplier conformity status distribution" />`;
       }
     } catch(e) {
-      container.innerHTML = `<img src="data:image/png;base64,${a.chartBase64}" />`;
+      container.innerHTML = `<img src="data:image/png;base64,${a.chartBase64}" alt="Supplier conformity status distribution" />`;
     }
   } else {
     container.innerHTML = '<p class="muted">No chart available</p>';
@@ -1505,7 +1648,7 @@ function renderChart(a) {
 
 function renderMeta(a) {
   const meta = document.getElementById('meta-info');
-  meta.innerHTML = `Sheet: <strong>${a.sheetName}</strong> | Header row: ${a.headerRow+1} | Data row: ${a.dataStartRow+1} | Conformity columns: [${a.columnMapping.conformity}] | Comment columns: [${a.columnMapping.comment}] | Applicable version columns: [${a.columnMapping.version_applicable || []}]`;
+  meta.textContent = `Sheet: ${a.sheetName} | Header row: ${a.headerRow+1} | Data row: ${a.dataStartRow+1} | Conformity columns: [${a.columnMapping.conformity}] | Comment columns: [${a.columnMapping.comment}] | Applicable version columns: [${a.columnMapping.version_applicable || []}]`;
 }
 
 function renderItems(a) {
@@ -1516,8 +1659,11 @@ function renderItems(a) {
 
 function setFilter(f) {
   currentFilter = f;
-  document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
-  document.querySelector(`[data-filter="${f}"]`).classList.add('active');
+  document.querySelectorAll('[data-filter]').forEach(button => {
+    const selected = button.dataset.filter === f;
+    button.classList.toggle('active', selected);
+    button.setAttribute('aria-pressed', String(selected));
+  });
   filterTable();
 }
 
@@ -1537,13 +1683,17 @@ function filterTable() {
   const display = filtered.slice(0, maxRows);
   tbody.innerHTML = display.map(item => `
     <tr>
-      <td><strong style="font-family:var(--mono)">${item.reqId}</strong></td>
-      <td>${item.reference || '<span class="muted">—</span>'}</td>
-      <td>${item.version ? '<strong style="font-family:var(--mono);color:var(--accent)">' + item.version + '</strong>' : '<span class="muted">—</span>'}</td>
-      <td><span class="badge badge-${item.conformityCategory}">${item.conformityCategory}</span></td>
-      <td>${item.comment ? item.comment.substring(0,120) : '<span class="muted">—</span>'}</td>
+      <td><strong style="font-family:var(--mono)">${escapeHtml(item.reqId)}</strong>
+        <details><summary>Source row ${Number(item.rowIndex) + 1}</summary>
+          <p style="white-space:pre-wrap">${escapeHtml(item.description || 'No requirement description extracted.')}</p>
+          <p class="muted">Raw supplier status: ${escapeHtml(item.conformityRaw)}</p>
+        </details></td>
+      <td>${escapeHtml(item.reference) || '<span class="muted">—</span>'}</td>
+      <td>${item.version ? '<strong style="font-family:var(--mono);color:var(--accent)">' + escapeHtml(item.version) + '</strong>' : '<span class="muted">—</span>'}</td>
+      <td><span class="badge badge-${escapeHtml(item.conformityCategory)}">${escapeHtml(item.conformityCategory)}</span></td>
+      <td>${item.comment ? `<details><summary>${escapeHtml(item.comment.substring(0,120))}</summary><p style="white-space:pre-wrap">${escapeHtml(item.comment)}</p></details>` : '<span class="muted">—</span>'}</td>
     </tr>
-  `).join('');
+  `).join('') || `<tr><td colspan="5" class="empty-results"><strong>No matching requirements</strong>Try a different search or select All responses.</td></tr>`;
 
   if (filtered.length > maxRows) {
     document.getElementById('items-count').textContent = `${filtered.length} requirements (showing: first ${maxRows})`;
@@ -1561,14 +1711,25 @@ function renderOKDeepFindings(a) {
   const h2 = panel.querySelector('h2');
   const okCount = document.getElementById('okdeep-count');
   const method = a.okDeepMethod || '';
-  const methodLabel = method.startsWith('ia')
+  const methodLabel = method === 'ia+motifs'
+    ? '<span class="muted" style="font-size:11px;font-weight:400">· AI semantic analysis + pattern fallback</span>'
+    : method.startsWith('ia')
     ? '<span class="muted" style="font-size:11px;font-weight:400">· AI semantic analysis (GPT)</span>'
     : '<span class="muted" style="font-size:11px;font-weight:400">· pattern-based analysis</span>';
+  const coverage = a.reviewCoverage;
+  const coverageHtml = coverage
+    ? `<div class="muted" style="padding:12px" role="status">
+        AI reviewed ${Number(coverage.aiReviewedItems)} of ${Number(coverage.eligibleItems)} substantive OK comments;
+        pattern-only checks: ${Number(coverage.patternReviewedItems)}.
+        OK without comments: ${Number(coverage.withoutComment)}; simple confirmations: ${Number(coverage.simpleConfirmations)}.
+        <details><summary>Review scope and limitations</summary><ul>${(coverage.limitations || []).map(text => `<li>${escapeHtml(text)}</li>`).join('')}</ul></details>
+      </div>`
+    : '<p class="muted">Review coverage was not supplied by this server. No independent conformity certification is implied.</p>';
 
   if (findings.length === 0) {
     if (okCount) okCount.textContent = '(0)';
-    h2.innerHTML = '3. Deep Analysis of OK Responses <span id="okdeep-count" class="muted">(0)</span> ✅ No points of attention ' + methodLabel;
-    document.getElementById('okdeep-list').innerHTML = '<p class="muted" style="padding:12px">✅ All OK engagements are consistent with their comments — no suspicious signal detected.</p>';
+    h2.innerHTML = 'A closer look at OK responses <span id="okdeep-count" class="muted">(0)</span> ✅ No points of attention ' + methodLabel;
+    document.getElementById('okdeep-list').innerHTML = coverageHtml + '<p class="muted" style="padding:12px">No review signal detected by the checks performed. This does not establish that all responses are consistent or technically compliant.</p>';
     return;
   }
 
@@ -1581,8 +1742,8 @@ function renderOKDeepFindings(a) {
   if (warnings > 0) summaryHtml += `<span style="color:var(--warn);font-weight:600">${warnings} warning(s)</span> `;
   if (infos > 0) summaryHtml += `<span style="color:var(--ok);font-weight:600">${infos} info(s)</span>`;
 
-  h2.innerHTML = `3. Deep Analysis of OK Responses <span id="okdeep-count" class="muted">(${findings.length})</span> ⚠️ ${summaryHtml} ${methodLabel}`;
-  document.getElementById('okdeep-list').innerHTML = findings.slice(0, 50).map(f => {
+  h2.innerHTML = `A closer look at OK responses <span id="okdeep-count" class="muted">(${findings.length})</span> ⚠️ ${summaryHtml} ${methodLabel}`;
+  document.getElementById('okdeep-list').innerHTML = coverageHtml + findings.map(f => {
     const sevClass = f.severity === 'error' ? 'inc-card' : f.severity === 'warning' ? 'inc-card warning' : 'inc-card';
     const sevBadge = f.severity === 'error' ? 'badge-NOK' : f.severity === 'warning' ? 'badge-STANDBY' : 'badge-NA';
     const signals = (f.signals || []).join(', ');
@@ -1591,12 +1752,22 @@ function renderOKDeepFindings(a) {
     <div class="${sevClass}" style="border-left-color:var(--${f.severity === 'error' ? 'nok' : f.severity === 'warning' ? 'warn' : 'ok'})">
       <div class="header">
         <span class="badge ${sevBadge}">${f.severity.toUpperCase()}</span>
-        <span class="req-id">${f.reqId || ''}</span>
-        <span class="muted" style="font-size:11px">${signals}</span>
+        <span class="req-id">${escapeHtml(f.reqId)}</span>
+        <span class="muted" style="font-size:11px">${escapeHtml({
+          status_comment_conflict: 'Status/comment conflict',
+          conditional_or_scope_gap: 'Limited or conditional conformity',
+          pending_verification: 'Verification pending',
+          requirement_comment_mismatch: 'Comment does not address requirement',
+          insufficient_explanation: 'Clarification needed'
+        }[f.findingType] || 'Review needed')}</span>
       </div>
-      <div class="explanation" style="color:var(--${f.severity === 'error' ? 'nok' : f.severity === 'warning' ? 'warn' : 'text'})">${f.aiComment || ''}</div>
-      ${f.conformity ? `<div class="meta">FNR Conformity: "${f.conformity}"</div>` : ''}
-      ${f.comment ? `<div class="meta">FNR Comment: "${f.comment}"</div>` : ''}
+      <div class="meta">${f.rowIndex != null ? `Source row ${Number(f.rowIndex) + 1} · ` : ''}${f.source === 'ia' ? 'AI semantic review' : 'Pattern review'}</div>
+      ${f.description ? `<details><summary>Requirement</summary><p style="white-space:pre-wrap">${escapeHtml(f.description)}</p></details>` : ''}
+      <div class="explanation" style="white-space:pre-wrap;color:var(--${f.severity === 'error' ? 'nok' : f.severity === 'warning' ? 'warn' : 'text'})">${escapeHtml(f.explanation || f.aiComment)}</div>
+      ${f.explanation && f.evidenceExcerpt ? `<p style="white-space:pre-wrap"><strong>Supplier evidence:</strong> "${escapeHtml(f.evidenceExcerpt)}"</p>` : ''}
+      ${f.explanation && f.nextAction ? `<p style="white-space:pre-wrap"><strong>Next action:</strong> ${escapeHtml(f.nextAction)}</p>` : ''}
+      ${f.conformity ? `<div class="meta">FNR Conformity: "${escapeHtml(f.conformity)}"</div>` : ''}
+      ${f.comment ? `<div class="meta">FNR Comment: "${escapeHtml(f.comment)}"</div>` : ''}
     </div>
   `}).join('');
 }
@@ -1638,10 +1809,12 @@ function handleSpecFile(file) {
       <span>📄</span>
       <span class="name">${file.name}</span>
       <span class="size">${(file.size/1024).toFixed(0)} KB</span>
-      <button class="remove" onclick="clearSpecFile()">×</button>
+      <button class="remove" aria-label="Remove specification" onclick="clearSpecFile()">×</button>
     </div>`;
   document.getElementById('validate-btn').disabled = false;
   document.getElementById('matrix-btn').disabled = false;
+  document.getElementById('spec-action-hint').textContent =
+    'Your specification is ready. Validate it for findings, or generate a conformity matrix.';
 }
 
 function clearSpecFile() {
@@ -1651,6 +1824,8 @@ function clearSpecFile() {
   document.getElementById('spec-file-info-container').innerHTML = '';
   document.getElementById('validate-btn').disabled = true;
   document.getElementById('matrix-btn').disabled = true;
+  document.getElementById('spec-action-hint').textContent =
+    'Choose a specification, then validate it or generate a matrix.';
   document.getElementById('results-validate').classList.remove('show');
 }
 
@@ -1798,8 +1973,11 @@ function renderValidation(data) {
 
 function setSpecFilter(f) {
   specFilter = f;
-  document.querySelectorAll('#spec-filter-bar .filter-btn').forEach(b => b.classList.remove('active'));
-  document.querySelector(`#spec-filter-bar [data-sfilter="${f}"]`).classList.add('active');
+  document.querySelectorAll('[data-sfilter]').forEach(button => {
+    const selected = button.dataset.sfilter === f;
+    button.classList.toggle('active', selected);
+    button.setAttribute('aria-pressed', String(selected));
+  });
   renderSpecFindings();
 }
 
@@ -1858,9 +2036,129 @@ function downloadAnnotatedSpec() {
   toast('Highlighted spec downloaded — ' + (specValidation.annotatedSpecHighlightCount || 0) + ' passage(s) marked in purple');
 }
 
-// ═══════════════════════════════════════════════════════════════
-// AERIS MATRIX ↔ TDR TAB
-// ═══════════════════════════════════════════════════════════════
+let evidenceMatrixFile = null;
+let evidencePdfFile = null;
+let evidencePptxFile = null;
+let evidenceReportB64 = null;
+
+function escapeHtml(value) {
+  const node = document.createElement('span');
+  node.textContent = String(value == null ? '' : value);
+  return node.innerHTML;
+}
+
+function updateEvidenceSelection() {
+  const selectedEvidenceDocs = Number(Boolean(evidencePdfFile)) + Number(Boolean(evidencePptxFile));
+  document.getElementById('evidence-run-btn').disabled = !evidenceMatrixFile || selectedEvidenceDocs !== 1;
+}
+
+function renderEvidenceFile(inputId, infoId, onFileSelected) {
+  const input = document.getElementById(inputId);
+  input.addEventListener('change', () => {
+    const file = input.files && input.files[0] ? input.files[0] : null;
+    onFileSelected(file);
+    updateEvidenceSelection();
+    document.getElementById(infoId).innerHTML = file
+      ? `<div class="file-info"><span class="name">${escapeHtml(file.name)}</span><span class="size">${(file.size / 1024 / 1024).toFixed(2)} MB</span></div>`
+      : '';
+    document.getElementById('results-evidence').classList.remove('show');
+    evidenceReportB64 = null;
+    document.getElementById('evidence-report-btn').disabled = true;
+  });
+}
+
+renderEvidenceFile('evidence-matrix-input', 'evidence-matrix-info', file => {
+  evidenceMatrixFile = file;
+  evidenceReportB64 = null;
+  document.getElementById('evidence-report-btn').disabled = true;
+  document.getElementById('results-evidence').classList.remove('show');
+});
+renderEvidenceFile('evidence-pdf-input', 'evidence-pdf-info', file => {
+  evidencePdfFile = file;
+  if (file) { evidencePptxFile = null; document.getElementById('evidence-pptx-input').value = ''; document.getElementById('evidence-pptx-info').innerHTML = ''; }
+});
+renderEvidenceFile('evidence-pptx-input', 'evidence-pptx-info', file => {
+  evidencePptxFile = file;
+  if (file) { evidencePdfFile = null; document.getElementById('evidence-pdf-input').value = ''; document.getElementById('evidence-pdf-info').innerHTML = ''; }
+});
+
+async function doEvidenceAnalysis() {
+  if (!evidenceMatrixFile || (!evidencePdfFile && !evidencePptxFile)) return;
+  document.getElementById('loading-evidence').classList.add('show');
+  document.getElementById('results-evidence').classList.remove('show');
+  const form = new FormData();
+  form.append('matrix', evidenceMatrixFile);
+  const isPptx = Boolean(evidencePptxFile);
+  form.append(isPptx ? 'pptx' : 'tdr', isPptx ? evidencePptxFile : evidencePdfFile);
+  try {
+    const response = await fetch(apiUrl(isPptx ? '/conformity-pptx-evidence' : '/conformity-pdf-evidence'), {method: 'POST', body: form});
+    const data = await safeJson(response);
+    if (!response.ok) throw new Error(data.detail || `Analysis failed (${response.status})`);
+    if (response.status === 404 || response.status === 405) {
+      throw new Error(`The running AERIS server does not support ${isPptx ? 'PowerPoint' : 'PDF'} evidence analysis. Restart the server using the current workspace version.`);
+    }
+    if (!response.ok) throw new Error(data.detail || `Analysis failed (${response.status})`);
+    if (!Array.isArray(data.requirements) || !data.summary) {
+      const missingFields = ['requirements', 'summary'].filter(key => data[key] == null);
+      throw new Error(`The evidence API response is missing ${missingFields.join(' and ')}. This server build is out of date; restart the AERIS conformity server.`);
+    }
+    renderEvidenceResults(data);
+    evidenceReportB64 = data.reportExcel || null;
+    document.getElementById('evidence-report-btn').disabled = !evidenceReportB64;
+    document.getElementById('results-evidence').classList.add('show');
+    toast(`Evidence search complete — ${data.summary.requirementsWithEvidenceCandidates}/${data.summary.requirements} requirements have candidates`);
+  } catch (error) {
+    toast(error.message || 'Evidence analysis failed', 'error');
+  } finally {
+    document.getElementById('loading-evidence').classList.remove('show');
+  }
+}
+
+function renderEvidenceResults(data) {
+  const summary = data.summary;
+  const declared = data.decisionSummary && data.decisionSummary.supplierDeclared || {};
+  document.getElementById('evidence-stats').innerHTML = [
+    ['Matrix requirements', summary.requirements],
+    ['With candidates', summary.requirementsWithEvidenceCandidates],
+    ['No text candidate', summary.requirementsWithoutEvidenceCandidates],
+    [data.tdrFile ? 'PDF pages with text' : 'Slides with text', data.tdrFile ? summary.pagesWithExtractedText : summary.slidesWithExtractedText],
+  ].map(([label, value]) => `<div class="stat-card"><div class="stat-value">${Number(value) || 0}</div><div class="stat-label">${escapeHtml(label)}</div></div>`).join('');
+  document.getElementById('evidence-declarations').textContent =
+    `Supplier-declared requirement statuses (not independently verified): OK ${Number(declared.OK) || 0}, NOK ${Number(declared.NOK) || 0}, NA ${Number(declared.NA) || 0}, EMPTY ${Number(declared.EMPTY) || 0}.`;
+
+  document.getElementById('evidence-limitations').innerHTML = (data.limitations || []).map(text => `<li>${escapeHtml(text)}</li>`).join('');
+  const items = data.requirements || [];
+  document.getElementById('evidence-requirements').innerHTML = items.map(item => {
+    const identifier = item.reqId || item.reference || `Matrix row ${item.matrixRowNumber}`;
+    const candidates = (item.evidence || []).map(candidate => `
+      <div class="inc-card warning">
+        <div class="header"><span class="req-id">${candidate.page_number ? `PDF page ${candidate.page_number}` : `Slide ${candidate.slide_number}`}${candidate.shape_name ? ` · ${escapeHtml(candidate.shape_name)}` : ''}</span><span class="type">${escapeHtml(candidate.matchType)} · retrieval score ${Number(candidate.matchScore).toFixed(2)}</span></div>
+        <div class="explanation" style="white-space:pre-wrap">${escapeHtml(candidate.text)}</div>
+      </div>`).join('') || '<p class="muted">No text candidate found. This does not mean non-compliance; review visual/scanned content and alternate terminology.</p>';
+    return `<details class="inc-card" style="border-left-color:var(--accent);margin-bottom:12px" open>
+      <summary style="cursor:pointer"><strong>${escapeHtml(identifier)}</strong> · matrix row ${item.matrixRowNumber} · supplier status <span class="badge badge-${escapeHtml(item.matrixStatus)}">${escapeHtml(item.matrixStatusRaw || item.matrixStatus || 'EMPTY')}</span></summary>
+      <p style="margin-top:8px">${escapeHtml(item.description || '')}</p>
+      ${item.supplierComment ? `<p class="muted" style="margin-top:6px">Supplier comment: ${escapeHtml(item.supplierComment)}</p>` : ''}
+      <div style="margin-top:10px">${candidates}</div>
+    </details>`;
+  }).join('');
+}
+
+function downloadEvidenceReport() {
+  if (!evidenceReportB64) return;
+  const bytes = atob(evidenceReportB64);
+  const data = new Uint8Array(bytes.length);
+  for (let i = 0; i < bytes.length; i++) data[i] = bytes.charCodeAt(i);
+  const blob = new Blob([data], {type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  const matrixName = evidenceMatrixFile ? evidenceMatrixFile.name.replace(/\.[^.]+$/, '') : 'matrix';
+  link.href = url;
+  link.download = `${matrixName}_evidence_review.xlsx`;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
 let aerisMatrix = null;
 let aerisEvidence = [];
 let aerisReport = null;
@@ -2202,7 +2500,7 @@ function renderDeltaFiles() {
       <span>📉</span>
       <span class="name">${f.name}</span>
       <span class="size">${(f.size/1024).toFixed(0)} KB</span>
-      <button class="remove" onclick="removeDeltaFile(${i})">×</button>
+      <button class="remove" aria-label="Remove version ${i + 1}" onclick="removeDeltaFile(${i})">×</button>
     </div>`).join('');
   document.getElementById('delta-btn').disabled = deltaFiles.length < 2;
 }
@@ -2212,28 +2510,23 @@ async function doDelta() {
   showLoading('loading-delta', true, 'Comparing versions…');
   document.getElementById('results-delta').classList.remove('show');
   try {
-    // Persist the files server-side so the compare endpoint can find them.
+    const fd = new FormData();
     for (const entry of deltaFiles) {
-      const fd = new FormData();
-      fd.append('file', entry.file);
-      const res = await fetch(apiUrl('/upload-conformity'), {
-        method: 'POST', headers: { 'Accept': 'application/json' }, body: fd,
-      });
-      const up = await safeJson(res);
-      if (!res.ok) throw new Error(up.detail || `HTTP ${res.status}`);
+      fd.append('files', entry.file);
     }
 
-    const names = deltaFiles.map(f => f.name);
-    const cres = await fetch(apiUrl('/conformity-compare'), {
-      method: 'POST', headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
-      body: JSON.stringify({ fileNames: names }),
+    const cres = await fetch(apiUrl('/aeris-conformity-compare'), {
+      method: 'POST',
+      headers: { 'Accept': 'application/json' },
+      body: fd,
     });
     const data = await safeJson(cres);
     if (!cres.ok) throw new Error(data.detail || `HTTP ${cres.status}`);
     lastDeltaExcel = data.reportExcel || null;
     renderDelta(data);
     document.getElementById('results-delta').classList.add('show');
-    toast(`Delta: ${data.totalChanges} status change(s) across ${data.steps.length} step(s)`);
+    const stepCount = Array.isArray(data.steps) ? data.steps.length : Math.max(0, deltaFiles.length - 1);
+    toast(`Delta: ${data.totalChanges} status change(s) across ${stepCount} step(s)`);
   } catch (e) {
     toast('Delta failed: ' + e.message, 'error');
   } finally {
@@ -2253,7 +2546,9 @@ function renderDelta(d) {
     return `Step ${s.step}: ${s.matrix1} → ${s.matrix2} — ${s.statusChanges} status change(s), ` +
       `${s.new} new, ${s.removed} removed, ${s.commentChanges} comment change(s)${comp}`;
   }).join('<br>');
-  document.getElementById('delta-steps').innerHTML = steps || 'No steps';
+  const fallback = `Compared ${deltaFiles.map(f => escapeHtml(f.name)).join(' → ')} — ` +
+    `${escapeHtml(d.totalChanges || 0)} total status change(s).`;
+  document.getElementById('delta-steps').innerHTML = steps || fallback;
 
   const typeCell = t => {
     const map = {
@@ -2263,18 +2558,18 @@ function renderDelta(d) {
       regressed: ['❌ REGRESSED',     'var(--nok)'],
     };
     const [label, color] = map[t] || [String(t || '').toUpperCase(), 'var(--text)'];
-    return `<span style="color:${color};font-weight:600">${label}</span>`;
+    return `<span style="color:${color};font-weight:600">${escapeHtml(label)}</span>`;
   };
 
   const rows = (d.statusChanges || []).map(c => [
     c.step, c.reqId || c.reference || '', c.from, c.to,
     c.changeType || (c.improvement ? 'improved' : 'regressed'),
   ]);
-  const badge = c => `<span class="badge badge-${c}">${c}</span>`;
+  const badge = c => `<span class="badge badge-${escapeHtml(c)}">${escapeHtml(c)}</span>`;
   document.getElementById('delta-tbody').innerHTML = rows.slice(0, 500).map(r => `
     <tr>
-      <td>${r[0]}</td>
-      <td>${r[1]}</td>
+      <td>${escapeHtml(r[0])}</td>
+      <td>${escapeHtml(r[1])}</td>
       <td>${badge(r[2])}</td>
       <td>${badge(r[3])}</td>
       <td>${typeCell(r[4])}</td>
@@ -2303,7 +2598,68 @@ function showLoading(id, show, text) {
   }
 }
 </script>
-<script src="/tdr-review-ui.js"></script>
-<script src="/tdr-bench-ui.js"></script>
+<script>
+function showToolAvailability(tab, message) {
+  const panel = document.getElementById('tab-' + tab);
+  const note = document.createElement('div');
+  note.className = 'availability-note';
+  note.setAttribute('role', 'status');
+  note.textContent = message;
+  panel.prepend(note);
+  panel.querySelectorAll('button, input, select, textarea, .upload-zone').forEach(control => {
+    if ('disabled' in control) control.disabled = true;
+    control.setAttribute('aria-disabled', 'true');
+  });
+  panel.addEventListener('click', event => {
+    if (event.target.closest('button, input, select, textarea, .upload-zone')) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      toast(message, 'error');
+    }
+  }, true);
+}
+
+function loadReviewScript(path) {
+  return new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = path;
+    script.onload = resolve;
+    script.onerror = () => reject(new Error('Could not load review interface: ' + path));
+    document.body.append(script);
+  });
+}
+
+async function initializeReviewTools() {
+  document.querySelectorAll('#tab-aeris .upload-zone, #tab-evidence .upload-zone').forEach(zone => {
+    const input = zone.querySelector('input[type="file"]');
+    zone.setAttribute('role', 'button');
+    zone.tabIndex = 0;
+    zone.setAttribute('aria-label', zone.querySelector('strong').textContent);
+    zone.addEventListener('keydown', event => activateUpload(event, input.id));
+    input.addEventListener('click', event => event.stopPropagation());
+  });
+  document.querySelectorAll('#loading-aeris, #loading-evidence').forEach(element => {
+    element.setAttribute('role', 'status');
+    element.setAttribute('aria-live', 'polite');
+  });
+  try {
+    const scriptPath = IS_AZURE_FUNCTION_UI ? '/api/' : '/';
+    await loadReviewScript(scriptPath + 'tdr-review-ui.js');
+    await loadReviewScript(scriptPath + 'tdr-bench-ui.js');
+    const zone = document.getElementById('tb-zone');
+    zone.setAttribute('role', 'button');
+    zone.tabIndex = 0;
+    zone.setAttribute('aria-label', 'Upload supplier technical offers');
+    zone.addEventListener('keydown', event => {
+      if (event.target === zone) activateUpload(event, 'tb-input');
+    });
+  } catch (error) {
+    showToolAvailability('aeris', error.message);
+    showToolAvailability('bench', error.message);
+    toast(error.message, 'error');
+  }
+}
+initializeReviewTools();
+</script>
 </body>
 </html>
