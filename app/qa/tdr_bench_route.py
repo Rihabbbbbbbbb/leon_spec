@@ -41,7 +41,8 @@ def get_manager() -> BenchJobManager:
     with _manager_lock:
         if _manager is None:
             base = os.getenv("TDR_BENCH_DIR") or str(Path(__file__).resolve().parents[2] / "data" / "tdr_bench")
-            _manager = BenchJobManager(Path(base))
+            from app.qa.tdr_bench_sync import blob_sync_from_env
+            _manager = BenchJobManager(Path(base), sync=blob_sync_from_env())
         return _manager
 
 
@@ -264,7 +265,8 @@ async def ask(job_id: str, payload: dict = Body(...)) -> dict:
     if supplier_ids is not None and not isinstance(supplier_ids, list):
         raise HTTPException(status_code=400, detail="supplierIds must be a list")
     try:
-        return await run_in_threadpool(answer_question, manager.job_dir(job_id), result, question,
+        job_dir = await run_in_threadpool(manager.ensure_documents, job_id)
+        return await run_in_threadpool(answer_question, job_dir, result, question,
                                        _llm(manager), supplier_ids)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))

@@ -17,9 +17,27 @@
     if (!res.ok) {
       let msg = res.status + ' ' + res.statusText;
       try { const j = await res.json(); if (j.detail) msg = typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail); } catch (e) { /* ignore */ }
-      throw new Error(msg);
+      const err = new Error(msg);
+      err.status = res.status;
+      throw err;
     }
     return res.json();
+  }
+
+  // A poll or a page click can land on an Azure instance that has not yet
+  // seen the shared copy. Retry those reads before telling the user the job
+  // is unknown.
+  async function apiRead(path) {
+    let last;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try { return await api(path); }
+      catch (e) {
+        last = e;
+        if (e.status !== 404 || attempt === 2) break;
+        await new Promise((resolve) => setTimeout(resolve, 350 * (attempt + 1)));
+      }
+    }
+    throw last;
   }
 
   function injectCss() {
@@ -268,7 +286,7 @@
     stopPolling();
     const tick = async () => {
       try {
-        const st = await api('/jobs/' + S.jobId);
+        const st = await apiRead('/jobs/' + S.jobId);
         showProgress(st);
         if (['completed', 'failed', 'cancelled', 'interrupted'].includes(st.status)) {
           stopPolling();
@@ -309,7 +327,7 @@
   async function openResult(jobId) {
     S.jobId = jobId;
     try {
-      S.result = await api('/jobs/' + jobId + '/result');
+      S.result = await apiRead('/jobs/' + jobId + '/result');
       S.editScores = false; S.draft = null;
       renderResults();
       $('#tb-results').scrollIntoView({ behavior: 'smooth' });
@@ -601,11 +619,17 @@
     qbox.style.display = M.quote ? 'block' : 'none';
     qbox.innerHTML = M.quote ? `<strong>${L('Citation', 'Quote')} :</strong> « ${esc(M.quote)} »` : '';
     const img = document.getElementById('tb-mimg');
-    img.innerHTML = d.renderable ? `<img alt="page" src="${API}/jobs/${r.jobId}/docs/${encodeURIComponent(M.doc)}/pages/${M.page}.png" />` : `<p class="muted">${L('Aperçu image disponible uniquement pour les PDF.', 'Image preview only available for PDFs.')}</p>`;
+    img.innerHTML = d.renderable ? `<img alt="page ${M.page}" src="${API}/jobs/${r.jobId}/docs/${encodeURIComponent(M.doc)}/pages/${M.page}.png" />` : `<p class="muted">${L('Aperçu image disponible uniquement pour les PDF.', 'Image preview only available for PDFs.')}</p>`;
+    const image = img.querySelector('img');
+    if (image) {
+      image.onerror = () => {
+        img.innerHTML = `<p class="muted">${L('Aperçu de la page indisponible.', 'Page preview unavailable.')}</p>`;
+      };
+    }
     const txt = document.getElementById('tb-mtext');
     txt.textContent = '…';
     try {
-      const p = await api(`/jobs/${r.jobId}/docs/${encodeURIComponent(M.doc)}/pages/${M.page}`);
+      const p = await apiRead(`/jobs/${r.jobId}/docs/${encodeURIComponent(M.doc)}/pages/${M.page}`);
       let html = esc(p.text || '') + (p.vision ? '\n\n── ' + L('Transcription vision', 'Vision transcript') + ' ──\n' + esc(p.vision) : '');
       const probe = (M.quote || '').trim().slice(0, 60);
       if (probe.length > 8) {

@@ -71,6 +71,7 @@ from app.qa.tdr_bench_taxonomy import (
 logger = logging.getLogger(__name__)
 
 ENGINE_VERSION = "1.0"
+_TERMINAL_STATUS = {"completed", "failed", "cancelled", "interrupted"}
 IMPORTANCE_RANK = {"high": 0, "medium": 1, "low": 2}
 KIND_PRIORITY = {"deviation": 0, "risk": 1, "open_point": 2, "specification": 3, "design_choice": 4,
                  "assumption": 5, "option": 6, "plan": 7, "capability": 8}
@@ -158,6 +159,33 @@ def _numbers(text: str) -> list[str]:
         if len(value.replace(".", "")) >= 2:
             out.append(value)
     return out
+
+
+def _prefer_shared_state(local: dict | None, remote: dict | None) -> dict | None:
+    """Pick the job snapshot another instance should trust.
+
+    A completed job wins over a poll that still sees "running". Otherwise the
+    higher progress wins, so a stale copy cannot hide a finished analysis.
+    """
+    if not isinstance(remote, dict):
+        return local
+    if not isinstance(local, dict):
+        return remote
+    local_done = local.get("status") in _TERMINAL_STATUS
+    remote_done = remote.get("status") in _TERMINAL_STATUS
+    if remote_done and not local_done:
+        return remote
+    if local_done and not remote_done:
+        return local
+    remote_progress = float(remote.get("progress") or 0)
+    local_progress = float(local.get("progress") or 0)
+    if remote_progress > local_progress:
+        return remote
+    if local_progress > remote_progress:
+        return local
+    if (remote.get("finishedAt") or "") > (local.get("finishedAt") or ""):
+        return remote
+    return local
 
 
 def _atomic_write(path: Path, payload: str, attempts: int = 8) -> bool:
@@ -1191,18 +1219,25 @@ def answer_question(job_dir: Path, result: dict, question: str, llm: LLM | None,
 # ── Job manager ────────────────────────────────────────────────────────
 
 class BenchJobManager:
-    """Runs benchmark jobs in background threads, state persisted on disk."""
+    """Runs benchmark jobs in background threads, state persisted on disk.
+
+    ``sync`` copies that state to storage every instance can read. Without it,
+    a second Azure Functions worker answers ``GET /jobs/{id}`` with Unknown job
+    because the files live only on the worker that accepted the upload.
+    """
 
     def __init__(self, base_dir: Path, llm_factory: Callable[[Path], LLM | None] | None = None,
-                 max_concurrent: int = 2):
+                 max_concurrent: int = 2, sync: Any = None):
         self.base_dir = base_dir
         self.base_dir.mkdir(parents=True, exist_ok=True)
         self.llm_factory = llm_factory or (lambda cache: LLM(cache))
+        self.sync = sync
         self._lock = threading.Lock()
         self._jobs: dict[str, dict] = {}
         self._cancels: dict[str, threading.Event] = {}
         self._threads: dict[str, threading.Thread] = {}
         self._slots = threading.Semaphore(max_concurrent)
+        self._last_state_sync: dict[str, float] = {}
         self._recover()
 
     @property
@@ -1223,15 +1258,114 @@ class BenchJobManager:
             if state.get("status") in {"queued", "running"}:
                 state["status"] = "interrupted"
                 state["error"] = "Server restarted while the job was running – relaunch it."
-                state_file.write_text(json.dumps(state, ensure_ascii=False, indent=1), encoding="utf-8")
+                payload = json.dumps(state, ensure_ascii=False, indent=1)
+                state_file.write_text(payload, encoding="utf-8")
+                self._sync_state(state_file.parent.name, payload, force=True)
 
-    def _persist(self, job_id: str) -> None:
+    def _persist(self, job_id: str) -> str | None:
         state = self._jobs.get(job_id)
         if state is None:
+            return None
+        payload = json.dumps(state, ensure_ascii=False, indent=1)
+        path = self.job_dir(job_id) / "state.json"
+        if not _atomic_write(path, payload):
+            logger.warning("Could not persist state of job %s (file locked)", job_id)
+            return None
+        return payload
+
+    def _sync_state(self, job_id: str, payload: str | None, force: bool = False) -> None:
+        if self.sync is None or not payload:
+            return
+        now = time.monotonic()
+        if not force and now - self._last_state_sync.get(job_id, 0.0) < 1.0:
+            return
+        try:
+            self.sync.push_bytes(job_id, "state.json", payload.encode("utf-8"))
+            self._last_state_sync[job_id] = now
+        except Exception:
+            logger.warning("Could not share state of job %s", job_id, exc_info=True)
+
+    def _push_file(self, job_id: str, relative: str) -> None:
+        if self.sync is None:
+            return
+        path = self.job_dir(job_id) / relative
+        if not path.is_file():
+            return
+        try:
+            self.sync.push_bytes(job_id, relative, path.read_bytes())
+        except Exception:
+            logger.warning("Could not share %s for job %s", relative, job_id, exc_info=True)
+
+    def _push_tree(self, job_id: str, folder: str) -> None:
+        if self.sync is None:
+            return
+        root = self.job_dir(job_id) / folder
+        if not root.is_dir():
+            return
+        for path in root.rglob("*"):
+            if path.is_file():
+                self._push_file(job_id, path.relative_to(self.job_dir(job_id)).as_posix())
+
+    def _publish_artifacts(self, job_id: str) -> None:
+        """Upload the result and the page sources before advertising completion."""
+        self._push_file(job_id, "result.json")
+        self._push_tree(job_id, "docs")
+        self._push_tree(job_id, "inputs")
+
+    def _pull_file(self, job_id: str, relative: str) -> bool:
+        if self.sync is None:
+            return False
+        dest = self.job_dir(job_id) / relative
+        if dest.is_file():
+            return True
+        try:
+            data = self.sync.read_bytes(job_id, relative)
+        except Exception:
+            logger.warning("Could not read shared %s for job %s", relative, job_id, exc_info=True)
+            return False
+        if data is None:
+            return False
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(data)
+        return True
+
+    def _pull_prefix(self, job_id: str, prefix: str) -> None:
+        if self.sync is None:
+            return
+        try:
+            names = self.sync.list_relative(job_id, prefix)
+        except Exception:
+            logger.warning("Could not list shared %s for job %s", prefix, job_id, exc_info=True)
+            return
+        for relative in names:
+            self._pull_file(job_id, relative)
+
+    def _hydrate_state(self, job_id: str) -> None:
+        if self.sync is None:
+            return
+        try:
+            remote_raw = self.sync.read_bytes(job_id, "state.json")
+        except Exception:
+            logger.warning("Could not read shared state of job %s", job_id, exc_info=True)
+            return
+        if not remote_raw:
+            return
+        try:
+            remote = json.loads(remote_raw)
+        except json.JSONDecodeError:
             return
         path = self.job_dir(job_id) / "state.json"
-        if not _atomic_write(path, json.dumps(state, ensure_ascii=False, indent=1)):
-            logger.warning("Could not persist state of job %s (file locked)", job_id)
+        local = None
+        if path.is_file():
+            try:
+                local = json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                local = None
+        chosen = _prefer_shared_state(local, remote)
+        if not isinstance(chosen, dict) or chosen is local:
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _atomic_write(path, json.dumps(chosen, ensure_ascii=False, indent=1))
 
     def new_job_dir(self) -> tuple[str, Path]:
         job_id = uuid.uuid4().hex[:12]
@@ -1257,7 +1391,10 @@ class BenchJobManager:
         with self._lock:
             self._jobs[job_id] = state
             self._cancels[job_id] = threading.Event()
-            self._persist(job_id)
+            payload = self._persist(job_id)
+        # Publish the queued job before the HTTP response returns, so the next
+        # poll — often a different Azure instance — already knows the id.
+        self._sync_state(job_id, payload, force=True)
         thread = threading.Thread(target=self._run, args=(job_id, files, options), daemon=True,
                                   name=f"tdr-bench-{job_id}")
         self._threads[job_id] = thread
@@ -1265,6 +1402,8 @@ class BenchJobManager:
         return self.public_state(job_id)
 
     def _update(self, job_id: str, update: dict) -> None:
+        payload = None
+        force = False
         with self._lock:
             state = self._jobs[job_id]
             entry = update.pop("logEntry", None)
@@ -1274,7 +1413,9 @@ class BenchJobManager:
             if "progress" in update:
                 update["progress"] = max(state.get("progress", 0), update["progress"])
             state.update(update)
-            self._persist(job_id)
+            payload = self._persist(job_id)
+            force = "status" in update or state.get("status") in _TERMINAL_STATUS
+        self._sync_state(job_id, payload, force=force)
 
     def _run(self, job_id: str, files: list[InputFile], options: BenchOptions) -> None:
         cancel = self._cancels[job_id]
@@ -1292,6 +1433,12 @@ class BenchJobManager:
                 result["jobId"] = job_id
                 result["title"] = self._jobs[job_id]["title"]
                 (job_dir / "result.json").write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")
+                # Evidence pages and the result must be readable before any
+                # instance is told the job is completed.
+                self._update(job_id, {"stage": "publish",
+                                      "logEntry": {"time": _now(), "stage": "publish",
+                                                   "message": "Publishing the result so it can be opened"}})
+                self._publish_artifacts(job_id)
                 self._update(job_id, {"status": "completed", "stage": "done", "progress": 100.0,
                                       "finishedAt": _now(), "hasResult": True, "mode": result["mode"],
                                       "warnings": result["warnings"][:50], "stats": result["stats"],
@@ -1310,6 +1457,7 @@ class BenchJobManager:
             state = self._jobs.get(job_id)
             if state is not None:
                 return json.loads(json.dumps(state))
+        self._hydrate_state(job_id)
         path = self.job_dir(job_id) / "state.json"
         if not path.exists():
             raise KeyError(job_id)
@@ -1325,12 +1473,23 @@ class BenchJobManager:
     def result(self, job_id: str, raw: bool = False) -> dict:
         path = self.job_dir(job_id) / "result.json"
         if not path.exists():
+            self._pull_file(job_id, "result.json")
+        if not path.exists():
             raise KeyError(job_id)
         result = json.loads(path.read_text(encoding="utf-8"))
         return result if raw else apply_overrides(result, self.overrides(job_id))
 
     def overrides(self, job_id: str) -> dict:
         path = self.job_dir(job_id) / "overrides.json"
+        if self.sync is not None:
+            try:
+                remote = self.sync.read_bytes(job_id, "overrides.json")
+            except Exception:
+                logger.warning("Could not read shared overrides of job %s", job_id, exc_info=True)
+                remote = None
+            if remote is not None:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(remote)
         if not path.exists():
             return {}
         try:
@@ -1341,17 +1500,38 @@ class BenchJobManager:
     def set_overrides(self, job_id: str, raw: Any) -> dict:
         clean = sanitize_overrides(raw, self.result(job_id, raw=True))
         path = self.job_dir(job_id) / "overrides.json"
+        payload = json.dumps(clean, ensure_ascii=False, indent=1)
         if clean["updatedAt"] is None:
             path.unlink(missing_ok=True)
-        else:
-            if not _atomic_write(path, json.dumps(clean, ensure_ascii=False, indent=1)):
-                raise OSError("overrides file is locked, retry")
+        elif not _atomic_write(path, payload):
+            raise OSError("overrides file is locked, retry")
+        if self.sync is not None:
+            try:
+                self.sync.push_bytes(job_id, "overrides.json", payload.encode("utf-8"))
+            except Exception:
+                logger.warning("Could not share overrides of job %s", job_id, exc_info=True)
         return self.result(job_id)
 
     def list_jobs(self) -> list[dict]:
         jobs = []
+        ids: list[str] = []
+        seen: set[str] = set()
         for state_file in self.base_dir.glob("*/state.json"):
             job_id = state_file.parent.name
+            if re.fullmatch(r"[a-f0-9]{12}", job_id) and job_id not in seen:
+                seen.add(job_id)
+                ids.append(job_id)
+        if self.sync is not None:
+            try:
+                shared_ids = self.sync.list_job_ids()
+            except Exception:
+                logger.warning("Could not list shared benchmark jobs", exc_info=True)
+                shared_ids = []
+            for job_id in shared_ids:
+                if job_id not in seen:
+                    seen.add(job_id)
+                    ids.append(job_id)
+        for job_id in ids:
             try:
                 state = self.public_state(job_id)
             except Exception:
@@ -1384,18 +1564,35 @@ class BenchJobManager:
             self._cancels.pop(job_id, None)
             self._threads.pop(job_id, None)
         shutil.rmtree(path, ignore_errors=True)
+        if self.sync is not None:
+            try:
+                self.sync.delete_job(job_id)
+            except Exception:
+                logger.warning("Could not delete shared job %s", job_id, exc_info=True)
+
+    def ensure_documents(self, job_id: str) -> Path:
+        """Make extracted pages available on this instance (for citations and Q&A)."""
+        self.public_state(job_id)
+        self._pull_prefix(job_id, "docs/")
+        return self.job_dir(job_id)
 
     def input_path(self, job_id: str, doc_id: str) -> Path:
         state = self.public_state(job_id)
         for f in state["files"]:
             if f["docId"] == doc_id:
-                matches = list((self.job_dir(job_id) / "inputs").glob(f"{doc_id}__*"))
+                folder = self.job_dir(job_id) / "inputs"
+                matches = list(folder.glob(f"{doc_id}__*")) if folder.exists() else []
+                if not matches:
+                    self._pull_prefix(job_id, "inputs/")
+                    matches = list(folder.glob(f"{doc_id}__*")) if folder.exists() else []
                 if matches:
                     return matches[0]
         raise KeyError(doc_id)
 
     def page_text(self, job_id: str, doc_id: str, page: int) -> dict:
         path = self.job_dir(job_id) / "docs" / f"{doc_id}.json"
+        if re.fullmatch(r"D\d{1,3}", doc_id or "") and not path.exists():
+            self._pull_file(job_id, f"docs/{doc_id}.json")
         if not re.fullmatch(r"D\d{1,3}", doc_id or "") or not path.exists():
             raise KeyError(doc_id)
         data = json.loads(path.read_text(encoding="utf-8"))
